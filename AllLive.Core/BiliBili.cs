@@ -396,68 +396,69 @@ namespace AllLive.Core
         }
         private async Task<List<string>> GetPlayUrlsNew(string roomID, object qn)
         {
-            const int maxPlayInfoAttempt = 4;
             var qnValue = TryConvertToInt(qn);
-            var flvUrls = new List<string>();
-            var preferredHlsUrls = new List<string>();
-            var otherHlsUrls = new List<string>();
-            Exception lastException = null;
+            var urls = new List<string>();
+            var dedupe = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             var client = await CreateBilibiliPlayInfoHttpClientAsync();
             using (client)
             {
-                for (int attempt = 1; attempt <= maxPlayInfoAttempt; attempt++)
+                var obj = await RequestBilibiliPlayInfoAsync(client, roomID, qnValue);
+                var streamList = obj?["data"]?["playurl_info"]?["playurl"]?["stream"] as JArray;
+                if (streamList == null)
                 {
-                    try
+                    throw new Exception("playurl_info.playurl.stream为空");
+                }
+
+                foreach (var streamItem in streamList)
+                {
+                    var formatList = streamItem["format"] as JArray;
+                    if (formatList == null)
                     {
-                        var obj = await RequestBilibiliPlayInfoAsync(client, roomID, qnValue);
-                        var playurl = obj?["data"]?["playurl_info"]?["playurl"];
-                        var candidates = ParseBilibiliPlayUrlCandidates(playurl);
-                        var flvAttempt = OrderBilibiliPlayUrls(candidates.Where(x => x.IsFlv).Select(x => x.Url).ToList());
-                        var preferredHlsAttempt = OrderBilibiliPlayUrls(candidates.Where(x => x.IsHls && IsPreferredBilibiliHlsHost(x.Url)).Select(x => x.Url).ToList());
-                        var otherHlsAttempt = OrderBilibiliPlayUrls(candidates.Where(x => x.IsHls && !IsPreferredBilibiliHlsHost(x.Url)).Select(x => x.Url).ToList());
+                        continue;
+                    }
 
-                        AppendUniqueUrls(flvUrls, flvAttempt);
-                        AppendUniqueUrls(preferredHlsUrls, preferredHlsAttempt);
-                        AppendUniqueUrls(otherHlsUrls, otherHlsAttempt);
-
-                        CoreDebug.Log($"[Bilibili] FLV-first attempt={attempt} roomId={roomID} qn={qnValue?.ToString() ?? "null"} flv={flvAttempt.Count} preferredHls={preferredHlsAttempt.Count} otherHls={otherHlsAttempt.Count}");
-
-                        if (flvAttempt.Count > 0)
+                    foreach (var formatItem in formatList)
+                    {
+                        var codecList = formatItem["codec"] as JArray;
+                        if (codecList == null)
                         {
-                            break;
+                            continue;
+                        }
+
+                        foreach (var codecItem in codecList)
+                        {
+                            var baseUrl = codecItem["base_url"]?.ToString();
+                            if (string.IsNullOrWhiteSpace(baseUrl))
+                            {
+                                continue;
+                            }
+
+                            var urlInfo = codecItem["url_info"] as JArray;
+                            if (urlInfo == null)
+                            {
+                                continue;
+                            }
+
+                            foreach (var urlItem in urlInfo)
+                            {
+                                var host = urlItem["host"]?.ToString() ?? string.Empty;
+                                var extra = urlItem["extra"]?.ToString() ?? string.Empty;
+                                var fullUrl = $"{host}{baseUrl}{extra}";
+                                if (string.IsNullOrWhiteSpace(fullUrl) || !dedupe.Add(fullUrl))
+                                {
+                                    continue;
+                                }
+
+                                urls.Add(fullUrl);
+                            }
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        lastException = ex;
-                        CoreDebug.Log($"[Bilibili] PlayInfo attempt failed roomId={roomID} qn={qnValue?.ToString() ?? "null"} attempt={attempt}/{maxPlayInfoAttempt} err={ex.GetType().FullName} {ex.Message}");
-                    }
-                }
-
-                if (flvUrls.Count == 0 && preferredHlsUrls.Count == 0 && otherHlsUrls.Count == 0 && lastException != null)
-                {
-                    throw lastException;
-                }
-
-                if (flvUrls.Count == 0)
-                {
-                    var verifiedPreferred = await VerifyBilibiliHlsCandidatesAsync(client, roomID, preferredHlsUrls);
-                    var verifiedOther = await VerifyBilibiliHlsCandidatesAsync(client, roomID, otherHlsUrls);
-                    var hlsFallbackUrls = new List<string>();
-                    AppendUniqueUrls(hlsFallbackUrls, verifiedPreferred);
-                    AppendUniqueUrls(hlsFallbackUrls, verifiedOther);
-                    AppendUniqueUrls(hlsFallbackUrls, preferredHlsUrls);
-                    AppendUniqueUrls(hlsFallbackUrls, otherHlsUrls);
-                    CoreDebug.Log($"[Bilibili] FLV缺失，使用HLS回退 roomId={roomID} qn={qnValue?.ToString() ?? "null"} verifiedPreferred={verifiedPreferred.Count} verifiedOther={verifiedOther.Count} total={hlsFallbackUrls.Count}");
-                    return hlsFallbackUrls;
                 }
             }
 
-            var orderedUrls = new List<string>();
-            AppendUniqueUrls(orderedUrls, flvUrls);
-            AppendUniqueUrls(orderedUrls, preferredHlsUrls);
-            AppendUniqueUrls(orderedUrls, otherHlsUrls);
-            CoreDebug.Log($"[Bilibili] FLV-first命中 roomId={roomID} qn={qnValue?.ToString() ?? "null"} flv={flvUrls.Count} hls={preferredHlsUrls.Count + otherHlsUrls.Count} total={orderedUrls.Count}");
+            var orderedUrls = OrderBilibiliPlayUrls(urls);
+            CoreDebug.Log($"[Bilibili] PlayInfo直出 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={orderedUrls.Count}");
             return orderedUrls;
         }
         /// <summary>
@@ -509,9 +510,9 @@ namespace AllLive.Core
             {
                 { "room_id", roomID },
                 { "protocol", "0,1" },
-                { "format", "0,1,2" },
+                { "format", "0,2" },
                 { "codec", "0" },
-                { "platform", "html5" },
+                { "platform", "web" },
                 { "dolby", "5" },
             };
             if (qn.HasValue)
