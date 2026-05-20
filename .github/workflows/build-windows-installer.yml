@@ -36,6 +36,10 @@ jobs:
           $installPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
           if (-not $installPath) { throw "Visual Studio not found." }
           "VSINSTALLPATH=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $vsVersion = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationVersion
+          if (-not $vsVersion) { throw "Visual Studio version not found." }
+          $vsMajor = ($vsVersion -split '\.')[0]
+          "VS_MAJOR=$vsMajor" | Out-File -FilePath $env:GITHUB_ENV -Append
           $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
           & $vsInstaller modify --installPath "$installPath" --add Microsoft.VisualStudio.Workload.Universal --add Microsoft.VisualStudio.Component.Windows10SDK.19041 --add Microsoft.VisualStudio.ComponentGroup.UWP.VC --includeRecommended --includeOptional --passive --norestart --wait
 
@@ -183,7 +187,7 @@ jobs:
               "/p:TargetPlatformVersion=$windowsSdkVersion",
               "/p:TargetPlatformMinVersion=10.0.18362.0",
               "/p:UapAppxPackageBuildMode=SideloadOnly",
-              "/p:VisualStudioVersion=17.0",
+              "/p:VisualStudioVersion=$env:VS_MAJOR.0",
               "/p:WindowsSdkDir=$env:WINDOWS_SDK_DIR",
               "/p:WindowsSDKVersion=$windowsSdkVersionWithSlash",
               "/p:AppxPackageDir=AppPackages\\"
