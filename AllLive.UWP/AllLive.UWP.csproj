@@ -405,7 +405,15 @@
   <PropertyGroup Condition=" '$(VisualStudioVersion)' == '' or '$(VisualStudioVersion)' &lt; '14.0' ">
     <VisualStudioVersion>14.0</VisualStudioVersion>
   </PropertyGroup>
-  <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
+  <PropertyGroup>
+    <WindowsXamlTargetsPath Condition="'$(WindowsXamlTargetsPath)' == '' and Exists('$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets')">$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets</WindowsXamlTargetsPath>
+    <WindowsXamlTargetsPath Condition="'$(WindowsXamlTargetsPath)' == '' and Exists('$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v18.0\Microsoft.Windows.UI.Xaml.CSharp.targets')">$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v18.0\Microsoft.Windows.UI.Xaml.CSharp.targets</WindowsXamlTargetsPath>
+    <WindowsXamlTargetsPath Condition="'$(WindowsXamlTargetsPath)' == '' and Exists('$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v17.0\Microsoft.Windows.UI.Xaml.CSharp.targets')">$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v17.0\Microsoft.Windows.UI.Xaml.CSharp.targets</WindowsXamlTargetsPath>
+    <WindowsXamlTargetsPath Condition="'$(WindowsXamlTargetsPath)' == '' and Exists('$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v16.0\Microsoft.Windows.UI.Xaml.CSharp.targets')">$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v16.0\Microsoft.Windows.UI.Xaml.CSharp.targets</WindowsXamlTargetsPath>
+    <WindowsXamlTargetsPath Condition="'$(WindowsXamlTargetsPath)' == '' and Exists('$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v15.0\Microsoft.Windows.UI.Xaml.CSharp.targets')">$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v15.0\Microsoft.Windows.UI.Xaml.CSharp.targets</WindowsXamlTargetsPath>
+  </PropertyGroup>
+  <Import Project="$(WindowsXamlTargetsPath)" Condition="'$(WindowsXamlTargetsPath)' != '' and Exists('$(WindowsXamlTargetsPath)')" />
+  <Error Condition="'$(WindowsXamlTargetsPath)' == ''" Text="未找到 Microsoft.Windows.UI.Xaml.CSharp.targets。请在构建环境安装 UWP/Windows XAML 构建组件，或在 CI 中设置正确的 MSBuildExtensionsPath/VisualStudioVersion。" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.
   <Target Name="BeforeBuild">
