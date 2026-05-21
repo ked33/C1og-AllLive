@@ -411,7 +411,20 @@ namespace AllLive.UWP.ViewModels
                 LiveDanmaku.NewMessage += LiveDanmaku_NewMessage;
                 LiveDanmaku.OnClose += LiveDanmaku_OnClose;
                 danmakuArgs = result.DanmakuData;
-                await LiveDanmaku.Start(result.DanmakuData);
+                try
+                {
+                    await LiveDanmaku.Start(result.DanmakuData);
+                }
+                catch (Exception ex)
+                {
+                    LogHelper.Log($"弹幕启动失败，继续加载播放。站点:{Site?.Name} 房间ID:{RoomID}", LogType.ERROR, ex);
+                    Messages.Add(new LiveMessage()
+                    {
+                        Type = LiveMessageType.Chat,
+                        UserName = "系统",
+                        Message = "弹幕启动失败，已继续加载播放"
+                    });
+                }
                 if (detail.Status)
                 {
                     var qualities = await Site.GetPlayQuality(result);
