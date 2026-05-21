@@ -340,14 +340,18 @@ namespace AllLive.Core
                 {
                     qualitiesMap[item["qn"].ToObject<int>()] = item["desc"]?.ToString() ?? "未知清晰度";
                 }
-                foreach (var item in playurl["stream"]?[0]?["format"]?[0]?["codec"]?[0]?["accept_qn"] ?? new JArray())
+                var acceptQnList = GetBilibiliAcceptQnList(playurl);
+                if (acceptQnList.Count == 0)
                 {
-                    var qnValue = item.ToObject<int>();
+                    acceptQnList.AddRange(qualitiesMap.Keys);
+                }
+                foreach (var qnValue in acceptQnList)
+                {
                     var qualityText = qualitiesMap.ContainsKey(qnValue) ? qualitiesMap[qnValue] : "未知清晰度";
                     var qualityItem = new LivePlayQuality()
                     {
                         Quality = qualityText,
-                        Data = item,
+                        Data = qnValue,
                     };
                     qualities.Add(qualityItem);
                 }
@@ -366,7 +370,12 @@ namespace AllLive.Core
             List<LivePlayQuality> qualities = new List<LivePlayQuality>();
             var result = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/playUrl?cid={roomID}&qn=&platform=web", headers: await GetRequestHeader());
             var obj = JObject.Parse(result);
-            foreach (var item in obj["data"]["quality_description"])
+            var qualityDescription = obj["data"]?["quality_description"] as JArray;
+            if (qualityDescription == null)
+            {
+                return qualities;
+            }
+            foreach (var item in qualityDescription)
             {
                 qualities.Add(new LivePlayQuality()
                 {
@@ -404,62 +413,19 @@ namespace AllLive.Core
             using (client)
             {
                 var obj = await RequestBilibiliPlayInfoAsync(client, roomID, qnValue);
-                var streamList = obj?["data"]?["playurl_info"]?["playurl"]?["stream"] as JArray;
-                if (streamList == null)
+                var playurl = obj?["data"]?["playurl_info"]?["playurl"];
+                var candidates = OrderBilibiliPlayUrlCandidates(ParseBilibiliPlayUrlCandidates(playurl));
+                foreach (var candidate in candidates)
                 {
-                    throw new Exception("playurl_info.playurl.stream为空");
-                }
-
-                foreach (var streamItem in streamList)
-                {
-                    var formatList = streamItem["format"] as JArray;
-                    if (formatList == null)
+                    if (dedupe.Add(candidate.Url))
                     {
-                        continue;
-                    }
-
-                    foreach (var formatItem in formatList)
-                    {
-                        var codecList = formatItem["codec"] as JArray;
-                        if (codecList == null)
-                        {
-                            continue;
-                        }
-
-                        foreach (var codecItem in codecList)
-                        {
-                            var baseUrl = codecItem["base_url"]?.ToString();
-                            if (string.IsNullOrWhiteSpace(baseUrl))
-                            {
-                                continue;
-                            }
-
-                            var urlInfo = codecItem["url_info"] as JArray;
-                            if (urlInfo == null)
-                            {
-                                continue;
-                            }
-
-                            foreach (var urlItem in urlInfo)
-                            {
-                                var host = urlItem["host"]?.ToString() ?? string.Empty;
-                                var extra = urlItem["extra"]?.ToString() ?? string.Empty;
-                                var fullUrl = $"{host}{baseUrl}{extra}";
-                                if (string.IsNullOrWhiteSpace(fullUrl) || !dedupe.Add(fullUrl))
-                                {
-                                    continue;
-                                }
-
-                                urls.Add(fullUrl);
-                            }
-                        }
+                        urls.Add(candidate.Url);
                     }
                 }
+                CoreDebug.Log($"[Bilibili] PlayInfo直出 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={urls.Count} hevc={candidates.Count(x => x.IsHevc)}");
             }
 
-            var orderedUrls = OrderBilibiliPlayUrls(urls);
-            CoreDebug.Log($"[Bilibili] PlayInfo直出 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={orderedUrls.Count}");
-            return orderedUrls;
+            return urls;
         }
         /// <summary>
         /// 旧的获取播放地址方式，部分直播看不了
@@ -472,7 +438,12 @@ namespace AllLive.Core
             List<string> urls = new List<string>();
             var result = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/playUrl?cid={roomID}&qn={qn}&platform=web", headers: await GetRequestHeader());
             var obj = JObject.Parse(result);
-            foreach (var item in obj["data"]["durl"])
+            var durl = obj["data"]?["durl"] as JArray;
+            if (durl == null)
+            {
+                return urls;
+            }
+            foreach (var item in durl)
             {
                 urls.Add(item["url"].ToString());
             }
@@ -484,6 +455,7 @@ namespace AllLive.Core
             public string Url { get; set; }
             public bool IsFlv { get; set; }
             public bool IsHls { get; set; }
+            public bool IsHevc { get; set; }
         }
 
         private async Task<HttpClient> CreateBilibiliPlayInfoHttpClientAsync()
@@ -511,7 +483,7 @@ namespace AllLive.Core
                 { "room_id", roomID },
                 { "protocol", "0,1" },
                 { "format", "0,2" },
-                { "codec", "0" },
+                { "codec", "0,1" },
                 { "platform", "web" },
                 { "dolby", "5" },
             };
@@ -562,6 +534,7 @@ namespace AllLive.Core
 
                     foreach (var codecItem in codecList)
                     {
+                        var codecName = codecItem["codec_name"]?.ToString() ?? string.Empty;
                         var baseUrl = codecItem["base_url"]?.ToString() ?? string.Empty;
                         if (string.IsNullOrWhiteSpace(baseUrl))
                         {
@@ -600,7 +573,57 @@ namespace AllLive.Core
                                 Url = url,
                                 IsFlv = isFlv,
                                 IsHls = isHls,
+                                IsHevc = codecName.IndexOf("hevc", StringComparison.OrdinalIgnoreCase) >= 0,
                             });
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private static List<int> GetBilibiliAcceptQnList(JToken playurl)
+        {
+            var result = new List<int>();
+            var seen = new HashSet<int>();
+            var streamList = playurl?["stream"] as JArray;
+            if (streamList == null)
+            {
+                return result;
+            }
+
+            foreach (var streamItem in streamList)
+            {
+                var formatList = streamItem["format"] as JArray;
+                if (formatList == null)
+                {
+                    continue;
+                }
+
+                foreach (var formatItem in formatList)
+                {
+                    var codecList = formatItem["codec"] as JArray;
+                    if (codecList == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (var codecItem in codecList)
+                    {
+                        var acceptQn = codecItem["accept_qn"] as JArray;
+                        if (acceptQn == null)
+                        {
+                            continue;
+                        }
+
+                        foreach (var item in acceptQn)
+                        {
+                            var qnValue = TryConvertToInt(item);
+                            if (qnValue.HasValue && seen.Add(qnValue.Value))
+                            {
+                                result.Add(qnValue.Value);
+                            }
                         }
                     }
                 }
@@ -706,6 +729,32 @@ namespace AllLive.Core
                 .ThenByDescending(x => x.score)
                 .ThenBy(x => x.index)
                 .Select(x => x.url)
+                .ToList();
+        }
+
+        private static List<BilibiliPlayUrlCandidate> OrderBilibiliPlayUrlCandidates(List<BilibiliPlayUrlCandidate> candidates)
+        {
+            if (candidates == null || candidates.Count == 0)
+            {
+                return candidates ?? new List<BilibiliPlayUrlCandidate>();
+            }
+
+            return candidates
+                .Select((candidate, index) => new
+                {
+                    candidate,
+                    index,
+                    mcdnPenalty = IsBilibiliMcdn(candidate.Url) ? 1 : 0,
+                    codecPenalty = candidate.IsHevc ? 1 : 0,
+                    order = GetBilibiliUrlOrder(candidate.Url),
+                    score = GetBilibiliUrlScore(candidate.Url)
+                })
+                .OrderBy(x => x.mcdnPenalty)
+                .ThenBy(x => x.codecPenalty)
+                .ThenBy(x => x.order)
+                .ThenByDescending(x => x.score)
+                .ThenBy(x => x.index)
+                .Select(x => x.candidate)
                 .ToList();
         }
 
