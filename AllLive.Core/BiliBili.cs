@@ -329,18 +329,24 @@ namespace AllLive.Core
             var client = await CreateBilibiliPlayInfoHttpClientAsync();
             using (client)
             {
-                var obj = await RequestBilibiliPlayInfoAsync(client, roomID, null);
-                var playurl = obj?["data"]?["playurl_info"]?["playurl"];
-                if (playurl == null)
-                {
-                    throw new Exception("playurl_info.playurl为空");
-                }
+                var playurl = (await RequestBilibiliPlayInfoAsync(client, roomID, null, "0"))?["data"]?["playurl_info"]?["playurl"];
                 var qualitiesMap = new Dictionary<int, string>();
-                foreach (var item in playurl["g_qn_desc"] ?? new JArray())
+                foreach (var item in playurl?["g_qn_desc"] ?? new JArray())
                 {
                     qualitiesMap[item["qn"].ToObject<int>()] = item["desc"]?.ToString() ?? "未知清晰度";
                 }
                 var acceptQnList = GetBilibiliAcceptQnList(playurl);
+                if (acceptQnList.Count == 0)
+                {
+                    CoreDebug.Log($"[Bilibili] AVC清晰度为空，尝试HEVC兜底 roomId={roomID}");
+                    playurl = (await RequestBilibiliPlayInfoAsync(client, roomID, null, "0,1"))?["data"]?["playurl_info"]?["playurl"];
+                    qualitiesMap.Clear();
+                    foreach (var item in playurl?["g_qn_desc"] ?? new JArray())
+                    {
+                        qualitiesMap[item["qn"].ToObject<int>()] = item["desc"]?.ToString() ?? "未知清晰度";
+                    }
+                    acceptQnList = GetBilibiliAcceptQnList(playurl);
+                }
                 if (acceptQnList.Count == 0)
                 {
                     acceptQnList.AddRange(qualitiesMap.Keys);
@@ -412,9 +418,16 @@ namespace AllLive.Core
             var client = await CreateBilibiliPlayInfoHttpClientAsync();
             using (client)
             {
-                var obj = await RequestBilibiliPlayInfoAsync(client, roomID, qnValue);
+                var obj = await RequestBilibiliPlayInfoAsync(client, roomID, qnValue, "0");
                 var playurl = obj?["data"]?["playurl_info"]?["playurl"];
                 var candidates = OrderBilibiliPlayUrlCandidates(ParseBilibiliPlayUrlCandidates(playurl));
+                if (candidates.Count == 0)
+                {
+                    CoreDebug.Log($"[Bilibili] AVC播放流为空，尝试HEVC兜底 roomId={roomID} qn={qnValue?.ToString() ?? "null"}");
+                    obj = await RequestBilibiliPlayInfoAsync(client, roomID, qnValue, "0,1");
+                    playurl = obj?["data"]?["playurl_info"]?["playurl"];
+                    candidates = OrderBilibiliPlayUrlCandidates(ParseBilibiliPlayUrlCandidates(playurl));
+                }
                 foreach (var candidate in candidates)
                 {
                     if (dedupe.Add(candidate.Url))
@@ -476,14 +489,14 @@ namespace AllLive.Core
             return client;
         }
 
-        private async Task<JObject> RequestBilibiliPlayInfoAsync(HttpClient client, string roomID, int? qn)
+        private async Task<JObject> RequestBilibiliPlayInfoAsync(HttpClient client, string roomID, int? qn, string codec)
         {
             var queryParameters = new Dictionary<string, string>()
             {
                 { "room_id", roomID },
                 { "protocol", "0,1" },
                 { "format", "0,2" },
-                { "codec", "0,1" },
+                { "codec", string.IsNullOrWhiteSpace(codec) ? "0" : codec },
                 { "platform", "web" },
                 { "dolby", "5" },
             };
@@ -744,13 +757,13 @@ namespace AllLive.Core
                 {
                     candidate,
                     index,
-                    mcdnPenalty = IsBilibiliMcdn(candidate.Url) ? 1 : 0,
                     codecPenalty = candidate.IsHevc ? 1 : 0,
+                    mcdnPenalty = IsBilibiliMcdn(candidate.Url) ? 1 : 0,
                     order = GetBilibiliUrlOrder(candidate.Url),
                     score = GetBilibiliUrlScore(candidate.Url)
                 })
-                .OrderBy(x => x.mcdnPenalty)
-                .ThenBy(x => x.codecPenalty)
+                .OrderBy(x => x.codecPenalty)
+                .ThenBy(x => x.mcdnPenalty)
                 .ThenBy(x => x.order)
                 .ThenByDescending(x => x.score)
                 .ThenBy(x => x.index)
