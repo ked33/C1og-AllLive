@@ -80,6 +80,13 @@ namespace AllLive.UWP.ViewModels
             await ReloadAsync(deferUiUpdate: false);
         }
 
+        public void CancelRefresh()
+        {
+            Interlocked.Increment(ref _refreshVersion);
+            Loading = false;
+            LoaddingLiveStatus = false;
+        }
+
         private async Task ReloadAsync(bool deferUiUpdate)
         {
             var version = Interlocked.Increment(ref _refreshVersion);

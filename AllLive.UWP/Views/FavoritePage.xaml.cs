@@ -28,22 +28,29 @@ namespace AllLive.UWP.Views
         readonly FavoriteVM favoriteVM;
         private DispatcherTimer autoRefreshTimer;
         private int autoRefreshMinutes;
+        private bool isPageActive;
+        private bool isUpdateFavoriteSubscribed;
         public FavoritePage()
         {
             favoriteVM = new FavoriteVM();
             this.NavigationCacheMode = NavigationCacheMode.Enabled;
-            MessageCenter.UpdateFavoriteEvent += MessageCenter_UpdateFavoriteEvent; ;
             this.InitializeComponent();
         }
 
         private void MessageCenter_UpdateFavoriteEvent(object sender, EventArgs e)
         {
+            if (!isPageActive)
+            {
+                return;
+            }
             favoriteVM.Refresh();
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
         {
             base.OnNavigatedTo(e);
+            isPageActive = true;
+            SubscribeUpdateFavorite();
             favoriteVM.HideOffline = SettingHelper.GetValue<bool>(SettingHelper.FAVORITE_HIDE_OFFLINE, false);
 
             if(favoriteVM.Items.Count==0)
@@ -57,7 +64,30 @@ namespace AllLive.UWP.Views
         protected override void OnNavigatedFrom(NavigationEventArgs e)
         {
             base.OnNavigatedFrom(e);
+            isPageActive = false;
+            UnsubscribeUpdateFavorite();
+            favoriteVM.CancelRefresh();
             StopAutoRefreshTimer();
+        }
+
+        private void SubscribeUpdateFavorite()
+        {
+            if (isUpdateFavoriteSubscribed)
+            {
+                return;
+            }
+            MessageCenter.UpdateFavoriteEvent += MessageCenter_UpdateFavoriteEvent;
+            isUpdateFavoriteSubscribed = true;
+        }
+
+        private void UnsubscribeUpdateFavorite()
+        {
+            if (!isUpdateFavoriteSubscribed)
+            {
+                return;
+            }
+            MessageCenter.UpdateFavoriteEvent -= MessageCenter_UpdateFavoriteEvent;
+            isUpdateFavoriteSubscribed = false;
         }
 
         private void ls_ItemClick(object sender, ItemClickEventArgs e)
@@ -126,11 +156,17 @@ namespace AllLive.UWP.Views
             if (autoRefreshTimer != null)
             {
                 autoRefreshTimer.Stop();
+                autoRefreshTimer.Tick -= AutoRefreshTimer_Tick;
+                autoRefreshTimer = null;
             }
         }
 
         private void AutoRefreshTimer_Tick(object sender, object e)
         {
+            if (!isPageActive)
+            {
+                return;
+            }
             var minutes = GetAutoRefreshMinutes();
             if (minutes != autoRefreshMinutes)
             {
