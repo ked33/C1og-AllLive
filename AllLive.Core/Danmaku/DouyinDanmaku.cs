@@ -43,11 +43,13 @@ namespace AllLive.Core.Danmaku
         Timer timer;
         WebSocket ws;
         DouyinDanmakuArgs danmakuArgs;
+        bool isStopped = true;
         private string ServerUrl { get; set; }
         private string BackupUrl { get; set; }
 
         public async Task Start(object args)
         {
+            isStopped = false;
             danmakuArgs = args as DouyinDanmakuArgs;
             var ts = Utils.GetTimestampMs();
             var query = new Dictionary<string, string>()
@@ -83,9 +85,13 @@ namespace AllLive.Core.Danmaku
             { "room_id", danmakuArgs.RoomId },
             { "heartbeatDuration", "0" },
             //{ "signature", "00000000" }
-        };
+            };
 
             var sign = await GetSign(danmakuArgs.RoomId, danmakuArgs.UserId);
+            if (isStopped)
+            {
+                return;
+            }
             query.Add("signature", sign ?? "");
             if (string.IsNullOrWhiteSpace(sign))
             {
@@ -115,24 +121,44 @@ namespace AllLive.Core.Danmaku
             timer.Elapsed += Timer_Elapsed;
             await Task.Run(() =>
             {
-                ws.Connect();
+                if (!isStopped)
+                {
+                    ws?.Connect();
+                }
             });
         }
         private async void Ws_OnOpen(object sender, EventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             CoreDebug.Log("[DouyinDanmaku] WebSocket已连接");
             await Task.Run(() =>
             {
+                if (isStopped)
+                {
+                    return;
+                }
                 //发送进房信息
                 SendHeartBeatData();
 
             });
-            timer.Start();
+            if (!isStopped)
+            {
+                timer?.Start();
+            }
 
         }
 
         private async void Ws_OnMessage(object sender, MessageEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             try
             {
                 var message = e.RawData;
@@ -219,25 +245,49 @@ namespace AllLive.Core.Danmaku
         }
         private void Ws_OnClose(object sender, CloseEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             CoreDebug.Log($"[DouyinDanmaku] WebSocket关闭 code={e.Code} clean={e.WasClean} reason={e.Reason}");
             OnClose?.Invoke(this, e.Reason);
         }
 
         private void Ws_OnError(object sender, WebSocketSharp.ErrorEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             CoreDebug.Log($"[DouyinDanmaku] WebSocket错误: {e.Message}{(e.Exception == null ? "" : $" | {e.Exception.GetType().FullName}: {e.Exception.Message}")}");
             OnClose?.Invoke(this, e.Message);
         }
 
         private void Timer_Elapsed(object sender, ElapsedEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             Heartbeat();
         }
 
         public async void Heartbeat()
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             await Task.Run(() =>
             {
+                if (isStopped)
+                {
+                    return;
+                }
                 SendHeartBeatData();
             });
         }
@@ -245,22 +295,68 @@ namespace AllLive.Core.Danmaku
 
         public async Task Stop()
         {
-            timer?.Stop();
+            isStopped = true;
+            StopTimer();
             await Task.Run(() =>
             {
-                try { ws?.Close(); } catch { }
+                var socket = ws;
+                ws = null;
+                if (socket == null)
+                {
+                    return;
+                }
+                DetachWebSocketEvents(socket);
+                try { socket.Close(); } catch { }
             });
         }
+
+        private void StopTimer()
+        {
+            var currentTimer = timer;
+            timer = null;
+            if (currentTimer == null)
+            {
+                return;
+            }
+            currentTimer.Stop();
+            currentTimer.Elapsed -= Timer_Elapsed;
+            currentTimer.Dispose();
+        }
+
+        private void DetachWebSocketEvents(WebSocket socket)
+        {
+            if (socket == null)
+            {
+                return;
+            }
+            socket.OnOpen -= Ws_OnOpen;
+            socket.OnError -= Ws_OnError;
+            socket.OnMessage -= Ws_OnMessage;
+            socket.OnClose -= Ws_OnClose;
+        }
+
         private void SendHeartBeatData()
         {
+            var socket = ws;
+            if (isStopped || socket == null)
+            {
+                return;
+            }
+
             var obj = new PushFrame();
             obj.payloadType = "hb";
 
-            ws.Send(SerializeProto(obj));
+            socket.Send(SerializeProto(obj));
 
         }
         private void SendACKData(ulong logId, string internalExt)
         {
+            var socket = ws;
+            if (isStopped || socket == null)
+            {
+                return;
+            }
+
             var obj = new PushFrame();
 
             obj.payloadType = "ack";
@@ -268,7 +364,7 @@ namespace AllLive.Core.Danmaku
             var payloadText = internalExt ?? string.Empty;
             obj.Payload = Encoding.UTF8.GetBytes(payloadText);
 
-            ws.Send(SerializeProto(obj));
+            socket.Send(SerializeProto(obj));
 
         }
         public static byte[] GzipDecompress(byte[] bytes)

@@ -43,6 +43,7 @@ namespace AllLive.Core.Danmaku
         //private readonly string ServerUrl = "wss://broadcastlv.chat.bilibili.com/sub";
         Timer timer;
         WebSocket ws;
+        bool isStopped = true;
         private DanmuInfo danmuInfo;
         private string buvid;
         private BiliDanmakuArgs Args;
@@ -53,10 +54,20 @@ namespace AllLive.Core.Danmaku
         }
         private async void Ws_OnOpen(object sender, EventArgs e)
         {
+            var socket = ws;
+            if (isStopped || socket == null)
+            {
+                return;
+            }
+
             await Task.Run(() =>
             {
+                if (isStopped)
+                {
+                    return;
+                }
                 //发送进房信息
-                ws.Send(EncodeData(JsonConvert.SerializeObject(new
+                socket.Send(EncodeData(JsonConvert.SerializeObject(new
                 {
                     roomid = roomId,
                     uid = Args.UserId,
@@ -68,11 +79,19 @@ namespace AllLive.Core.Danmaku
                 }), 7));
 
             });
-            timer.Start();
+            if (!isStopped)
+            {
+                timer?.Start();
+            }
 
         }
         private void Ws_OnMessage(object sender, MessageEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             try
             {
                 ParseData(e.RawData);
@@ -84,6 +103,11 @@ namespace AllLive.Core.Danmaku
 
         private void Ws_OnClose(object sender, CloseEventArgs e)
         {
+            if (isStopped || ws == null)
+            {
+                return;
+            }
+
             // https://github.com/sta/websocket-sharp/issues/219
             var sslProtocolHack = (System.Security.Authentication.SslProtocols)(SslProtocolsHack.Tls12 | SslProtocolsHack.Tls11 | SslProtocolsHack.Tls);
             //TlsHandshakeFailure
@@ -101,20 +125,35 @@ namespace AllLive.Core.Danmaku
 
         private void Ws_OnError(object sender, WebSocketSharp.ErrorEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             OnClose?.Invoke(this, e.Message);
         }
 
         public async Task Start(object args)
         {
+            isStopped = false;
             var _args = args as BiliDanmakuArgs;
             Args = _args;
             roomId = Args.RoomId;
 
             var _buvid = await GetBuvid();
+            if (isStopped)
+            {
+                return;
+            }
             buvid = _buvid.buvid3;
             var info = await GetDanmuInfo(roomId);
+            if (isStopped)
+            {
+                return;
+            }
             if (info == null)
             {
+                isStopped = true;
                 SendSystemMessage("获取弹幕信息失败");
                 return;
             }
@@ -138,30 +177,81 @@ namespace AllLive.Core.Danmaku
             timer.Elapsed += Timer_Elapsed;
             await Task.Run(() =>
             {
-                ws.Connect();
+                if (!isStopped)
+                {
+                    ws?.Connect();
+                }
             });
         }
 
 
         private void Timer_Elapsed(object sender, ElapsedEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             Heartbeat();
         }
 
         public async void Heartbeat()
         {
+            var socket = ws;
+            if (isStopped || socket == null)
+            {
+                return;
+            }
+
             await Task.Run(() =>
             {
-                ws.Send(EncodeData("", 2));
+                if (isStopped)
+                {
+                    return;
+                }
+                socket.Send(EncodeData("", 2));
             });
         }
         public async Task Stop()
         {
-            timer?.Stop();
+            isStopped = true;
+            StopTimer();
             await Task.Run(() =>
             {
-                try { ws?.Close(); } catch { }
+                var socket = ws;
+                ws = null;
+                if (socket == null)
+                {
+                    return;
+                }
+                DetachWebSocketEvents(socket);
+                try { socket.Close(); } catch { }
             });
+        }
+
+        private void StopTimer()
+        {
+            var currentTimer = timer;
+            timer = null;
+            if (currentTimer == null)
+            {
+                return;
+            }
+            currentTimer.Stop();
+            currentTimer.Elapsed -= Timer_Elapsed;
+            currentTimer.Dispose();
+        }
+
+        private void DetachWebSocketEvents(WebSocket socket)
+        {
+            if (socket == null)
+            {
+                return;
+            }
+            socket.OnOpen -= Ws_OnOpen;
+            socket.OnError -= Ws_OnError;
+            socket.OnMessage -= Ws_OnMessage;
+            socket.OnClose -= Ws_OnClose;
         }
 
         private void ParseData(byte[] data)

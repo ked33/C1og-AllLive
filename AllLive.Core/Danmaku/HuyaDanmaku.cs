@@ -48,31 +48,42 @@ namespace AllLive.Core.Danmaku
         Timer timer;
         WebSocket ws;
         HuyaDanmakuArgs args;
+        bool isStopped = true;
         public HuyaDanmaku()
         {
             heartBeatData = Convert.FromBase64String("ABQdAAwsNgBM");
-            ws = new WebSocket(ServerUrl);
-            ws.OnOpen += Ws_OnOpen;
-            ws.OnError += Ws_OnError;
-            ws.OnMessage += Ws_OnMessage;
-            ws.OnClose += Ws_OnClose;
-            timer = new Timer(HeartbeatTime);
-            timer.Elapsed += Timer_Elapsed;
-
         }
         private async void Ws_OnOpen(object sender, EventArgs e)
         {
+            var socket = ws;
+            if (isStopped || socket == null)
+            {
+                return;
+            }
+
             await Task.Run(() =>
             {
+                if (isStopped)
+                {
+                    return;
+                }
                 //发送进房信息
-                ws.Send(JoinData(args.Ayyuid, args.TopSid, args.SubSid));
+                socket.Send(JoinData(args.Ayyuid, args.TopSid, args.SubSid));
 
             });
-            timer.Start();
+            if (!isStopped)
+            {
+                timer?.Start();
+            }
 
         }
         private void Ws_OnMessage(object sender, MessageEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             try
             {
                 var stream = new TarsInputStream(e.RawData);
@@ -157,43 +168,112 @@ namespace AllLive.Core.Danmaku
 
         private void Ws_OnClose(object sender, CloseEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             OnClose?.Invoke(this, e.Reason);
         }
 
         private void Ws_OnError(object sender, WebSocketSharp.ErrorEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             OnClose?.Invoke(this, e.Message);
         }
 
         private void Timer_Elapsed(object sender, ElapsedEventArgs e)
         {
+            if (isStopped)
+            {
+                return;
+            }
+
             Heartbeat();
         }
 
         public async void Heartbeat()
         {
+            var socket = ws;
+            if (isStopped || socket == null)
+            {
+                return;
+            }
+
             await Task.Run(() =>
             {
-                ws.Send(heartBeatData);
+                if (isStopped)
+                {
+                    return;
+                }
+                socket.Send(heartBeatData);
             });
         }
 
         public async Task Start(object args)
         {
+            isStopped = false;
             this.args = (HuyaDanmakuArgs)args;
+            ws = new WebSocket(ServerUrl);
+            ws.OnOpen += Ws_OnOpen;
+            ws.OnError += Ws_OnError;
+            ws.OnMessage += Ws_OnMessage;
+            ws.OnClose += Ws_OnClose;
+            timer = new Timer(HeartbeatTime);
+            timer.Elapsed += Timer_Elapsed;
             await Task.Run(() =>
             {
-                ws.Connect();
+                if (!isStopped)
+                {
+                    ws?.Connect();
+                }
             });
         }
 
         public async Task Stop()
         {
-            timer?.Stop();
+            isStopped = true;
+            StopTimer();
             await Task.Run(() =>
             {
-                try { ws?.Close(); } catch { }
+                var socket = ws;
+                ws = null;
+                if (socket == null)
+                {
+                    return;
+                }
+                DetachWebSocketEvents(socket);
+                try { socket.Close(); } catch { }
             });
+        }
+
+        private void StopTimer()
+        {
+            var currentTimer = timer;
+            timer = null;
+            if (currentTimer == null)
+            {
+                return;
+            }
+            currentTimer.Stop();
+            currentTimer.Elapsed -= Timer_Elapsed;
+            currentTimer.Dispose();
+        }
+
+        private void DetachWebSocketEvents(WebSocket socket)
+        {
+            if (socket == null)
+            {
+                return;
+            }
+            socket.OnOpen -= Ws_OnOpen;
+            socket.OnError -= Ws_OnError;
+            socket.OnMessage -= Ws_OnMessage;
+            socket.OnClose -= Ws_OnClose;
         }
 
         private byte[] JoinData(long ayyuid, long tid, long sid)
