@@ -506,15 +506,17 @@ namespace AllLive.Core
             }
             var query = string.Join("&", queryParameters.Select(x => $"{x.Key}={Uri.EscapeDataString(x.Value ?? string.Empty)}"));
             var requestUrl = $"https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?{query}";
-            var response = await client.GetAsync(requestUrl);
-            response.EnsureSuccessStatusCode();
-            var result = await response.Content.ReadAsStringAsync();
-            var obj = JObject.Parse(result);
-            if (obj["code"]?.ToObject<int>() != 0)
+            using (var response = await client.GetAsync(requestUrl))
             {
-                throw new Exception($"getRoomPlayInfo返回异常 code={obj["code"]} message={obj["message"] ?? obj["msg"]}");
+                response.EnsureSuccessStatusCode();
+                var result = await response.Content.ReadAsStringAsync();
+                var obj = JObject.Parse(result);
+                if (obj["code"]?.ToObject<int>() != 0)
+                {
+                    throw new Exception($"getRoomPlayInfo返回异常 code={obj["code"]} message={obj["message"] ?? obj["msg"]}");
+                }
+                return obj;
             }
-            return obj;
         }
 
         private static List<BilibiliPlayUrlCandidate> ParseBilibiliPlayUrlCandidates(JToken playurl)
