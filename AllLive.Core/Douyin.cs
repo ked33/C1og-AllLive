@@ -486,18 +486,20 @@ namespace AllLive.Core
             {
                 return await ResolveCookieAsync(webRid);
             }
-            var resp = await HttpUtil.Head($"https://live.douyin.com/{webRid}",
-                headers: await GetRequestHeaders()
-            );
             var dyCookie = "";
-            if (resp.Headers.TryGetValues("Set-Cookie", out var values))
+            using (var resp = await HttpUtil.Head($"https://live.douyin.com/{webRid}",
+                headers: await GetRequestHeaders()
+            ))
             {
-                foreach (var item in values)
+                if (resp.Headers.TryGetValues("Set-Cookie", out var values))
                 {
-                    var cookie = item.Split(';')[0];
-                    if (cookie.Contains("ttwid") || cookie.Contains("__ac_nonce") || cookie.Contains("msToken"))
+                    foreach (var item in values)
                     {
-                        dyCookie += $"{cookie};";
+                        var cookie = item.Split(';')[0];
+                        if (cookie.Contains("ttwid") || cookie.Contains("__ac_nonce") || cookie.Contains("msToken"))
+                        {
+                            dyCookie += $"{cookie};";
+                        }
                     }
                 }
             }
@@ -520,7 +522,7 @@ namespace AllLive.Core
         {
             var dyCookie = await GetWebCookie(webRid);
             CoreDebug.Log($"[Douyin] GetRoomDataHtml webRid={webRid} cookieLen={dyCookie?.Length ?? 0}");
-            var response = await HttpUtil.Get($"https://live.douyin.com/{webRid}",
+            using (var response = await HttpUtil.Get($"https://live.douyin.com/{webRid}",
                 headers: new Dictionary<string, string>
                 {
                     { "User-Agent", USER_AGENT },
@@ -531,31 +533,33 @@ namespace AllLive.Core
                     { "Cookie", dyCookie }
                 },
                 ensureSuccess: false
-            );
-            var resp = await response.Content.ReadAsStringAsync();
-            var statusCode = (int)response.StatusCode;
-            CoreDebug.Log($"[Douyin] GetRoomDataHtml status={statusCode} respLen={resp?.Length ?? 0} head={TrimForLog(resp)}");
-            if (!response.IsSuccessStatusCode && statusCode == 444)
+            ))
             {
-                CoreDebug.Log("[Douyin] GetRoomDataHtml触发风控(444)");
-            }
+                var resp = await response.Content.ReadAsStringAsync();
+                var statusCode = (int)response.StatusCode;
+                CoreDebug.Log($"[Douyin] GetRoomDataHtml status={statusCode} respLen={resp?.Length ?? 0} head={TrimForLog(resp)}");
+                if (!response.IsSuccessStatusCode && statusCode == 444)
+                {
+                    CoreDebug.Log("[Douyin] GetRoomDataHtml触发风控(444)");
+                }
 
-            var state = TryParseRenderData(resp);
-            if (state != null)
-            {
-                return state;
-            }
+                var state = TryParseRenderData(resp);
+                if (state != null)
+                {
+                    return state;
+                }
 
-            Regex regex = new Regex("\\{\\\\\"state\\\\\":\\{\\\\\"appStore.*?\\]\\\\n", RegexOptions.Singleline);
-            Match match = regex.Match(resp ?? "");
-            string json = match.Success ? match.Groups[0].Value : "";
-            if (string.IsNullOrEmpty(json))
-            {
-                CoreDebug.Log("[Douyin] GetRoomDataHtml解析失败: 未找到RENDER_DATA或state");
-                throw new Exception("无法读取直播间数据");
+                Regex regex = new Regex("\\{\\\\\"state\\\\\":\\{\\\\\"appStore.*?\\]\\\\n", RegexOptions.Singleline);
+                Match match = regex.Match(resp ?? "");
+                string json = match.Success ? match.Groups[0].Value : "";
+                if (string.IsNullOrEmpty(json))
+                {
+                    CoreDebug.Log("[Douyin] GetRoomDataHtml解析失败: 未找到RENDER_DATA或state");
+                    throw new Exception("无法读取直播间数据");
+                }
+                json = json.Trim().Replace("\\\"", "\"").Replace("\\\\", "\\").Replace("]\\n", "");
+                return JObject.Parse(json)["state"];
             }
-            json = json.Trim().Replace("\\\"", "\"").Replace("\\\\", "\\").Replace("]\\n", "");
-            return JObject.Parse(json)["state"];
         }
 
         private async Task<JToken> GetRoomDataApi(string webRid)
@@ -904,7 +908,10 @@ namespace AllLive.Core
 
             if (!cookieMap.ContainsKey("ttwid"))
             {
-                MergeCookiesFromResponse(cookieMap, await TryHeadAsync("https://live.douyin.com"));
+                using (var resp = await TryHeadAsync("https://live.douyin.com"))
+                {
+                    MergeCookiesFromResponse(cookieMap, resp);
+                }
             }
 
             if (!cookieMap.ContainsKey("msToken") || !cookieMap.ContainsKey("__ac_nonce"))
@@ -912,7 +919,10 @@ namespace AllLive.Core
                 var url = string.IsNullOrWhiteSpace(webRid)
                     ? "https://live.douyin.com"
                     : $"https://live.douyin.com/{webRid}";
-                MergeCookiesFromResponse(cookieMap, await TryHeadAsync(url));
+                using (var resp = await TryHeadAsync(url))
+                {
+                    MergeCookiesFromResponse(cookieMap, resp);
+                }
             }
 
             return BuildCookie(cookieMap);

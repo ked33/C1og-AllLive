@@ -27,6 +27,8 @@ namespace AllLive.UWP.Controls
     public sealed partial class BiliLoginDialog : ContentDialog
     {
         Timer timer;
+        ElapsedEventHandler timerElapsedHandler;
+        bool isPollingActive;
         public BiliLoginDialog()
         {
             this.InitializeComponent();
@@ -36,7 +38,7 @@ namespace AllLive.UWP.Controls
 
         private void BiliLoginDialog_Unloaded(object sender, RoutedEventArgs e)
         {
-            timer?.Close();
+            StopPoll();
         }
 
         private void BiliLoginDialog_Loaded(object sender, RoutedEventArgs e)
@@ -110,55 +112,67 @@ namespace AllLive.UWP.Controls
         }
         private async void PollQRStatus()
         {
+            if (!isPollingActive || string.IsNullOrWhiteSpace(qrcodeKey))
+            {
+                return;
+            }
+
             try
             {
 
-                var response = await HttpUtil.Get($"https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={qrcodeKey}");
-
-                var respContent = await response.Content.ReadAsStringAsync();
-
-                var json = JObject.Parse(respContent);
-                if (json["code"].ToString() != "0")
+                using (var response = await HttpUtil.Get($"https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={qrcodeKey}"))
                 {
-                    return;
-                }
-
-                var data = json["data"];
-                var code = data["code"].ToInt32();
-                if (code == 0)
-                {
-                    var cookies = new List<string>();
-                    long userId = 0;
-                    foreach (var item in response.Headers.GetValues("Set-Cookie"))
+                    if (!isPollingActive)
                     {
-                        var cookie = item.Split(';')[0];
-                        if (cookie.Contains("DedeUserID"))
+                        return;
+                    }
+
+                    var respContent = await response.Content.ReadAsStringAsync();
+
+                    var json = JObject.Parse(respContent);
+                    if (json["code"].ToString() != "0")
+                    {
+                        return;
+                    }
+
+                    var data = json["data"];
+                    var code = data["code"].ToInt32();
+                    if (code == 0)
+                    {
+                        var cookies = new List<string>();
+                        long userId = 0;
+                        foreach (var item in response.Headers.GetValues("Set-Cookie"))
                         {
-                            long.TryParse(cookie.Split('=')[1], out userId);
+                            var cookie = item.Split(';')[0];
+                            if (cookie.Contains("DedeUserID"))
+                            {
+                                long.TryParse(cookie.Split('=')[1], out userId);
+                            }
+                            cookies.Add(cookie);
                         }
-                        cookies.Add(cookie);
+
+
+                        if (cookies.Count > 0)
+                        {
+                            var cookieStr = cookies.Aggregate((x, y) => x + ";" + y);
+                            SettingHelper.SetValue(SettingHelper.BILI_COOKIE, cookieStr);
+                            SettingHelper.SetValue(SettingHelper.BILI_USER_ID, userId);
+                            await BiliAccount.Instance.LoadUserInfo();
+
+                            StopPoll();
+                            this.Hide();
+                        }
                     }
-
-
-                    if (cookies.Count > 0)
+                    else if (code == 86038)
                     {
-                        var cookieStr = cookies.Aggregate((x, y) => x + ";" + y);
-                        SettingHelper.SetValue(SettingHelper.BILI_COOKIE, cookieStr);
-                        SettingHelper.SetValue(SettingHelper.BILI_USER_ID, userId);
-                        await BiliAccount.Instance.LoadUserInfo();
-
-                        this.Hide();
+                        txtStatus.Text = "二维码已过期";
+                        qrcodeKey = "";
+                        StopPoll();
                     }
-                }
-                else if (code == 86038)
-                {
-                    txtStatus.Text = "二维码已过期";
-                    qrcodeKey = "";
-                    timer?.Close();
-                }
-                else if (code == 86090)
-                {
-                    txtStatus.Text = "已扫描，请确认登录";
+                    else if (code == 86090)
+                    {
+                        txtStatus.Text = "已扫描，请确认登录";
+                    }
                 }
             }
             catch (Exception ex)
@@ -170,16 +184,36 @@ namespace AllLive.UWP.Controls
         }
         private void StartPoll()
         {
-            timer?.Close();
+            StopPoll();
             timer = new Timer(3 * 1000);
-            timer.Elapsed += (sender, e) =>
+            isPollingActive = true;
+            timerElapsedHandler = (sender, e) =>
             {
                 _ = this.Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () =>
                 {
                     PollQRStatus();
                 });
             };
+            timer.Elapsed += timerElapsedHandler;
             timer.Start();
+        }
+
+        private void StopPoll()
+        {
+            if (timer == null)
+            {
+                return;
+            }
+
+            isPollingActive = false;
+            timer.Stop();
+            if (timerElapsedHandler != null)
+            {
+                timer.Elapsed -= timerElapsedHandler;
+                timerElapsedHandler = null;
+            }
+            timer.Close();
+            timer = null;
         }
 
 

@@ -293,10 +293,12 @@ namespace AllLive.UWP.Helper
                 {
                     return "";
                 }
-                var headResp = await HttpUtil.Head(url);
-                if (headResp.Headers.Location != null)
+                using (var headResp = await HttpUtil.Head(url))
                 {
-                    return headResp.Headers.Location.ToString();
+                    if (headResp.Headers.Location != null)
+                    {
+                        return headResp.Headers.Location.ToString();
+                    }
                 }
               
             }
