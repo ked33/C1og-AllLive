@@ -1328,7 +1328,7 @@ namespace AllLive.UWP.ViewModels
                 || propertyName.IndexOf("auth", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        public async void Stop()
+        public async Task StopAsync()
         {
             isActive = false;
             CancelDanmakuReconnect();

@@ -35,7 +35,6 @@ using Windows.UI.Core;
 using FFmpegInteropX;
 using Windows.Media.Playback;
 using System.Text;
-using System.Runtime;
 using Windows.Web.Http;
 using Windows.Web.Http.Headers;
 using Windows.Networking.Connectivity;
@@ -91,6 +90,8 @@ namespace AllLive.UWP.Views
         private bool isPageClosing;
         private bool liveRoomCleaned;
         private bool mediaPlayerEventsDetached;
+        private bool liveRoomWindowRegistered;
+        private bool controlEventsDetached;
         private bool setPlayerWorkerRunning;
         private string activeSetPlayerUrl;
         private DateTimeOffset activeSetPlayerUtc;
@@ -864,7 +865,7 @@ namespace AllLive.UWP.Views
                         {
                             if (pageArgs != null && !string.IsNullOrEmpty(liveRoomVM?.RoomID))
                             {
-                                liveRoomVM.Stop();
+                                await liveRoomVM.StopAsync();
                                 liveRoomVM.LoadData(pageArgs.Site, liveRoomVM.RoomID);
                             }
                         }
@@ -1885,32 +1886,58 @@ namespace AllLive.UWP.Views
         private void StopPlay()
         {
             ResetStreamReconnectState();
+            ReleasePlaybackResources();
+
+            timer_focus.Stop();
+            controlTimer.Stop();
+            Window.Current.CoreWindow.PointerCursor = new Windows.UI.Core.CoreCursor(Windows.UI.Core.CoreCursorType.Arrow, 0);
+
+            _ = liveRoomVM?.StopAsync();
+
+            SetFullScreen(false);
+            MiniWidnows(false);
+            ReleaseDisplayRequest();
+        }
+
+        private void ReleasePlaybackResources()
+        {
             StopBufferingTimer();
             lock (setPlayerRequestLock)
             {
                 pendingSetPlayerUrl = null;
                 activeSetPlayerUrl = null;
             }
+            currentLineRetryUrl = null;
+            currentLineRetryCount = 0;
+            lastPlaybackState = null;
+            lastMediaOpenedUtc = null;
+            lastPlaybackStartUtc = null;
+            lastPlaybackUrl = null;
+            lastConfigSnapshot = null;
+            lastUrlAnalysis = null;
+            lastProbeSnapshot = null;
+            diagnosticsSnapshot = null;
+            diagnosticsSnapshotTask = null;
+
             if (mediaPlayer != null)
             {
-                mediaPlayer.Pause();
-                mediaPlayer.Source = null;
+                try { mediaPlayer.Pause(); } catch { }
+                try { mediaPlayer.Source = null; } catch { }
             }
+            try { player.SetMediaPlayer(null); } catch { }
+
             if (interopMSS != null)
             {
-                interopMSS.Dispose();
+                try { interopMSS.Dispose(); } catch { }
                 interopMSS = null;
             }
 
-            timer_focus.Stop();
-            controlTimer.Stop();
-            Window.Current.CoreWindow.PointerCursor = new Windows.UI.Core.CoreCursor(Windows.UI.Core.CoreCursorType.Arrow, 0);
+            try { DanmuControl.ClearAll(); } catch { }
+            PlayerLoading.Visibility = Visibility.Collapsed;
+        }
 
-            liveRoomVM?.Stop();
-
-            SetFullScreen(false);
-            MiniWidnows(false);
-            //取消屏幕常亮
+        private void ReleaseDisplayRequest()
+        {
             if (dispRequest != null)
             {
                 try
@@ -1971,9 +1998,60 @@ namespace AllLive.UWP.Views
             ApplicationView.GetForCurrentView().Consolidated -= LiveRoomPage_Consolidated;
 
             StopPlay();
+            DetachControlEvents();
             DetachMediaPlayerEvents();
+            ClearControlReferences();
             try { player.SetMediaPlayer(null); } catch { }
             try { mediaPlayer?.Dispose(); } catch { }
+            if (liveRoomWindowRegistered)
+            {
+                liveRoomWindowRegistered = false;
+                MessageCenter.UnregisterLiveRoomWindow();
+            }
+        }
+
+        private void DetachControlEvents()
+        {
+            if (controlEventsDetached)
+            {
+                return;
+            }
+            controlEventsDetached = true;
+            GridRight.SizeChanged -= GridRight_SizeChanged;
+            cbDecoder.Loaded -= CbDecoder_Loaded;
+            cbDecoder.SelectionChanged -= CbDecoder_SelectionChanged;
+            PlaySWDanmu.Toggled -= PlaySWDanmu_Toggled;
+            swKeepSC.Toggled -= SwKeepSC_Toggled;
+            SliderVolume.ValueChanged -= SliderVolume_ValueChanged;
+            numCleanCount.Loaded -= NumCleanCount_Loaded;
+            numCleanCount.ValueChanged -= NumCleanCount_ValueChanged;
+            numFontsize.Loaded -= NumFontsize_Loaded;
+            numFontsize.ValueChanged -= NumFontsize_ValueChanged;
+            DanmuTopMargin.ValueChanged -= DanmuTopMargin_ValueChanged;
+            DanmuSettingFontZoom.ValueChanged -= DanmuSettingFontZoom_ValueChanged;
+            DanmuSettingSpeed.ValueChanged -= DanmuSettingSpeed_ValueChanged;
+            DanmuSettingOpacity.ValueChanged -= DanmuSettingOpacity_ValueChanged;
+            DanmuSettingBold.Toggled -= DanmuSettingBold_Toggled;
+            DanmuSettingStyle.SelectionChanged -= DanmuSettingStyle_SelectionChanged;
+            DanmuSettingArea.ValueChanged -= DanmuSettingArea_ValueChanged;
+            DanmuSettingColourful.Toggled -= DanmuSettingColourful_Toggled;
+
+            xboxSettingsDecoder.Loaded -= XboxSettingsDecoder_Loaded;
+            xboxSettingsDecoder.SelectionChanged -= XboxSettingsDecoder_SelectionChanged;
+            xboxSettingsDMSize.SelectionChanged -= XboxSettingsDMSize_SelectionChanged;
+            xboxSettingsDMSpeed.SelectionChanged -= XboxSettingsDMSpeed_SelectionChanged;
+            xboxSettingsDMOpacity.SelectionChanged -= XboxSettingsDMOpacity_SelectionChanged;
+            xboxSettingsDMBold.Toggled -= XboxSettingsDMBold_Toggled;
+            xboxSettingsDMStyle.SelectionChanged -= XboxSettingsDMStyle_SelectionChanged;
+            xboxSettingsDMArea.SelectionChanged -= XboxSettingsDMArea_SelectionChanged;
+            xboxSettingsDMColorful.Toggled -= XboxSettingsDMColorful_Toggled;
+        }
+
+        private void ClearControlReferences()
+        {
+            try { LiveDanmuSettingListWords.ItemsSource = null; } catch { }
+            try { XboxSuperChat.ItemsSource = null; } catch { }
+            try { DanmuControl.ClearAll(); } catch { }
         }
 
         private void DetachMediaPlayerEvents()
@@ -2010,6 +2088,12 @@ namespace AllLive.UWP.Views
             base.OnNavigatedTo(e);
             if (e.NavigationMode == Windows.UI.Xaml.Navigation.NavigationMode.New)
             {
+                if (!liveRoomWindowRegistered)
+                {
+                    MessageCenter.RegisterLiveRoomWindow();
+                    liveRoomWindowRegistered = true;
+                }
+
                 pageArgs = e.Parameter as PageArgs;
                 if (Utils.IsXbox)
                 {
@@ -2077,14 +2161,8 @@ namespace AllLive.UWP.Views
             //右侧宽度
             var width = SettingHelper.GetValue<double>(SettingHelper.RIGHT_DETAIL_WIDTH, 280);
             ColumnRight.Width = new GridLength(width, GridUnitType.Pixel);
-            GridRight.SizeChanged += new SizeChangedEventHandler((sender, args) =>
-            {
-                if (args.NewSize.Width <= 0)
-                {
-                    return;
-                }
-                SettingHelper.SetValue<double>(SettingHelper.RIGHT_DETAIL_WIDTH, args.NewSize.Width + 16);
-            });
+            GridRight.SizeChanged -= GridRight_SizeChanged;
+            GridRight.SizeChanged += GridRight_SizeChanged;
             //软解视频
             //cbDecode.SelectedIndex= SettingHelper.GetValue<int>(SettingHelper.DECODE, 0);
             //switch (cbDecode.SelectedIndex)
@@ -2135,68 +2213,41 @@ namespace AllLive.UWP.Views
             //    });
             //});
             cbDecoder.SelectedIndex = SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1);
-            cbDecoder.Loaded += new RoutedEventHandler((sender, e) =>
-            {
-                cbDecoder.SelectionChanged += new SelectionChangedEventHandler((obj, args) =>
-                {
-                    SettingHelper.SetValue(SettingHelper.VIDEO_DECODER, cbDecoder.SelectedIndex);
-                    Utils.ShowMessageToast("更改清晰度或刷新后生效");
-                });
-            });
+            cbDecoder.Loaded -= CbDecoder_Loaded;
+            cbDecoder.Loaded += CbDecoder_Loaded;
             //弹幕开关
             var state = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.SHOW, false) ? Visibility.Visible : Visibility.Collapsed;
             DanmuControl.Visibility = state;
             PlaySWDanmu.IsOn = state == Visibility.Visible;
-            PlaySWDanmu.Toggled += new RoutedEventHandler((e, args) =>
-            {
-                var visibility = PlaySWDanmu.IsOn ? Visibility.Visible : Visibility.Collapsed;
-                DanmuControl.Visibility = visibility;
-                SettingHelper.SetValue(SettingHelper.LiveDanmaku.SHOW, PlaySWDanmu.IsOn);
-            });
+            PlaySWDanmu.Toggled -= PlaySWDanmu_Toggled;
+            PlaySWDanmu.Toggled += PlaySWDanmu_Toggled;
 
             // 保留醒目留言
             var keepSC = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.KEEP_SUPER_CHAT, true);
             swKeepSC.IsOn = keepSC;
             liveRoomVM.SetSCTimer();
-            swKeepSC.Toggled += new RoutedEventHandler((e, args) =>
-            {
-                SettingHelper.SetValue(SettingHelper.LiveDanmaku.KEEP_SUPER_CHAT, swKeepSC.IsOn);
-                liveRoomVM.SetSCTimer();
-            });
+            swKeepSC.Toggled -= SwKeepSC_Toggled;
+            swKeepSC.Toggled += SwKeepSC_Toggled;
 
             //音量
             var volume = SettingHelper.GetValue<double>(SettingHelper.PLAYER_VOLUME, 1.0);
             mediaPlayer.Volume = volume;
             SliderVolume.Value = volume;
-            SliderVolume.ValueChanged += new RangeBaseValueChangedEventHandler((e, args) =>
-            {
-                mediaPlayer.Volume = SliderVolume.Value;
-                SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, SliderVolume.Value);
-            });
+            SliderVolume.ValueChanged -= SliderVolume_ValueChanged;
+            SliderVolume.ValueChanged += SliderVolume_ValueChanged;
             //亮度
             _brightness = SettingHelper.GetValue<double>(SettingHelper.PLAYER_BRIGHTNESS, 0);
             BrightnessShield.Opacity = _brightness;
 
             //弹幕清理
             numCleanCount.Value = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.DANMU_CLEAN_COUNT, 200);
-            numCleanCount.Loaded += new RoutedEventHandler((sender, e) =>
-            {
-                numCleanCount.ValueChanged += new TypedEventHandler<NumberBox, NumberBoxValueChangedEventArgs>((obj, args) =>
-                {
-                    liveRoomVM.MessageCleanCount = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.DANMU_CLEAN_COUNT, Convert.ToInt32(args.NewValue));
-                    SettingHelper.SetValue(SettingHelper.LiveDanmaku.DANMU_CLEAN_COUNT, Convert.ToInt32(args.NewValue));
-                });
-            });
+            numCleanCount.Loaded -= NumCleanCount_Loaded;
+            numCleanCount.Loaded += NumCleanCount_Loaded;
 
             //互动文字大小
             numFontsize.Value = SettingHelper.GetValue<double>(SettingHelper.MESSAGE_FONTSIZE, 14.0);
-            numFontsize.Loaded += new RoutedEventHandler((sender, e) =>
-            {
-                numFontsize.ValueChanged += new TypedEventHandler<NumberBox, NumberBoxValueChangedEventArgs>((obj, args) =>
-                {
-                    SettingHelper.SetValue(SettingHelper.MESSAGE_FONTSIZE, args.NewValue);
-                });
-            });
+            numFontsize.Loaded -= NumFontsize_Loaded;
+            numFontsize.Loaded += NumFontsize_Loaded;
 
 
             //弹幕关键词
@@ -2205,38 +2256,25 @@ namespace AllLive.UWP.Views
             //弹幕顶部距离
             DanmuControl.Margin = new Thickness(0, SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.TOP_MARGIN, 0), 0, 0);
             DanmuTopMargin.Value = DanmuControl.Margin.Top;
-            DanmuTopMargin.ValueChanged += new RangeBaseValueChangedEventHandler((e, args) =>
-            {
-                SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.TOP_MARGIN, DanmuTopMargin.Value);
-                DanmuControl.Margin = new Thickness(0, DanmuTopMargin.Value, 0, 0);
-            });
+            DanmuTopMargin.ValueChanged -= DanmuTopMargin_ValueChanged;
+            DanmuTopMargin.ValueChanged += DanmuTopMargin_ValueChanged;
             //弹幕大小
             DanmuControl.DanmakuSizeZoom = SettingHelper.GetValue<double>(SettingHelper.LiveDanmaku.FONT_ZOOM, 1);
-            DanmuSettingFontZoom.ValueChanged += new RangeBaseValueChangedEventHandler((e, args) =>
-            {
-                if (isMini) return;
-                SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.FONT_ZOOM, DanmuSettingFontZoom.Value);
-            });
+            DanmuSettingFontZoom.ValueChanged -= DanmuSettingFontZoom_ValueChanged;
+            DanmuSettingFontZoom.ValueChanged += DanmuSettingFontZoom_ValueChanged;
             //弹幕速度
             DanmuControl.DanmakuDuration = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.SPEED, 10);
-            DanmuSettingSpeed.ValueChanged += new RangeBaseValueChangedEventHandler((e, args) =>
-            {
-                if (isMini) return;
-                SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.SPEED, DanmuSettingSpeed.Value);
-            });
+            DanmuSettingSpeed.ValueChanged -= DanmuSettingSpeed_ValueChanged;
+            DanmuSettingSpeed.ValueChanged += DanmuSettingSpeed_ValueChanged;
 
             //保留一位小数
             DanmuControl.Opacity = SettingHelper.GetValue<double>(SettingHelper.LiveDanmaku.OPACITY, 1.0);
-            DanmuSettingOpacity.ValueChanged += new RangeBaseValueChangedEventHandler((e, args) =>
-            {
-                SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.OPACITY, DanmuSettingOpacity.Value);
-            });
+            DanmuSettingOpacity.ValueChanged -= DanmuSettingOpacity_ValueChanged;
+            DanmuSettingOpacity.ValueChanged += DanmuSettingOpacity_ValueChanged;
             //弹幕加粗
             DanmuControl.DanmakuBold = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.BOLD, false);
-            DanmuSettingBold.Toggled += new RoutedEventHandler((e, args) =>
-            {
-                SettingHelper.SetValue<bool>(SettingHelper.LiveDanmaku.BOLD, DanmuSettingBold.IsOn);
-            });
+            DanmuSettingBold.Toggled -= DanmuSettingBold_Toggled;
+            DanmuSettingBold.Toggled += DanmuSettingBold_Toggled;
             //弹幕样式
             var danmuStyle = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, 2);
             if (danmuStyle > 2)
@@ -2244,61 +2282,155 @@ namespace AllLive.UWP.Views
                 danmuStyle = 2;
             }
             DanmuControl.DanmakuStyle = (DanmakuBorderStyle)danmuStyle;
-            DanmuSettingStyle.SelectionChanged += new SelectionChangedEventHandler((e, args) =>
-            {
-                if (DanmuSettingStyle.SelectedIndex != -1)
-                {
-                    SettingHelper.SetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, DanmuSettingStyle.SelectedIndex);
-                }
-            });
+            DanmuSettingStyle.SelectionChanged -= DanmuSettingStyle_SelectionChanged;
+            DanmuSettingStyle.SelectionChanged += DanmuSettingStyle_SelectionChanged;
 
 
             //弹幕显示区域
             DanmuControl.DanmakuArea = SettingHelper.GetValue<double>(SettingHelper.LiveDanmaku.AREA, 1);
-            DanmuSettingArea.ValueChanged += new RangeBaseValueChangedEventHandler((e, args) =>
-            {
-                SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.AREA, DanmuSettingArea.Value);
-            });
+            DanmuSettingArea.ValueChanged -= DanmuSettingArea_ValueChanged;
+            DanmuSettingArea.ValueChanged += DanmuSettingArea_ValueChanged;
 
             //彩色弹幕
             DanmuSettingColourful.IsOn = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.COLOURFUL, true);
-            DanmuSettingColourful.Toggled += new RoutedEventHandler((e, args) =>
+            DanmuSettingColourful.Toggled -= DanmuSettingColourful_Toggled;
+            DanmuSettingColourful.Toggled += DanmuSettingColourful_Toggled;
+        }
+        private void CbDecoder_Loaded(object sender, RoutedEventArgs e)
+        {
+            cbDecoder.SelectionChanged -= CbDecoder_SelectionChanged;
+            cbDecoder.SelectionChanged += CbDecoder_SelectionChanged;
+        }
+
+        private void CbDecoder_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            SettingHelper.SetValue(SettingHelper.VIDEO_DECODER, cbDecoder.SelectedIndex);
+            Utils.ShowMessageToast("更改清晰度或刷新后生效");
+        }
+
+        private void PlaySWDanmu_Toggled(object sender, RoutedEventArgs e)
+        {
+            var visibility = PlaySWDanmu.IsOn ? Visibility.Visible : Visibility.Collapsed;
+            DanmuControl.Visibility = visibility;
+            SettingHelper.SetValue(SettingHelper.LiveDanmaku.SHOW, PlaySWDanmu.IsOn);
+        }
+
+        private void SwKeepSC_Toggled(object sender, RoutedEventArgs e)
+        {
+            SettingHelper.SetValue(SettingHelper.LiveDanmaku.KEEP_SUPER_CHAT, swKeepSC.IsOn);
+            liveRoomVM.SetSCTimer();
+        }
+
+        private void SliderVolume_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+        {
+            mediaPlayer.Volume = SliderVolume.Value;
+            SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, SliderVolume.Value);
+        }
+
+        private void NumCleanCount_Loaded(object sender, RoutedEventArgs e)
+        {
+            numCleanCount.ValueChanged -= NumCleanCount_ValueChanged;
+            numCleanCount.ValueChanged += NumCleanCount_ValueChanged;
+        }
+
+        private void NumCleanCount_ValueChanged(object sender, NumberBoxValueChangedEventArgs e)
+        {
+            if (double.IsNaN(e.NewValue))
             {
-                SettingHelper.SetValue<bool>(SettingHelper.LiveDanmaku.COLOURFUL, DanmuSettingColourful.IsOn);
-            });
+                return;
+            }
+            liveRoomVM.MessageCleanCount = Convert.ToInt32(e.NewValue);
+            SettingHelper.SetValue(SettingHelper.LiveDanmaku.DANMU_CLEAN_COUNT, Convert.ToInt32(e.NewValue));
+        }
+
+        private void NumFontsize_Loaded(object sender, RoutedEventArgs e)
+        {
+            numFontsize.ValueChanged -= NumFontsize_ValueChanged;
+            numFontsize.ValueChanged += NumFontsize_ValueChanged;
+        }
+
+        private void NumFontsize_ValueChanged(object sender, NumberBoxValueChangedEventArgs e)
+        {
+            if (double.IsNaN(e.NewValue))
+            {
+                return;
+            }
+            SettingHelper.SetValue(SettingHelper.MESSAGE_FONTSIZE, e.NewValue);
+        }
+
+        private void DanmuTopMargin_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+        {
+            SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.TOP_MARGIN, DanmuTopMargin.Value);
+            DanmuControl.Margin = new Thickness(0, DanmuTopMargin.Value, 0, 0);
+        }
+
+        private void DanmuSettingFontZoom_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+        {
+            if (isMini) return;
+            SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.FONT_ZOOM, DanmuSettingFontZoom.Value);
+        }
+
+        private void DanmuSettingSpeed_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+        {
+            if (isMini) return;
+            SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.SPEED, DanmuSettingSpeed.Value);
+        }
+
+        private void DanmuSettingOpacity_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+        {
+            SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.OPACITY, DanmuSettingOpacity.Value);
+        }
+
+        private void DanmuSettingBold_Toggled(object sender, RoutedEventArgs e)
+        {
+            SettingHelper.SetValue<bool>(SettingHelper.LiveDanmaku.BOLD, DanmuSettingBold.IsOn);
+        }
+
+        private void DanmuSettingStyle_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (DanmuSettingStyle.SelectedIndex != -1)
+            {
+                SettingHelper.SetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, DanmuSettingStyle.SelectedIndex);
+            }
+        }
+
+        private void DanmuSettingArea_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+        {
+            SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.AREA, DanmuSettingArea.Value);
+        }
+
+        private void DanmuSettingColourful_Toggled(object sender, RoutedEventArgs e)
+        {
+            SettingHelper.SetValue<bool>(SettingHelper.LiveDanmaku.COLOURFUL, DanmuSettingColourful.IsOn);
+        }
+
+        private void GridRight_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (e.NewSize.Width <= 0)
+            {
+                return;
+            }
+            SettingHelper.SetValue<double>(SettingHelper.RIGHT_DETAIL_WIDTH, e.NewSize.Width + 16);
         }
         private void LoadXboxSetting()
         {
 
             xboxSettingsDecoder.SelectedIndex = SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1);
-            xboxSettingsDecoder.Loaded += new RoutedEventHandler((sender, e) =>
-            {
-                xboxSettingsDecoder.SelectionChanged += new SelectionChangedEventHandler((obj, args) =>
-                {
-                    SettingHelper.SetValue(SettingHelper.VIDEO_DECODER, xboxSettingsDecoder.SelectedIndex);
-                    Utils.ShowMessageToast("更改清晰度或刷新后生效");
-                });
-            });
+            xboxSettingsDecoder.Loaded -= XboxSettingsDecoder_Loaded;
+            xboxSettingsDecoder.Loaded += XboxSettingsDecoder_Loaded;
 
             //弹幕开关
             var state = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.SHOW, false) ? Visibility.Visible : Visibility.Collapsed;
 
             PlaySWDanmu.IsOn = state == Visibility.Visible;
-            PlaySWDanmu.Toggled += new RoutedEventHandler((e, args) =>
-            {
-                var visibility = PlaySWDanmu.IsOn ? Visibility.Visible : Visibility.Collapsed;
-                DanmuControl.Visibility = visibility;
-                SettingHelper.SetValue(SettingHelper.LiveDanmaku.SHOW, PlaySWDanmu.IsOn);
-            });
+            PlaySWDanmu.Toggled -= PlaySWDanmu_Toggled;
+            PlaySWDanmu.Toggled += PlaySWDanmu_Toggled;
 
             ////音量
             var volume = SettingHelper.GetValue<double>(SettingHelper.PLAYER_VOLUME, 1.0);
             SliderVolume.Value = volume;
-            SliderVolume.ValueChanged += new RangeBaseValueChangedEventHandler((e, args) =>
-            {
-                mediaPlayer.Volume = SliderVolume.Value;
-                SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, SliderVolume.Value);
-            });
+            SliderVolume.ValueChanged -= SliderVolume_ValueChanged;
+            SliderVolume.ValueChanged += SliderVolume_ValueChanged;
 
 
             //弹幕关键词
@@ -2306,44 +2438,24 @@ namespace AllLive.UWP.Views
 
             //弹幕大小
             //DanmuControl.DanmakuSizeZoom = SettingHelper.GetValue<double>(SettingHelper.LiveDanmaku.FONT_ZOOM, 1);
-            xboxSettingsDMSize.SelectionChanged += new SelectionChangedEventHandler((e, args) =>
-            {
-                if (xboxSettingsDMSize.SelectedValue == null)
-                {
-                    return;
-                }
-                SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.FONT_ZOOM, (double)xboxSettingsDMSize.SelectedValue);
-            });
+            xboxSettingsDMSize.SelectionChanged -= XboxSettingsDMSize_SelectionChanged;
+            xboxSettingsDMSize.SelectionChanged += XboxSettingsDMSize_SelectionChanged;
 
             //弹幕速度
             //DanmuControl.DanmakuDuration = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.SPEED, 10);
-            xboxSettingsDMSpeed.SelectionChanged += new SelectionChangedEventHandler((e, args) =>
-            {
-                if (xboxSettingsDMSpeed.SelectedValue == null)
-                {
-                    return;
-                }
-                SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.SPEED, (int)xboxSettingsDMSpeed.SelectedValue);
-            });
+            xboxSettingsDMSpeed.SelectionChanged -= XboxSettingsDMSpeed_SelectionChanged;
+            xboxSettingsDMSpeed.SelectionChanged += XboxSettingsDMSpeed_SelectionChanged;
 
             //弹幕透明度
             //DanmuControl.Opacity = SettingHelper.GetValue<double>(SettingHelper.LiveDanmaku.OPACITY, 1.0);
-            xboxSettingsDMOpacity.SelectionChanged += new SelectionChangedEventHandler((e, args) =>
-            {
-                if (xboxSettingsDMOpacity.SelectedValue == null)
-                {
-                    return;
-                }
-                SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.OPACITY, (double)xboxSettingsDMOpacity.SelectedValue);
-            });
+            xboxSettingsDMOpacity.SelectionChanged -= XboxSettingsDMOpacity_SelectionChanged;
+            xboxSettingsDMOpacity.SelectionChanged += XboxSettingsDMOpacity_SelectionChanged;
 
 
             //弹幕加粗
             //DanmuControl.DanmakuBold = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.BOLD, false);
-            xboxSettingsDMBold.Toggled += new RoutedEventHandler((e, args) =>
-            {
-                SettingHelper.SetValue<bool>(SettingHelper.LiveDanmaku.BOLD, xboxSettingsDMBold.IsOn);
-            });
+            xboxSettingsDMBold.Toggled -= XboxSettingsDMBold_Toggled;
+            xboxSettingsDMBold.Toggled += XboxSettingsDMBold_Toggled;
 
             //弹幕样式
             var danmuStyle = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, 2);
@@ -2352,33 +2464,86 @@ namespace AllLive.UWP.Views
                 danmuStyle = 2;
             }
             //DanmuControl.DanmakuStyle = (DanmakuBorderStyle)danmuStyle;
-            xboxSettingsDMStyle.SelectionChanged += new SelectionChangedEventHandler((e, args) =>
-            {
-                if (xboxSettingsDMStyle.SelectedIndex != -1)
-                {
-                    SettingHelper.SetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, xboxSettingsDMStyle.SelectedIndex);
-                }
-            });
+            xboxSettingsDMStyle.SelectionChanged -= XboxSettingsDMStyle_SelectionChanged;
+            xboxSettingsDMStyle.SelectionChanged += XboxSettingsDMStyle_SelectionChanged;
 
 
             //弹幕显示区域
             //DanmuControl.DanmakuArea = SettingHelper.GetValue<double>(SettingHelper.LiveDanmaku.AREA, 1);
-            xboxSettingsDMArea.SelectionChanged += new SelectionChangedEventHandler((e, args) =>
-            {
-                if (xboxSettingsDMArea.SelectedValue == null)
-                {
-                    return;
-                }
-                SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.AREA, (double)xboxSettingsDMArea.SelectedValue);
-            });
+            xboxSettingsDMArea.SelectionChanged -= XboxSettingsDMArea_SelectionChanged;
+            xboxSettingsDMArea.SelectionChanged += XboxSettingsDMArea_SelectionChanged;
 
             //彩色弹幕
             xboxSettingsDMColorful.IsOn = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.COLOURFUL, true);
-            xboxSettingsDMColorful.Toggled += new RoutedEventHandler((e, args) =>
-            {
-                SettingHelper.SetValue<bool>(SettingHelper.LiveDanmaku.COLOURFUL, xboxSettingsDMColorful.IsOn);
-            });
+            xboxSettingsDMColorful.Toggled -= XboxSettingsDMColorful_Toggled;
+            xboxSettingsDMColorful.Toggled += XboxSettingsDMColorful_Toggled;
 
+        }
+
+        private void XboxSettingsDecoder_Loaded(object sender, RoutedEventArgs e)
+        {
+            xboxSettingsDecoder.SelectionChanged -= XboxSettingsDecoder_SelectionChanged;
+            xboxSettingsDecoder.SelectionChanged += XboxSettingsDecoder_SelectionChanged;
+        }
+
+        private void XboxSettingsDecoder_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            SettingHelper.SetValue(SettingHelper.VIDEO_DECODER, xboxSettingsDecoder.SelectedIndex);
+            Utils.ShowMessageToast("更改清晰度或刷新后生效");
+        }
+
+        private void XboxSettingsDMSize_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (xboxSettingsDMSize.SelectedValue == null)
+            {
+                return;
+            }
+            SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.FONT_ZOOM, (double)xboxSettingsDMSize.SelectedValue);
+        }
+
+        private void XboxSettingsDMSpeed_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (xboxSettingsDMSpeed.SelectedValue == null)
+            {
+                return;
+            }
+            SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.SPEED, (int)xboxSettingsDMSpeed.SelectedValue);
+        }
+
+        private void XboxSettingsDMOpacity_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (xboxSettingsDMOpacity.SelectedValue == null)
+            {
+                return;
+            }
+            SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.OPACITY, (double)xboxSettingsDMOpacity.SelectedValue);
+        }
+
+        private void XboxSettingsDMBold_Toggled(object sender, RoutedEventArgs e)
+        {
+            SettingHelper.SetValue<bool>(SettingHelper.LiveDanmaku.BOLD, xboxSettingsDMBold.IsOn);
+        }
+
+        private void XboxSettingsDMStyle_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (xboxSettingsDMStyle.SelectedIndex != -1)
+            {
+                SettingHelper.SetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, xboxSettingsDMStyle.SelectedIndex);
+            }
+        }
+
+        private void XboxSettingsDMArea_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (xboxSettingsDMArea.SelectedValue == null)
+            {
+                return;
+            }
+            SettingHelper.SetValue<double>(SettingHelper.LiveDanmaku.AREA, (double)xboxSettingsDMArea.SelectedValue);
+        }
+
+        private void XboxSettingsDMColorful_Toggled(object sender, RoutedEventArgs e)
+        {
+            SettingHelper.SetValue<bool>(SettingHelper.LiveDanmaku.COLOURFUL, xboxSettingsDMColorful.IsOn);
         }
         private void RemoveLiveDanmuWord_Click(object sender, RoutedEventArgs e)
         {
@@ -2737,7 +2902,7 @@ namespace AllLive.UWP.Views
             Utils.ShowMessageToast("已复制链接到剪切板");
         }
 
-        private void BottomBtnRefresh_Click(object sender, RoutedEventArgs e)
+        private async void BottomBtnRefresh_Click(object sender, RoutedEventArgs e)
         {
             if (liveRoomVM.Loading) return;
             currentLineRetryUrl = null;
@@ -2755,7 +2920,7 @@ namespace AllLive.UWP.Views
                 interopMSS = null;
             }
 
-            liveRoomVM?.Stop();
+            await liveRoomVM.StopAsync();
             liveRoomVM.LoadData(pageArgs.Site, liveRoomVM.RoomID);
         }
 

@@ -9,8 +9,10 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Windows.ApplicationModel.Core;
+using Windows.System;
 using Windows.UI.Core;
 using Windows.UI.Popups;
 using Windows.UI.ViewManagement;
@@ -24,6 +26,8 @@ namespace AllLive.UWP.Helper
         private static readonly ConcurrentDictionary<string, int> OpenLiveRoomWindows = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, DateTimeOffset> OpeningLiveRoomWindows = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         private static readonly TimeSpan LiveRoomWindowOpenThrottle = TimeSpan.FromSeconds(3);
+        private static int ActiveLiveRoomWindowCount;
+        private static int LiveRoomMemoryCleanupScheduled;
         public delegate void NavigatePageHandler(Type page, object data);
         public static event NavigatePageHandler NavigatePageEvent;
         public delegate void ChangeTitleHandler(string title, string logo);
@@ -214,6 +218,62 @@ namespace AllLive.UWP.Helper
         {
             UpdatePanelDisplayModeEvent?.Invoke(null, new EventArgs());
         }
+
+        public static void RegisterLiveRoomWindow()
+        {
+            Interlocked.Increment(ref ActiveLiveRoomWindowCount);
+        }
+
+        public static void UnregisterLiveRoomWindow()
+        {
+            var count = Interlocked.Decrement(ref ActiveLiveRoomWindowCount);
+            if (count <= 0)
+            {
+                Interlocked.Exchange(ref ActiveLiveRoomWindowCount, 0);
+                ScheduleLastLiveRoomMemoryCleanup();
+            }
+        }
+
+        private static void ScheduleLastLiveRoomMemoryCleanup()
+        {
+            if (Interlocked.CompareExchange(ref LiveRoomMemoryCleanupScheduled, 1, 0) != 0)
+            {
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(3));
+                    if (Volatile.Read(ref ActiveLiveRoomWindowCount) > 0)
+                    {
+                        return;
+                    }
+
+                    var beforeUsage = MemoryManager.AppMemoryUsage;
+                    var beforeManaged = GC.GetTotalMemory(false);
+                    LogHelper.Log($"最后一个直播间已关闭，开始回收内存。AppMemory={beforeUsage} Managed={beforeManaged}", LogType.DEBUG);
+
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect();
+
+                    var afterUsage = MemoryManager.AppMemoryUsage;
+                    var afterManaged = GC.GetTotalMemory(false);
+                    LogHelper.Log($"直播间内存回收完成。AppMemory={afterUsage} Managed={afterManaged}", LogType.DEBUG);
+                }
+                catch (Exception ex)
+                {
+                    LogHelper.Log("直播间内存回收失败", LogType.ERROR, ex);
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref LiveRoomMemoryCleanupScheduled, 0);
+                }
+            });
+        }
+
         public static async Task<bool> BiliBiliLogin()
         {
             BiliLoginDialog biliLoginDialog = new BiliLoginDialog();
