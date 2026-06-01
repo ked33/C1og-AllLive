@@ -77,7 +77,7 @@ namespace AllLive.UWP.ViewModels
 
         public async void LoadData()
         {
-            await ReloadAsync(deferUiUpdate: false, loadRoomDetail: false);
+            await ReloadAsync(deferUiUpdate: false, loadRoomDetail: true);
         }
 
         public void CancelRefresh()
