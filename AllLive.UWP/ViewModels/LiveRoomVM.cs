@@ -256,13 +256,16 @@ namespace AllLive.UWP.ViewModels
             get { return currentQuality; }
             set
             {
-                if (value == null || value == currentQuality)
+                if (value == currentQuality)
                 {
                     return;
                 }
                 currentQuality = value;
                 DoPropertyChanged("CurrentQuality");
-                LoadPlayUrl();
+                if (value != null)
+                {
+                    LoadPlayUrl();
+                }
             }
 
         }
@@ -282,13 +285,16 @@ namespace AllLive.UWP.ViewModels
             get { return currentLine; }
             set
             {
-                if (value == null || value == currentLine)
+                if (value == currentLine)
                 {
                     return;
                 }
                 currentLine = value;
                 DoPropertyChanged("CurrentLine");
-                ChangedPlayUrl?.Invoke(this, value.Url);
+                if (value != null)
+                {
+                    ChangedPlayUrl?.Invoke(this, value.Url);
+                }
             }
 
         }
@@ -379,6 +385,10 @@ namespace AllLive.UWP.ViewModels
 
                 RoomId = roomId;
                 var result = await Site.GetRoomDetail(roomId);
+                if (!isActive)
+                {
+                    return;
+                }
                 detail = result;
                 LogRoomDetail(result);
                 RoomID = result.RoomID;
@@ -400,6 +410,10 @@ namespace AllLive.UWP.ViewModels
                 FavoriteID = DatabaseHelper.CheckFavorite(RoomID, Site.Name);
                 IsFavorite = FavoriteID != null;
 
+                if (!isActive)
+                {
+                    return;
+                }
                 LiveDanmaku = Site.GetDanmaku();
                 Messages.Add(new LiveMessage()
                 {
@@ -426,9 +440,17 @@ namespace AllLive.UWP.ViewModels
                     });
                     StartDanmakuReconnect(useInitialFailureMessage: true);
                 }
+                if (!isActive)
+                {
+                    return;
+                }
                 if (detail.Status)
                 {
                     var qualities = await Site.GetPlayQuality(result);
+                    if (!isActive)
+                    {
+                        return;
+                    }
                     if (Site.Name == "虎牙直播")
                     {
                         //HDR无法播放
@@ -477,11 +499,19 @@ namespace AllLive.UWP.ViewModels
         Timer scTimer;
         public void SetSCTimer()
         {
+            if (!isActive || Dispatcher == null)
+            {
+                return;
+            }
             KeepSC = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.KEEP_SUPER_CHAT, true);
             if (KeepSC)
             {
                 _ = Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                  {
+                     if (!isActive)
+                     {
+                         return;
+                     }
                      foreach (var item in SuperChatMessages)
                      {
                          item.ShowCountdown = false;
@@ -503,8 +533,16 @@ namespace AllLive.UWP.ViewModels
                 scTimer = new Timer(1000);
                 scTimer.Elapsed += (s, e) =>
                 {
+                    if (!isActive || Dispatcher == null)
+                    {
+                        return;
+                    }
                     _ = Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                     {
+                        if (!isActive)
+                        {
+                            return;
+                        }
                         for (var i = 0; i < SuperChatMessages.Count; i++)
                         {
                             var item = SuperChatMessages[i];
@@ -564,7 +602,15 @@ namespace AllLive.UWP.ViewModels
         {
             try
             {
+                if (!isActive)
+                {
+                    return;
+                }
                 var data = await Site.GetPlayUrls(detail, CurrentQuality);
+                if (!isActive)
+                {
+                    return;
+                }
                 if (data.Count == 0)
                 {
                     LogHelper.Log($"加载播放地址失败: 返回空列表。站点:{Site?.Name} 房间ID:{RoomID} 清晰度:{CurrentQuality?.Quality}", LogType.ERROR);
@@ -897,7 +943,15 @@ namespace AllLive.UWP.ViewModels
         {
             try
             {
+                if (!isActive || Site == null)
+                {
+                    return;
+                }
                 var data = await Site.GetSuperChatMessages(RoomID);
+                if (!isActive)
+                {
+                    return;
+                }
                 if (data.Count > 0)
                 {
                     foreach (var item in data)
@@ -915,9 +969,18 @@ namespace AllLive.UWP.ViewModels
         }
         private async void LiveDanmaku_OnClose(object sender, string e)
         {
-
-            await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            var dispatcher = Dispatcher;
+            if (!isActive || dispatcher == null)
             {
+                return;
+            }
+
+            await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            {
+                if (!isActive)
+                {
+                    return;
+                }
                 Messages.Add(new LiveMessage()
                 {
                     Type = LiveMessageType.Chat,
@@ -936,7 +999,7 @@ namespace AllLive.UWP.ViewModels
 
         private void StartDanmakuReconnect(bool useInitialFailureMessage)
         {
-            if (!isActive)
+            if (!isActive || Dispatcher == null)
             {
                 return;
             }
@@ -962,8 +1025,17 @@ namespace AllLive.UWP.ViewModels
                 {
                     if (danmakuReconnectAttempt >= MaxDanmakuReconnectAttempts)
                     {
-                        await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+                        var dispatcher = Dispatcher;
+                        if (dispatcher == null)
                         {
+                            return;
+                        }
+                        await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+                        {
+                            if (!isActive)
+                            {
+                                return;
+                            }
                             Messages.Add(new LiveMessage()
                             {
                                 Type = LiveMessageType.Chat,
@@ -1012,8 +1084,17 @@ namespace AllLive.UWP.ViewModels
 
                         danmakuReconnectAttempt = 0;
                         System.Threading.Interlocked.Exchange(ref reconnectInProgress, 0);
-                        await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+                        var dispatcher = Dispatcher;
+                        if (dispatcher == null)
                         {
+                            return;
+                        }
+                        await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+                        {
+                            if (!isActive)
+                            {
+                                return;
+                            }
                             Messages.Add(new LiveMessage()
                             {
                                 Type = LiveMessageType.Chat,
@@ -1077,12 +1158,17 @@ namespace AllLive.UWP.ViewModels
         private void RaiseReconnectStatus(string source, bool inProgress, int attempt, int max, string message)
         {
             var handler = ReconnectStatusChanged;
-            if (handler == null)
+            var dispatcher = Dispatcher;
+            if (handler == null || dispatcher == null || !isActive)
             {
                 return;
             }
-            _ = Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            _ = dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
             {
+                if (!isActive)
+                {
+                    return;
+                }
                 handler(this, new ReconnectStatus
                 {
                     Source = source,
@@ -1096,8 +1182,17 @@ namespace AllLive.UWP.ViewModels
         public CoreDispatcher Dispatcher { get; set; }
         private async void LiveDanmaku_NewMessage(object sender, LiveMessage e)
         {
-            await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            var dispatcher = Dispatcher;
+            if (e == null || !isActive || dispatcher == null)
             {
+                return;
+            }
+            await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            {
+                if (!isActive)
+                {
+                    return;
+                }
                 if (e.Type == LiveMessageType.Online)
                 {
                     ApplyAudienceMetricUpdate(Convert.ToInt64(e.Data));
@@ -1351,6 +1446,34 @@ namespace AllLive.UWP.ViewModels
                 LiveDanmaku = null;
             }
 
+            allLines = null;
+            Lines = null;
+            Qualities = null;
+            AvailableCodecs = new List<string>() { "全部" };
+            CurrentLine = null;
+            currentQuality = null;
+            RoomId = null;
+            detail = null;
+            Site = null;
+            FavoriteID = null;
+            SiteName = null;
+            Name = null;
+            Title = null;
+            Photo = "ms-appx:///Assets/Placeholder/Placeholder1x1.png";
+            Living = false;
+            IsFavorite = false;
+            ViewerCount = null;
+            Popularity = null;
+            Loading = false;
+
+        }
+
+        public void ReleaseViewReferences()
+        {
+            ChangedPlayUrl = null;
+            AddDanmaku = null;
+            ReconnectStatusChanged = null;
+            Dispatcher = null;
         }
     }
 

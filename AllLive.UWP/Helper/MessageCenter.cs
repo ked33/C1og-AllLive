@@ -251,17 +251,23 @@ namespace AllLive.UWP.Helper
                         return;
                     }
 
-                    var beforeUsage = MemoryManager.AppMemoryUsage;
-                    var beforeManaged = GC.GetTotalMemory(false);
-                    LogHelper.Log($"最后一个直播间已关闭，开始回收内存。AppMemory={beforeUsage} Managed={beforeManaged}", LogType.DEBUG);
+                    LogMemorySnapshot("最后一个直播间已关闭，开始回收内存");
 
                     GC.Collect();
                     GC.WaitForPendingFinalizers();
                     GC.Collect();
 
-                    var afterUsage = MemoryManager.AppMemoryUsage;
-                    var afterManaged = GC.GetTotalMemory(false);
-                    LogHelper.Log($"直播间内存回收完成。AppMemory={afterUsage} Managed={afterManaged}", LogType.DEBUG);
+                    LogMemorySnapshot("直播间内存回收完成");
+                    await Task.Delay(TimeSpan.FromSeconds(10));
+                    if (Volatile.Read(ref ActiveLiveRoomWindowCount) == 0)
+                    {
+                        LogMemorySnapshot("直播间内存回收后10秒采样");
+                    }
+                    await Task.Delay(TimeSpan.FromSeconds(20));
+                    if (Volatile.Read(ref ActiveLiveRoomWindowCount) == 0)
+                    {
+                        LogMemorySnapshot("直播间内存回收后30秒采样");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -272,6 +278,11 @@ namespace AllLive.UWP.Helper
                     Interlocked.Exchange(ref LiveRoomMemoryCleanupScheduled, 0);
                 }
             });
+        }
+
+        private static void LogMemorySnapshot(string stage)
+        {
+            LogHelper.Log($"{stage}。AppMemory={MemoryManager.AppMemoryUsage} Managed={GC.GetTotalMemory(false)} ActiveLiveRoomWindows={Volatile.Read(ref ActiveLiveRoomWindowCount)}", LogType.DEBUG);
         }
 
         public static async Task<bool> BiliBiliLogin()

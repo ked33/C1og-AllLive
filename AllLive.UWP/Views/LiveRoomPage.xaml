@@ -18,7 +18,7 @@
     <Page.Resources>
         <convert:DanmakuStyleConvert x:Key="styleConvert" />
     </Page.Resources>
-    <Grid>
+    <Grid x:Name="PageRoot">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition />
@@ -1037,6 +1037,7 @@
                                 <TextBlock FontSize="15">互动</TextBlock>
                             </PivotItem.Header>
                             <ListView
+                                x:Name="LiveMessageList"
                                 IsItemClickEnabled="False"
                                 ItemsSource="{x:Bind Path=liveRoomVM.Messages}"
                                 SelectionMode="None">
@@ -1070,7 +1071,10 @@
                                 <TextBlock FontSize="15">
                                     醒目留言<Run Text="{x:Bind Path=liveRoomVM.SuperChatMessages.Count, Mode=OneWay, Converter={StaticResource countTextConvert}}" /></TextBlock>
                             </PivotItem.Header>
-                            <ListView ItemsSource="{x:Bind Path=liveRoomVM.SuperChatMessages}" SelectionMode="None">
+                            <ListView
+                                x:Name="LiveSuperChatList"
+                                ItemsSource="{x:Bind Path=liveRoomVM.SuperChatMessages}"
+                                SelectionMode="None">
                                 <ListView.ItemContainerStyle>
                                     <Style TargetType="ListViewItem">
                                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />

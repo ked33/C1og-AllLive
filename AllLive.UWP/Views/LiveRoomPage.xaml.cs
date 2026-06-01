@@ -92,6 +92,7 @@ namespace AllLive.UWP.Views
         private bool mediaPlayerEventsDetached;
         private bool liveRoomWindowRegistered;
         private bool controlEventsDetached;
+        private bool windowContentCleared;
         private bool setPlayerWorkerRunning;
         private string activeSetPlayerUrl;
         private DateTimeOffset activeSetPlayerUtc;
@@ -171,9 +172,9 @@ namespace AllLive.UWP.Views
 
         }
 
-        private void LiveRoomPage_Consolidated(ApplicationView sender, ApplicationViewConsolidatedEventArgs args)
+        private async void LiveRoomPage_Consolidated(ApplicationView sender, ApplicationViewConsolidatedEventArgs args)
         {
-            CleanupLiveRoomPage();
+            await CleanupLiveRoomPageAsync(clearWindowContent: true);
             // 关闭窗口
             CoreWindow.GetForCurrentThread().Close();
         }
@@ -687,6 +688,11 @@ namespace AllLive.UWP.Views
 
         private void QueueSetPlayer(string url, string source)
         {
+            if (isPageClosing)
+            {
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(url))
             {
                 return;
@@ -747,6 +753,12 @@ namespace AllLive.UWP.Views
         {
             while (true)
             {
+                if (isPageClosing)
+                {
+                    ResetSetPlayerQueue();
+                    return;
+                }
+
                 string nextUrl;
                 bool shouldExit = false;
                 lock (setPlayerRequestLock)
@@ -766,7 +778,10 @@ namespace AllLive.UWP.Views
 
                 try
                 {
-                    await SetPlayer(nextUrl);
+                    if (!isPageClosing)
+                    {
+                        await SetPlayer(nextUrl);
+                    }
                 }
                 finally
                 {
@@ -800,6 +815,16 @@ namespace AllLive.UWP.Views
             {
                 try { cts.Cancel(); } catch { }
                 try { cts.Dispose(); } catch { }
+            }
+        }
+
+        private void ResetSetPlayerQueue()
+        {
+            lock (setPlayerRequestLock)
+            {
+                pendingSetPlayerUrl = null;
+                activeSetPlayerUrl = null;
+                setPlayerWorkerRunning = false;
             }
         }
 
@@ -1650,12 +1675,12 @@ namespace AllLive.UWP.Views
                         var completedTask = await Task.WhenAny(createTask, Task.Delay(createTimeout.Value));
                         if (isPageClosing)
                         {
-                            _ = DisposeLateMediaSourceAsync(createTask);
+                            _ = DisposeLateMediaSourceAsync(createTask, url);
                             return;
                         }
                         if (completedTask != createTask)
                         {
-                            _ = DisposeLateMediaSourceAsync(createTask);
+                            _ = DisposeLateMediaSourceAsync(createTask, url);
                             var timeoutExtra = JoinNonEmpty(
                                 lastConfigSnapshot,
                                 lastUrlAnalysis,
@@ -1682,6 +1707,10 @@ namespace AllLive.UWP.Views
                 }
                 catch (Exception ex)
                 {
+                    if (isPageClosing)
+                    {
+                        return;
+                    }
                     var probe = await ProbeUrlAsync(url);
                     lastProbeSnapshot = probe;
                     var mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, probe);
@@ -1697,6 +1726,10 @@ namespace AllLive.UWP.Views
             }
             catch (Exception ex)
             {
+                if (isPageClosing)
+                {
+                    return;
+                }
                 var probe = await ProbeUrlAsync(url);
                 lastProbeSnapshot = probe;
                 var mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, probe);
@@ -1706,12 +1739,16 @@ namespace AllLive.UWP.Views
 
         }
 
-        private async Task DisposeLateMediaSourceAsync(Task<FFmpegMediaSource> createTask)
+        private async Task DisposeLateMediaSourceAsync(Task<FFmpegMediaSource> createTask, string url)
         {
             try
             {
                 var mediaSource = await createTask;
                 mediaSource?.Dispose();
+                if (isPageClosing)
+                {
+                    LogHelper.Log($"关闭后延迟建源已释放 urlHash={url?.GetHashCode()}", LogType.DEBUG);
+                }
             }
             catch
             {
@@ -1883,16 +1920,19 @@ namespace AllLive.UWP.Views
             });
         }
 
-        private void StopPlay()
+        private async Task StopPlayAsync()
         {
             ResetStreamReconnectState();
             ReleasePlaybackResources();
 
-            timer_focus.Stop();
-            controlTimer.Stop();
+            timer_focus?.Stop();
+            controlTimer?.Stop();
             Window.Current.CoreWindow.PointerCursor = new Windows.UI.Core.CoreCursor(Windows.UI.Core.CoreCursorType.Arrow, 0);
 
-            _ = liveRoomVM?.StopAsync();
+            if (liveRoomVM != null)
+            {
+                await liveRoomVM.StopAsync();
+            }
 
             SetFullScreen(false);
             MiniWidnows(false);
@@ -1902,11 +1942,7 @@ namespace AllLive.UWP.Views
         private void ReleasePlaybackResources()
         {
             StopBufferingTimer();
-            lock (setPlayerRequestLock)
-            {
-                pendingSetPlayerUrl = null;
-                activeSetPlayerUrl = null;
-            }
+            ResetSetPlayerQueue();
             currentLineRetryUrl = null;
             currentLineRetryCount = 0;
             lastPlaybackState = null;
@@ -1981,7 +2017,12 @@ namespace AllLive.UWP.Views
 
         }
 
-        private void CleanupLiveRoomPage()
+        private void LogLiveRoomMemory(string stage)
+        {
+            LogHelper.Log($"{stage}。AppMemory={Windows.System.MemoryManager.AppMemoryUsage} Managed={GC.GetTotalMemory(false)}", LogType.DEBUG);
+        }
+
+        private async Task CleanupLiveRoomPageAsync(bool clearWindowContent = false)
         {
             if (liveRoomCleaned)
             {
@@ -1989,6 +2030,7 @@ namespace AllLive.UWP.Views
             }
             liveRoomCleaned = true;
             isPageClosing = true;
+            LogLiveRoomMemory("直播间页面开始清理");
 
             liveRoomVM.ChangedPlayUrl -= LiveRoomVM_ChangedPlayUrl;
             liveRoomVM.AddDanmaku -= LiveRoomVM_AddDanmaku;
@@ -1997,17 +2039,29 @@ namespace AllLive.UWP.Views
             Window.Current.CoreWindow.KeyDown -= CoreWindow_KeyDown;
             ApplicationView.GetForCurrentView().Consolidated -= LiveRoomPage_Consolidated;
 
-            StopPlay();
+            await StopPlayAsync();
+            LogLiveRoomMemory("直播间播放与VM清理完成");
             DetachControlEvents();
             DetachMediaPlayerEvents();
             ClearControlReferences();
+            LogLiveRoomMemory("直播间控件引用清理完成");
             try { player.SetMediaPlayer(null); } catch { }
             try { mediaPlayer?.Dispose(); } catch { }
+            if (clearWindowContent)
+            {
+                ClearWindowContentReference();
+            }
+            liveRoomVM.ReleaseViewReferences();
             if (liveRoomWindowRegistered)
             {
                 liveRoomWindowRegistered = false;
                 MessageCenter.UnregisterLiveRoomWindow();
             }
+        }
+
+        private void CleanupLiveRoomPage()
+        {
+            _ = CleanupLiveRoomPageAsync();
         }
 
         private void DetachControlEvents()
@@ -2049,9 +2103,60 @@ namespace AllLive.UWP.Views
 
         private void ClearControlReferences()
         {
+            try { Bindings.StopTracking(); } catch { }
+            try { DataContext = null; } catch { }
+            try { PageRoot.DataContext = null; } catch { }
+            try { XBoxSplitView.Pane = null; } catch { }
+            try { XBoxSplitView.Content = null; } catch { }
+            try { LiveMessageList.ItemsSource = null; } catch { }
+            try { LiveSuperChatList.ItemsSource = null; } catch { }
             try { LiveDanmuSettingListWords.ItemsSource = null; } catch { }
             try { XboxSuperChat.ItemsSource = null; } catch { }
+            try { xboxSettingsQuality.ItemsSource = null; } catch { }
+            try { xboxSettingsLine.ItemsSource = null; } catch { }
+            try { xboxSettingsCodec.ItemsSource = null; } catch { }
+            try { xboxSettingsDMOpacity.ItemsSource = null; } catch { }
+            try { xboxSettingsDMSpeed.ItemsSource = null; } catch { }
+            try { xboxSettingsDMSize.ItemsSource = null; } catch { }
+            try { xboxSettingsDMArea.ItemsSource = null; } catch { }
+            try { PlayQuality.ItemsSource = null; } catch { }
+            try { PlayLine.ItemsSource = null; } catch { }
+            try { PlayCodec.ItemsSource = null; } catch { }
             try { DanmuControl.ClearAll(); } catch { }
+            try { player.Source = null; } catch { }
+            try { Window.Current.SetTitleBar(null); } catch { }
+        }
+
+        private void ClearWindowContentReference()
+        {
+            if (windowContentCleared)
+            {
+                return;
+            }
+            windowContentCleared = true;
+
+            try
+            {
+                if (Window.Current.Content is Frame frame && ReferenceEquals(frame.Content, this))
+                {
+                    frame.Content = null;
+                    return;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (ReferenceEquals(Window.Current.Content, this))
+                {
+                    Window.Current.Content = null;
+                }
+            }
+            catch
+            {
+            }
         }
 
         private void DetachMediaPlayerEvents()
