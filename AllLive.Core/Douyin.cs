@@ -779,9 +779,46 @@ namespace AllLive.Core
         }
         public async Task<bool> GetLiveStatus(object roomId)
         {
-            var result = await GetRoomDetail(roomId: roomId);
-            return result.Status;
+            var id = roomId?.ToString();
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return false;
+            }
+            if (id.Length <= 16)
+            {
+                return await GetLiveStatusByWebRid(id);
+            }
 
+            var roomData = await GetRoomDataByRoomID(id);
+            var room = roomData?["data"]?["room"];
+            var status = room?["status"]?.ToObject<int>() ?? 0;
+            if (status == 4)
+            {
+                var webRid = room?["owner"]?["web_rid"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(webRid))
+                {
+                    return await GetLiveStatusByWebRid(webRid);
+                }
+            }
+            return status == 2;
+
+        }
+        private async Task<bool> GetLiveStatusByWebRid(string webRid)
+        {
+            try
+            {
+                var data = await GetRoomDataApi(webRid);
+                var roomData = data?["data"]?[0];
+                return roomData?["status"]?.ToObject<int>() == 2;
+            }
+            catch (Exception ex)
+            {
+                CoreDebug.Log($"[Douyin] GetLiveStatusByWebRidApi失败 webRid={webRid} err={ex.GetType().FullName}: {ex.Message}");
+            }
+
+            var roomDataHtml = await GetRoomDataHtml(webRid);
+            var room = roomDataHtml?["roomStore"]?["roomInfo"]?["room"];
+            return room?["status"]?.ToObject<int>() == 2;
         }
         public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
         {

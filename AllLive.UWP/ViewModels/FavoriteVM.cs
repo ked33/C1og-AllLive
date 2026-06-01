@@ -77,7 +77,7 @@ namespace AllLive.UWP.ViewModels
 
         public async void LoadData()
         {
-            await ReloadAsync(deferUiUpdate: false);
+            await ReloadAsync(deferUiUpdate: false, loadRoomDetail: false);
         }
 
         public void CancelRefresh()
@@ -87,7 +87,7 @@ namespace AllLive.UWP.ViewModels
             LoaddingLiveStatus = false;
         }
 
-        private async Task ReloadAsync(bool deferUiUpdate)
+        private async Task ReloadAsync(bool deferUiUpdate, bool loadRoomDetail)
         {
             var version = Interlocked.Increment(ref _refreshVersion);
             try
@@ -108,7 +108,7 @@ namespace AllLive.UWP.ViewModels
                     ApplySortAndFilter(list);
                 }
                 LoaddingLiveStatus = true;
-                await UpdateLiveStatusAsync(list, version);
+                await UpdateLiveStatusAsync(list, version, loadRoomDetail);
                 if (version != _refreshVersion)
                 {
                     return;
@@ -129,17 +129,17 @@ namespace AllLive.UWP.ViewModels
             }
         }
 
-        private async Task UpdateLiveStatusAsync(IList<FavoriteItem> items, int refreshVersion)
+        private async Task UpdateLiveStatusAsync(IList<FavoriteItem> items, int refreshVersion, bool loadRoomDetail)
         {
             var tasks = new List<Task>(items.Count);
             foreach (var item in items)
             {
-                tasks.Add(UpdateLiveStatusAsync(item, refreshVersion));
+                tasks.Add(UpdateLiveStatusAsync(item, refreshVersion, loadRoomDetail));
             }
             await Task.WhenAll(tasks);
         }
 
-        private async Task UpdateLiveStatusAsync(FavoriteItem item, int refreshVersion)
+        private async Task UpdateLiveStatusAsync(FavoriteItem item, int refreshVersion, bool loadRoomDetail)
         {
             if (refreshVersion != _refreshVersion)
             {
@@ -164,6 +164,10 @@ namespace AllLive.UWP.ViewModels
                     if (!status)
                     {
                         item.LiveTitle = string.Empty;
+                        return;
+                    }
+                    if (!loadRoomDetail)
+                    {
                         return;
                     }
 
@@ -224,7 +228,13 @@ namespace AllLive.UWP.ViewModels
         public override void Refresh()
         {
             base.Refresh();
-            _ = ReloadAsync(deferUiUpdate: true);
+            _ = ReloadAsync(deferUiUpdate: true, loadRoomDetail: true);
+        }
+
+        public void RefreshLiveStatusOnly()
+        {
+            base.Refresh();
+            _ = ReloadAsync(deferUiUpdate: true, loadRoomDetail: false);
         }
 
         public void RemoveItem(FavoriteItem item)
@@ -278,7 +288,7 @@ namespace AllLive.UWP.ViewModels
                         DatabaseHelper.AddFavorite(favoriteItem);
                     }
                     Utils.ShowMessageToast("导入成功");
-                    Refresh();
+                    RefreshLiveStatusOnly();
                 }
                 catch (Exception ex)
                 {

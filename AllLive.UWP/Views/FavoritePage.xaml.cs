@@ -39,11 +39,11 @@ namespace AllLive.UWP.Views
 
         private void MessageCenter_UpdateFavoriteEvent(object sender, EventArgs e)
         {
-            if (!isPageActive)
+            if (!ShouldRunAutoRefresh())
             {
                 return;
             }
-            favoriteVM.Refresh();
+            favoriteVM.RefreshLiveStatusOnly();
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -67,7 +67,6 @@ namespace AllLive.UWP.Views
             isPageActive = false;
             UnsubscribeUpdateFavorite();
             favoriteVM.CancelRefresh();
-            StopAutoRefreshTimer();
         }
 
         private void SubscribeUpdateFavorite()
@@ -151,33 +150,28 @@ namespace AllLive.UWP.Views
             autoRefreshTimer.Start();
         }
 
-        private void StopAutoRefreshTimer()
-        {
-            if (autoRefreshTimer != null)
-            {
-                autoRefreshTimer.Stop();
-                autoRefreshTimer.Tick -= AutoRefreshTimer_Tick;
-                autoRefreshTimer = null;
-            }
-        }
-
         private void AutoRefreshTimer_Tick(object sender, object e)
         {
-            if (!isPageActive)
-            {
-                return;
-            }
             var minutes = GetAutoRefreshMinutes();
             if (minutes != autoRefreshMinutes)
             {
                 autoRefreshMinutes = minutes;
                 autoRefreshTimer.Interval = TimeSpan.FromMinutes(autoRefreshMinutes);
             }
+            if (!ShouldRunAutoRefresh())
+            {
+                return;
+            }
             if (favoriteVM.Loading || favoriteVM.LoaddingLiveStatus)
             {
                 return;
             }
-            favoriteVM.Refresh();
+            favoriteVM.RefreshLiveStatusOnly();
+        }
+
+        private bool ShouldRunAutoRefresh()
+        {
+            return isPageActive || MessageCenter.HasActiveLiveRoomWindows;
         }
 
         private static int GetAutoRefreshMinutes()

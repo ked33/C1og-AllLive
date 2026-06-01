@@ -35,6 +35,7 @@ namespace AllLive.UWP.Helper
         public static event EventHandler<bool> HideTitlebarEvent;
         public static event EventHandler UpdateFavoriteEvent;
         public static event EventHandler UpdatePanelDisplayModeEvent;
+        public static bool HasActiveLiveRoomWindows => Volatile.Read(ref ActiveLiveRoomWindowCount) > 0;
         public async static void OpenLiveRoom(ILiveSite liveSite, LiveRoomItem item)
         {
             var arg = new PageArgs()
