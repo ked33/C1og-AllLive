@@ -30,6 +30,7 @@ namespace AllLive.UWP.Views
         private int autoRefreshMinutes;
         private bool isPageActive;
         private bool isUpdateFavoriteSubscribed;
+        private bool isFavoriteLiveInfoSubscribed;
         public FavoritePage()
         {
             favoriteVM = new FavoriteVM();
@@ -51,11 +52,16 @@ namespace AllLive.UWP.Views
             base.OnNavigatedTo(e);
             isPageActive = true;
             SubscribeUpdateFavorite();
+            SubscribeFavoriteLiveInfo();
             favoriteVM.HideOffline = SettingHelper.GetValue<bool>(SettingHelper.FAVORITE_HIDE_OFFLINE, false);
 
             if(favoriteVM.Items.Count==0)
             {
                 favoriteVM.LoadData();
+            }
+            else
+            {
+                favoriteVM.ApplyCachedFavoriteLiveInfo();
             }
 
             StartAutoRefreshTimer();
@@ -66,6 +72,7 @@ namespace AllLive.UWP.Views
             base.OnNavigatedFrom(e);
             isPageActive = false;
             UnsubscribeUpdateFavorite();
+            UnsubscribeFavoriteLiveInfo();
             favoriteVM.CancelRefresh();
         }
 
@@ -87,6 +94,35 @@ namespace AllLive.UWP.Views
             }
             MessageCenter.UpdateFavoriteEvent -= MessageCenter_UpdateFavoriteEvent;
             isUpdateFavoriteSubscribed = false;
+        }
+
+        private void MessageCenter_FavoriteLiveInfoUpdatedEvent(object sender, FavoriteLiveInfo e)
+        {
+            if (!isPageActive)
+            {
+                return;
+            }
+            favoriteVM.ApplyFavoriteLiveInfo(e);
+        }
+
+        private void SubscribeFavoriteLiveInfo()
+        {
+            if (isFavoriteLiveInfoSubscribed)
+            {
+                return;
+            }
+            MessageCenter.FavoriteLiveInfoUpdatedEvent += MessageCenter_FavoriteLiveInfoUpdatedEvent;
+            isFavoriteLiveInfoSubscribed = true;
+        }
+
+        private void UnsubscribeFavoriteLiveInfo()
+        {
+            if (!isFavoriteLiveInfoSubscribed)
+            {
+                return;
+            }
+            MessageCenter.FavoriteLiveInfoUpdatedEvent -= MessageCenter_FavoriteLiveInfoUpdatedEvent;
+            isFavoriteLiveInfoSubscribed = false;
         }
 
         private void ls_ItemClick(object sender, ItemClickEventArgs e)

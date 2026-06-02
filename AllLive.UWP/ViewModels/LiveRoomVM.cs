@@ -384,6 +384,7 @@ namespace AllLive.UWP.ViewModels
                 Site = site;
 
                 RoomId = roomId;
+                var sourceRoomId = roomId?.ToString();
                 var result = await Site.GetRoomDetail(roomId);
                 if (!isActive)
                 {
@@ -408,7 +409,17 @@ namespace AllLive.UWP.ViewModels
                 LoadSuperChat();
                 //检查收藏情况
                 FavoriteID = DatabaseHelper.CheckFavorite(RoomID, Site.Name);
+                if (FavoriteID == null
+                    && !string.IsNullOrWhiteSpace(sourceRoomId)
+                    && !string.Equals(RoomID, sourceRoomId, StringComparison.OrdinalIgnoreCase))
+                {
+                    FavoriteID = DatabaseHelper.CheckFavorite(sourceRoomId, Site.Name);
+                }
                 IsFavorite = FavoriteID != null;
+                if (IsFavorite)
+                {
+                    MessageCenter.UpdateFavoriteLiveInfo(Site.Name, RoomID, sourceRoomId, Title, Living);
+                }
 
                 if (!isActive)
                 {

@@ -25,6 +25,7 @@ namespace AllLive.UWP.Helper
     {
         private static readonly ConcurrentDictionary<string, int> OpenLiveRoomWindows = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, DateTimeOffset> OpeningLiveRoomWindows = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, FavoriteLiveInfo> FavoriteLiveInfoCache = new ConcurrentDictionary<string, FavoriteLiveInfo>(StringComparer.OrdinalIgnoreCase);
         private static readonly TimeSpan LiveRoomWindowOpenThrottle = TimeSpan.FromSeconds(3);
         private static int ActiveLiveRoomWindowCount;
         private static int LiveRoomMemoryCleanupScheduled;
@@ -34,6 +35,7 @@ namespace AllLive.UWP.Helper
         public static event ChangeTitleHandler ChangeTitleEvent;
         public static event EventHandler<bool> HideTitlebarEvent;
         public static event EventHandler UpdateFavoriteEvent;
+        public static event EventHandler<FavoriteLiveInfo> FavoriteLiveInfoUpdatedEvent;
         public static event EventHandler UpdatePanelDisplayModeEvent;
         public static bool HasActiveLiveRoomWindows => Volatile.Read(ref ActiveLiveRoomWindowCount) > 0;
         public async static void OpenLiveRoom(ILiveSite liveSite, LiveRoomItem item)
@@ -215,6 +217,53 @@ namespace AllLive.UWP.Helper
             }
             UpdateFavoriteEvent?.Invoke(null, EventArgs.Empty);
         }
+        public static void UpdateFavoriteLiveInfo(string siteName, string roomId, string sourceRoomId, string title, bool liveStatus)
+        {
+            if (string.IsNullOrWhiteSpace(siteName) || (string.IsNullOrWhiteSpace(roomId) && string.IsNullOrWhiteSpace(sourceRoomId)))
+            {
+                return;
+            }
+            var liveInfo = new FavoriteLiveInfo()
+            {
+                SiteName = siteName,
+                RoomID = roomId ?? string.Empty,
+                SourceRoomID = sourceRoomId ?? string.Empty,
+                Title = title ?? string.Empty,
+                LiveStatus = liveStatus
+            };
+            CacheFavoriteLiveInfo(liveInfo, liveInfo.RoomID);
+            CacheFavoriteLiveInfo(liveInfo, liveInfo.SourceRoomID);
+
+            var dispatcher = CoreApplication.MainView?.Dispatcher;
+            if (dispatcher != null && !dispatcher.HasThreadAccess)
+            {
+                _ = dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+                {
+                    FavoriteLiveInfoUpdatedEvent?.Invoke(null, liveInfo);
+                });
+                return;
+            }
+            FavoriteLiveInfoUpdatedEvent?.Invoke(null, liveInfo);
+        }
+
+        public static List<FavoriteLiveInfo> GetFavoriteLiveInfoCache()
+        {
+            return FavoriteLiveInfoCache.Values.Distinct().ToList();
+        }
+
+        private static void CacheFavoriteLiveInfo(FavoriteLiveInfo liveInfo, string roomId)
+        {
+            if (liveInfo == null || string.IsNullOrWhiteSpace(roomId))
+            {
+                return;
+            }
+            FavoriteLiveInfoCache[GetFavoriteLiveInfoKey(liveInfo.SiteName, roomId)] = liveInfo;
+        }
+
+        private static string GetFavoriteLiveInfoKey(string siteName, string roomId)
+        {
+            return $"{siteName}|{roomId}";
+        }
         public static void UpdatePanelDisplayMode()
         {
             UpdatePanelDisplayModeEvent?.Invoke(null, new EventArgs());
@@ -357,6 +406,14 @@ namespace AllLive.UWP.Helper
             }
             OpeningLiveRoomWindows.TryRemove(liveRoomKey, out _);
         }
+    }
+    public class FavoriteLiveInfo
+    {
+        public string SiteName { get; set; }
+        public string RoomID { get; set; }
+        public string SourceRoomID { get; set; }
+        public string Title { get; set; }
+        public bool LiveStatus { get; set; }
     }
     class BlankPage : Page { }
 

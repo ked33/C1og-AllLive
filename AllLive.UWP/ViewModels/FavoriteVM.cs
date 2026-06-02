@@ -101,6 +101,7 @@ namespace AllLive.UWP.ViewModels
                 if (!loadRoomDetail)
                 {
                     PreserveExistingLiveTitles(list);
+                    ApplyFavoriteLiveInfo(list, MessageCenter.GetFavoriteLiveInfoCache());
                 }
                 if (list.Count == 0)
                 {
@@ -142,7 +143,7 @@ namespace AllLive.UWP.ViewModels
             var titleMap = Items
                 .Where(x => !string.IsNullOrWhiteSpace(x.LiveTitle))
                 .GroupBy(GetFavoriteItemKey)
-                .ToDictionary(x => x.Key, x => x.First().LiveTitle);
+                .ToDictionary(x => x.Key, x => x.First().LiveTitle, StringComparer.OrdinalIgnoreCase);
             if (titleMap.Count == 0)
             {
                 return;
@@ -159,6 +160,82 @@ namespace AllLive.UWP.ViewModels
         private static string GetFavoriteItemKey(FavoriteItem item)
         {
             return $"{item?.SiteName}|{item?.RoomID}";
+        }
+
+        public void ApplyFavoriteLiveInfo(FavoriteLiveInfo liveInfo)
+        {
+            if (ApplyFavoriteLiveInfo(Items, liveInfo))
+            {
+                ApplySortAndFilter();
+            }
+        }
+
+        public void ApplyCachedFavoriteLiveInfo()
+        {
+            if (ApplyFavoriteLiveInfo(Items, MessageCenter.GetFavoriteLiveInfoCache()))
+            {
+                ApplySortAndFilter();
+            }
+        }
+
+        private static bool ApplyFavoriteLiveInfo(IList<FavoriteItem> items, IEnumerable<FavoriteLiveInfo> liveInfos)
+        {
+            if (items == null || liveInfos == null)
+            {
+                return false;
+            }
+            var changed = false;
+            foreach (var liveInfo in liveInfos)
+            {
+                changed = ApplyFavoriteLiveInfo(items, liveInfo) || changed;
+            }
+            return changed;
+        }
+
+        private static bool ApplyFavoriteLiveInfo(IList<FavoriteItem> items, FavoriteLiveInfo liveInfo)
+        {
+            if (items == null || liveInfo == null)
+            {
+                return false;
+            }
+            var changed = false;
+            foreach (var item in items)
+            {
+                if (!IsSameFavorite(item, liveInfo))
+                {
+                    continue;
+                }
+                if (item.LiveStatus != liveInfo.LiveStatus)
+                {
+                    item.LiveStatus = liveInfo.LiveStatus;
+                    changed = true;
+                }
+                var title = liveInfo.LiveStatus ? NormalizeLiveTitle(liveInfo.Title) : string.Empty;
+                if ((!liveInfo.LiveStatus || !string.IsNullOrWhiteSpace(title)) && item.LiveTitle != title)
+                {
+                    item.LiveTitle = title;
+                    changed = true;
+                }
+            }
+            return changed;
+        }
+
+        private static bool IsSameFavorite(FavoriteItem item, FavoriteLiveInfo liveInfo)
+        {
+            if (item == null || liveInfo == null)
+            {
+                return false;
+            }
+            return string.Equals(item.SiteName, liveInfo.SiteName, StringComparison.OrdinalIgnoreCase)
+                && (IsSameRoomID(item.RoomID, liveInfo.RoomID)
+                    || IsSameRoomID(item.RoomID, liveInfo.SourceRoomID));
+        }
+
+        private static bool IsSameRoomID(string first, string second)
+        {
+            return !string.IsNullOrWhiteSpace(first)
+                && !string.IsNullOrWhiteSpace(second)
+                && string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task UpdateLiveStatusAsync(IList<FavoriteItem> items, int refreshVersion, bool loadRoomDetail)
