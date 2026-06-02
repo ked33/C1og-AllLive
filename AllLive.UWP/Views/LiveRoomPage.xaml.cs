@@ -98,6 +98,7 @@ namespace AllLive.UWP.Views
         private DateTimeOffset activeSetPlayerUtc;
         private string pendingSetPlayerUrl;
         private DateTimeOffset pendingSetPlayerUtc;
+        private int mediaSourceAttemptVersion;
         private static readonly TimeSpan[] StreamReconnectDelays = new[]
         {
             TimeSpan.FromSeconds(1),
@@ -708,6 +709,7 @@ namespace AllLive.UWP.Views
                     return;
                 }
 
+                InvalidateMediaSourceAttempt();
                 pendingSetPlayerUrl = url;
                 pendingSetPlayerUtc = now;
                 if (!setPlayerWorkerRunning)
@@ -826,6 +828,22 @@ namespace AllLive.UWP.Views
                 activeSetPlayerUrl = null;
                 setPlayerWorkerRunning = false;
             }
+        }
+
+        private int BeginMediaSourceAttempt()
+        {
+            return System.Threading.Interlocked.Increment(ref mediaSourceAttemptVersion);
+        }
+
+        private void InvalidateMediaSourceAttempt()
+        {
+            System.Threading.Interlocked.Increment(ref mediaSourceAttemptVersion);
+        }
+
+        private bool IsMediaSourceAttemptCurrent(int attemptVersion)
+        {
+            return !isPageClosing &&
+                System.Threading.Volatile.Read(ref mediaSourceAttemptVersion) == attemptVersion;
         }
 
         private bool TryScheduleStreamReconnect(string reason)
@@ -1590,12 +1608,14 @@ namespace AllLive.UWP.Views
         }
         private async Task SetPlayer(string url)
         {
+            var attemptVersion = 0;
             try
             {
                 if (isPageClosing)
                 {
                     return;
                 }
+                attemptVersion = BeginMediaSourceAttempt();
                 PlayerLoading.Visibility = Visibility.Visible;
                 PlayerLoadText.Text = "加载中";
                 if (mediaPlayer != null)
@@ -1656,7 +1676,7 @@ namespace AllLive.UWP.Views
                 lastUrlAnalysis = BuildUrlAnalysis(url);
                 lastProbeSnapshot = null;
                 await EnsureDiagnosticsSnapshotAsync();
-                if (isPageClosing)
+                if (!IsMediaSourceAttemptCurrent(attemptVersion))
                 {
                     return;
                 }
@@ -1673,14 +1693,14 @@ namespace AllLive.UWP.Views
                     if (createTimeout.HasValue)
                     {
                         var completedTask = await Task.WhenAny(createTask, Task.Delay(createTimeout.Value));
-                        if (isPageClosing)
+                        if (!IsMediaSourceAttemptCurrent(attemptVersion))
                         {
-                            _ = DisposeLateMediaSourceAsync(createTask, url);
+                            _ = DisposeLateMediaSourceAsync(createTask, url, attemptVersion);
                             return;
                         }
                         if (completedTask != createTask)
                         {
-                            _ = DisposeLateMediaSourceAsync(createTask, url);
+                            _ = DisposeLateMediaSourceAsync(createTask, url, attemptVersion);
                             var timeoutExtra = JoinNonEmpty(
                                 lastConfigSnapshot,
                                 lastUrlAnalysis,
@@ -1694,7 +1714,7 @@ namespace AllLive.UWP.Views
                     }
 
                     var mediaSource = await createTask;
-                    if (isPageClosing)
+                    if (!IsMediaSourceAttemptCurrent(attemptVersion))
                     {
                         try { mediaSource?.Dispose(); } catch { }
                         return;
@@ -1707,7 +1727,7 @@ namespace AllLive.UWP.Views
                 }
                 catch (Exception ex)
                 {
-                    if (isPageClosing)
+                    if (!IsMediaSourceAttemptCurrent(attemptVersion))
                     {
                         return;
                     }
@@ -1726,7 +1746,7 @@ namespace AllLive.UWP.Views
             }
             catch (Exception ex)
             {
-                if (isPageClosing)
+                if (isPageClosing || (attemptVersion != 0 && !IsMediaSourceAttemptCurrent(attemptVersion)))
                 {
                     return;
                 }
@@ -1739,7 +1759,7 @@ namespace AllLive.UWP.Views
 
         }
 
-        private async Task DisposeLateMediaSourceAsync(Task<FFmpegMediaSource> createTask, string url)
+        private async Task DisposeLateMediaSourceAsync(Task<FFmpegMediaSource> createTask, string url, int attemptVersion)
         {
             try
             {
@@ -1748,6 +1768,10 @@ namespace AllLive.UWP.Views
                 if (isPageClosing)
                 {
                     LogHelper.Log($"关闭后延迟建源已释放 urlHash={url?.GetHashCode()}", LogType.DEBUG);
+                }
+                else if (!IsMediaSourceAttemptCurrent(attemptVersion))
+                {
+                    LogHelper.Log($"过期建源已释放 urlHash={url?.GetHashCode()}", LogType.DEBUG);
                 }
             }
             catch
@@ -1941,6 +1965,7 @@ namespace AllLive.UWP.Views
 
         private void ReleasePlaybackResources()
         {
+            InvalidateMediaSourceAttempt();
             StopBufferingTimer();
             ResetSetPlayerQueue();
             currentLineRetryUrl = null;
