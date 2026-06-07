@@ -61,6 +61,7 @@ namespace AllLive.UWP.Helper
         /// 视频解码
         /// </summary>
         public const string VIDEO_DECODER = "VideoDecoder";
+        public const string LIVE_ROOM_VIDEO_DECODER_PREFIX = "LiveRoomVideoDecoder";
 
         /// <summary>
         /// 斗鱼签名服务地址（可为空，使用默认）

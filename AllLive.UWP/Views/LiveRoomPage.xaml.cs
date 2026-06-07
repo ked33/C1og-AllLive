@@ -40,6 +40,7 @@ using Windows.Web.Http.Headers;
 using Windows.Networking.Connectivity;
 using Windows.System.Profile;
 using Windows.Storage.Streams;
+using System.ComponentModel;
 // https://go.microsoft.com/fwlink/?LinkId=234238 上介绍了“空白页”项模板
 
 namespace AllLive.UWP.Views
@@ -111,6 +112,8 @@ namespace AllLive.UWP.Views
         private const int MaxStreamReconnectAttempts = 6;
         private static readonly TimeSpan BufferingTimeout = TimeSpan.FromSeconds(8);
         private static readonly TimeSpan DuplicateSetPlayerWindow = TimeSpan.FromSeconds(2);
+        private const int DefaultVideoDecoderIndex = 1;
+        private bool updatingDecoderSelection;
 
         public LiveRoomPage()
         {
@@ -124,6 +127,7 @@ namespace AllLive.UWP.Views
             Window.Current.CoreWindow.KeyDown += CoreWindow_KeyDown;
           
             liveRoomVM.ChangedPlayUrl += LiveRoomVM_ChangedPlayUrl;
+            liveRoomVM.PropertyChanged += LiveRoomVM_PropertyChanged;
             liveRoomVM.AddDanmaku += LiveRoomVM_AddDanmaku;
             liveRoomVM.ReconnectStatusChanged += LiveRoomVM_ReconnectStatusChanged;
             //每过2秒就设置焦点
@@ -606,6 +610,19 @@ namespace AllLive.UWP.Views
             QueueSetPlayer(e, "ChangedPlayUrl");
         }
 
+        private async void LiveRoomVM_PropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (e?.PropertyName != "RoomID" && e?.PropertyName != "SiteName")
+            {
+                return;
+            }
+
+            await this.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            {
+                LoadDecoderSetting();
+            });
+        }
+
         private void LiveRoomVM_ReconnectStatusChanged(object sender, ReconnectStatus status)
         {
             if (status == null) return;
@@ -961,7 +978,7 @@ namespace AllLive.UWP.Views
 
         private string GetDecoderModeText()
         {
-            var decoder = SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1);
+            var decoder = GetEffectiveVideoDecoderIndex();
             switch (decoder)
             {
                 case 1:
@@ -1636,7 +1653,7 @@ namespace AllLive.UWP.Views
                 config.FFmpegOptions.Add("reconnect_at_eof", "1");
                 config.FFmpegOptions.Add("reconnect_streamed", "1");
                 config.FFmpegOptions.Add("reconnect_delay_max", "2");
-                var decoder = SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1);
+                var decoder = GetEffectiveVideoDecoderIndex();
                 switch (decoder)
                 {
                     case 1:
@@ -2096,8 +2113,9 @@ namespace AllLive.UWP.Views
                 return;
             }
             controlEventsDetached = true;
+            liveRoomVM.PropertyChanged -= LiveRoomVM_PropertyChanged;
             GridRight.SizeChanged -= GridRight_SizeChanged;
-            cbDecoder.Loaded -= CbDecoder_Loaded;
+            PlayDecoder.SelectionChanged -= PlayDecoder_SelectionChanged;
             cbDecoder.SelectionChanged -= CbDecoder_SelectionChanged;
             PlaySWDanmu.Toggled -= PlaySWDanmu_Toggled;
             swKeepSC.Toggled -= SwKeepSC_Toggled;
@@ -2115,7 +2133,6 @@ namespace AllLive.UWP.Views
             DanmuSettingArea.ValueChanged -= DanmuSettingArea_ValueChanged;
             DanmuSettingColourful.Toggled -= DanmuSettingColourful_Toggled;
 
-            xboxSettingsDecoder.Loaded -= XboxSettingsDecoder_Loaded;
             xboxSettingsDecoder.SelectionChanged -= XboxSettingsDecoder_SelectionChanged;
             xboxSettingsDMSize.SelectionChanged -= XboxSettingsDMSize_SelectionChanged;
             xboxSettingsDMSpeed.SelectionChanged -= XboxSettingsDMSpeed_SelectionChanged;
@@ -2342,9 +2359,7 @@ namespace AllLive.UWP.Views
             //        Utils.ShowMessageToast("更改清晰度或刷新后生效");
             //    });
             //});
-            cbDecoder.SelectedIndex = SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1);
-            cbDecoder.Loaded -= CbDecoder_Loaded;
-            cbDecoder.Loaded += CbDecoder_Loaded;
+            LoadDecoderSetting();
             //弹幕开关
             var state = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.SHOW, false) ? Visibility.Visible : Visibility.Collapsed;
             DanmuControl.Visibility = state;
@@ -2426,16 +2441,162 @@ namespace AllLive.UWP.Views
             DanmuSettingColourful.Toggled -= DanmuSettingColourful_Toggled;
             DanmuSettingColourful.Toggled += DanmuSettingColourful_Toggled;
         }
-        private void CbDecoder_Loaded(object sender, RoutedEventArgs e)
+        private void LoadDecoderSetting()
         {
+            var decoder = GetEffectiveVideoDecoderIndex();
+            SyncDecoderControls(decoder);
+
+            PlayDecoder.SelectionChanged -= PlayDecoder_SelectionChanged;
+            PlayDecoder.SelectionChanged += PlayDecoder_SelectionChanged;
             cbDecoder.SelectionChanged -= CbDecoder_SelectionChanged;
             cbDecoder.SelectionChanged += CbDecoder_SelectionChanged;
+            xboxSettingsDecoder.SelectionChanged -= XboxSettingsDecoder_SelectionChanged;
+            xboxSettingsDecoder.SelectionChanged += XboxSettingsDecoder_SelectionChanged;
+        }
+
+        private int GetGlobalVideoDecoderIndex()
+        {
+            return ClampVideoDecoderIndex(SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, DefaultVideoDecoderIndex));
+        }
+
+        private int GetEffectiveVideoDecoderIndex()
+        {
+            var globalDecoder = GetGlobalVideoDecoderIndex();
+            var roomKey = GetRoomVideoDecoderSettingKey();
+            if (string.IsNullOrEmpty(roomKey))
+            {
+                return globalDecoder;
+            }
+
+            return ClampVideoDecoderIndex(SettingHelper.GetValue<int>(roomKey, globalDecoder));
+        }
+
+        private string GetRoomVideoDecoderSettingKey()
+        {
+            var siteName = liveRoomVM?.SiteName;
+            var roomId = liveRoomVM?.RoomID;
+            if (string.IsNullOrWhiteSpace(siteName) || string.IsNullOrWhiteSpace(roomId))
+            {
+                return null;
+            }
+
+            return $"{SettingHelper.LIVE_ROOM_VIDEO_DECODER_PREFIX}:{siteName}:{roomId}";
+        }
+
+        private int ClampVideoDecoderIndex(int value)
+        {
+            return value >= 0 && value <= 2 ? value : DefaultVideoDecoderIndex;
+        }
+
+        private void SyncDecoderControls(int decoder)
+        {
+            decoder = ClampVideoDecoderIndex(decoder);
+            updatingDecoderSelection = true;
+            try
+            {
+                SetDecoderComboIndex(PlayDecoder, decoder);
+                SetDecoderComboIndex(cbDecoder, decoder);
+                SetDecoderComboIndex(xboxSettingsDecoder, decoder);
+            }
+            finally
+            {
+                updatingDecoderSelection = false;
+            }
+        }
+
+        private void SetDecoderComboIndex(ComboBox comboBox, int decoder)
+        {
+            if (comboBox == null)
+            {
+                return;
+            }
+
+            decoder = ClampVideoDecoderIndex(decoder);
+            if (comboBox.Items != null && comboBox.Items.Count > 0)
+            {
+                decoder = Math.Min(decoder, comboBox.Items.Count - 1);
+            }
+            if (comboBox.SelectedIndex != decoder)
+            {
+                comboBox.SelectedIndex = decoder;
+            }
+        }
+
+        private void PlayDecoder_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            ApplyDecoderSelection(PlayDecoder);
         }
 
         private void CbDecoder_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            SettingHelper.SetValue(SettingHelper.VIDEO_DECODER, cbDecoder.SelectedIndex);
-            Utils.ShowMessageToast("更改清晰度或刷新后生效");
+            ApplyDecoderSelection(cbDecoder);
+        }
+
+        private void XboxSettingsDecoder_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            ApplyDecoderSelection(xboxSettingsDecoder);
+        }
+
+        private void ApplyDecoderSelection(ComboBox source)
+        {
+            if (updatingDecoderSelection || source == null || source.SelectedIndex < 0)
+            {
+                return;
+            }
+
+            var decoder = ClampVideoDecoderIndex(source.SelectedIndex);
+            var roomKey = GetRoomVideoDecoderSettingKey();
+            if (string.IsNullOrEmpty(roomKey))
+            {
+                SettingHelper.SetValue(SettingHelper.VIDEO_DECODER, decoder);
+            }
+            else
+            {
+                SettingHelper.SetValue(roomKey, decoder);
+            }
+
+            SyncDecoderControls(decoder);
+            RestartCurrentLineAfterDecoderChange(decoder);
+        }
+
+        private void RestartCurrentLineAfterDecoderChange(int decoder)
+        {
+            var url = liveRoomVM?.CurrentLine?.Url;
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                Utils.ShowMessageToast($"已保存{GetShortDecoderText(decoder)}");
+                return;
+            }
+
+            LogHelper.Log($"直播间解码器切换 roomId={liveRoomVM?.RoomID} decoder={GetDecoderLogText(decoder)}，重载当前线路", LogType.DEBUG);
+            Utils.ShowMessageToast($"已切换{GetShortDecoderText(decoder)}，正在重载当前线路");
+            QueueSetPlayer(url, "DecoderChanged");
+        }
+
+        private string GetShortDecoderText(int decoder)
+        {
+            switch (ClampVideoDecoderIndex(decoder))
+            {
+                case 1:
+                    return "硬解";
+                case 2:
+                    return "软解";
+                default:
+                    return "自动解码";
+            }
+        }
+
+        private string GetDecoderLogText(int decoder)
+        {
+            switch (ClampVideoDecoderIndex(decoder))
+            {
+                case 1:
+                    return "ForceSystemDecoder";
+                case 2:
+                    return "ForceFFmpegSoftwareDecoder";
+                default:
+                    return "Automatic";
+            }
         }
 
         private void PlaySWDanmu_Toggled(object sender, RoutedEventArgs e)
@@ -2545,9 +2706,7 @@ namespace AllLive.UWP.Views
         private void LoadXboxSetting()
         {
 
-            xboxSettingsDecoder.SelectedIndex = SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1);
-            xboxSettingsDecoder.Loaded -= XboxSettingsDecoder_Loaded;
-            xboxSettingsDecoder.Loaded += XboxSettingsDecoder_Loaded;
+            LoadDecoderSetting();
 
             //弹幕开关
             var state = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.SHOW, false) ? Visibility.Visible : Visibility.Collapsed;
@@ -2608,18 +2767,6 @@ namespace AllLive.UWP.Views
             xboxSettingsDMColorful.Toggled -= XboxSettingsDMColorful_Toggled;
             xboxSettingsDMColorful.Toggled += XboxSettingsDMColorful_Toggled;
 
-        }
-
-        private void XboxSettingsDecoder_Loaded(object sender, RoutedEventArgs e)
-        {
-            xboxSettingsDecoder.SelectionChanged -= XboxSettingsDecoder_SelectionChanged;
-            xboxSettingsDecoder.SelectionChanged += XboxSettingsDecoder_SelectionChanged;
-        }
-
-        private void XboxSettingsDecoder_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            SettingHelper.SetValue(SettingHelper.VIDEO_DECODER, xboxSettingsDecoder.SelectedIndex);
-            Utils.ShowMessageToast("更改清晰度或刷新后生效");
         }
 
         private void XboxSettingsDMSize_SelectionChanged(object sender, SelectionChangedEventArgs e)

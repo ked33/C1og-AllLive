@@ -675,6 +675,23 @@
                                         ItemsSource="{x:Bind Path=liveRoomVM.AvailableCodecs, Mode=OneWay}"
                                         SelectedItem="{x:Bind Path=liveRoomVM.SelectedCodec, Mode=TwoWay}"
                                         ToolTipService.ToolTip="编码" />
+                                    <ComboBox
+                                        x:Name="PlayDecoder"
+                                        MinWidth="72"
+                                        Margin="8,0,0,0"
+                                        VerticalAlignment="Center"
+                                        HorizontalContentAlignment="Center"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        FontSize="16"
+                                        Foreground="White"
+                                        ToolTipService.ToolTip="解码器">
+                                        <ComboBox.Items>
+                                            <ComboBoxItem>自动</ComboBoxItem>
+                                            <ComboBoxItem>硬解</ComboBoxItem>
+                                            <ComboBoxItem>软解</ComboBoxItem>
+                                        </ComboBox.Items>
+                                    </ComboBox>
                                     <Button
                                         x:Name="PlayBtnMinWindow"
                                         Width="48"
