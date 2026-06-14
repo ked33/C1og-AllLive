@@ -25,6 +25,7 @@ namespace AllLive.Core
         public string Name => "虎牙直播";
         public ILiveDanmaku GetDanmaku() => new HuyaDanmaku();
         TupHttpHelper tupHttpHelper = new TupHttpHelper("http://wup.huya.com", "liveui");
+        TupHttpHelper wupuiTupHttpHelper = new TupHttpHelper("http://wup.huya.com", "wupui");
         public async Task<List<LiveCategory>> GetCategores()
         {
             List<LiveCategory> categories = new List<LiveCategory>() {
@@ -214,15 +215,16 @@ namespace AllLive.Core
             }
             var isLive = jsonObj["roomInfo"]["eLiveStatus"].ToInt32() == 2;
             var popularity = jsonObj["roomInfo"]["tLiveInfo"]["lTotalCount"].ParseCountTextToLong() ?? 0;
-            var vipPresenterUid = TryGetVipPresenterUid(jsonObj["roomInfo"]);
-            var vipCount = isLive ? await GetVipCount(vipPresenterUid, uid) : null;
+            var presenterUid = TryGetPresenterUid(jsonObj["roomInfo"]);
+            var viewerCount = isLive ? await GetViewerCount(presenterUid, uid) : null;
+            var vipCount = isLive && !viewerCount.HasValue ? await GetVipCount(presenterUid, uid) : null;
 
             return new LiveRoomDetail()
             {
                 Cover = jsonObj["roomInfo"]["tLiveInfo"]["sScreenshot"].ToString(),
-                Online = ToCompatibleOnline(vipCount ?? popularity),
-                ViewerCount = null,
-                ViewerCountSource = null,
+                Online = ToCompatibleOnline(viewerCount ?? vipCount ?? popularity),
+                ViewerCount = viewerCount,
+                ViewerCountSource = viewerCount.HasValue ? "wupui.getUserOnlineRank.iTotal" : null,
                 VipCount = vipCount,
                 VipCountSource = vipCount.HasValue ? "liveui.getVipBarListStat.iTotal/iTotalNum" : null,
                 Popularity = popularity,
@@ -249,6 +251,34 @@ namespace AllLive.Core
                 ),
                 Url = "https://www.huya.com/" + roomId
             };
+        }
+
+        private async Task<long?> GetViewerCount(long presenterUid, string uid)
+        {
+            if (presenterUid <= 0)
+            {
+                CoreDebug.Log("[Huya] UserOnlineRank skipped: presenter uid empty");
+                return null;
+            }
+
+            var req = new GetUserOnlineRankReq()
+            {
+                lPid = presenterUid,
+                tId = new HuyaUserId()
+                {
+                    lUid = uid.ToInt64(),
+                    sHuYaUA = "pc_exe&7060000&official"
+                }
+            };
+
+            var resp = await wupuiTupHttpHelper.GetAsync(req, "getUserOnlineRank", new GetUserOnlineRankRsp());
+            CoreDebug.Log($"[Huya] UserOnlineRank pid={presenterUid} iTotal={resp?.iTotal} msg={resp?.sMsg}");
+            if (resp != null && resp.iTotal > 0)
+            {
+                return resp.iTotal;
+            }
+
+            return null;
         }
 
         private async Task<long?> GetVipCount(long presenterUid, string uid)
@@ -299,7 +329,7 @@ namespace AllLive.Core
             return null;
         }
 
-        private static long TryGetVipPresenterUid(JToken roomInfo)
+        private static long TryGetPresenterUid(JToken roomInfo)
         {
             if (roomInfo == null)
             {

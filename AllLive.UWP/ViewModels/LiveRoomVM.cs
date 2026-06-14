@@ -164,7 +164,7 @@ namespace AllLive.UWP.ViewModels
                 }
                 if (VipCount.HasValue)
                 {
-                    return "当前显示: 贵宾数；虎牙真实在线人数接口尚未接入";
+                    return "当前显示: 贵宾数；真实在线人数接口请求失败或无返回";
                 }
                 if (Popularity.HasValue)
                 {

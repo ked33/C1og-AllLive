@@ -13,6 +13,9 @@ using Newtonsoft.Json;
 using System.Web;
 using System.Net;
 using System.Net.Http;
+using System.IO;
+using System.IO.Compression;
+using System.Text;
 
 namespace AllLive.Core
 {
@@ -160,16 +163,18 @@ namespace AllLive.Core
             var popularity = roomInfo["online"].ParseCountTextToLong() ?? 0;
             const string popularitySource = "getInfoByRoom.room_info.online";
             var isLive = roomInfo["live_status"].ToInt32() == 1;
-            CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} getInfoByRoom.room_info.online={popularity}; 真实房间观众数等待ONLINE_RANK_COUNT弹幕消息");
+            var actualRoomId = roomInfo["room_id"].ToInt32();
+            var viewerCount = isLive ? await GetInitialViewerCount(actualRoomId) : null;
+            CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} getInfoByRoom.room_info.online={popularity}; initial ONLINE_RANK_COUNT={(viewerCount.HasValue ? viewerCount.Value.ToString() : "null")}");
 
             return new LiveRoomDetail()
             {
                 Cover = roomInfo["cover"].ToString(),
-                Online = popularity > int.MaxValue ? int.MaxValue : (int)popularity,
+                Online = ToCompatibleOnline(viewerCount ?? popularity),
                 Popularity = popularity,
-                ViewerCount = null,
+                ViewerCount = viewerCount,
                 PopularitySource = popularitySource,
-                ViewerCountSource = null,
+                ViewerCountSource = viewerCount.HasValue ? "websocket.ONLINE_RANK_COUNT" : null,
                 RoomID = roomInfo["room_id"].ToString(),
                 Title = roomInfo["title"].ToString(),
                 UserName = obj["data"]["anchor_info"]["base_info"]["uname"].ToString(),
@@ -186,6 +191,303 @@ namespace AllLive.Core
                 Url = "https://live.bilibili.com/" + roomId
             };
         }
+
+        private async Task<long?> GetInitialViewerCount(int roomId)
+        {
+            if (roomId <= 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                var danmuInfo = await GetDanmuInfo(roomId);
+                var token = danmuInfo?["token"]?.ToString();
+                var host = (danmuInfo?["host_list"] as JArray)?.LastOrDefault()?["host"]?.ToString();
+                if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(host))
+                {
+                    CoreDebug.Log($"[Bilibili] 初始房间观众数跳过 roomId={roomId} token/host为空");
+                    return null;
+                }
+
+                var resultSource = new TaskCompletionSource<long?>();
+                var ws = new WebSocket($"wss://{host}/sub");
+                if (!string.IsNullOrEmpty(Cookie))
+                {
+                    ws.CustomHeaders = new Dictionary<string, string>()
+                    {
+                        { "Cookie", GetCookie() },
+                    };
+                }
+                ws.Compression = CompressionMethod.Deflate;
+
+                EventHandler onOpen = null;
+                EventHandler<MessageEventArgs> onMessage = null;
+                EventHandler<WebSocketSharp.ErrorEventArgs> onError = null;
+                EventHandler<CloseEventArgs> onClose = null;
+
+                onOpen = (sender, args) =>
+                {
+                    try
+                    {
+                        ws.Send(EncodeBilibiliWsData(JsonConvert.SerializeObject(new
+                        {
+                            roomid = roomId,
+                            uid = UserId,
+                            protover = 2,
+                            key = token,
+                            platform = "web",
+                            type = 2,
+                            buvid = buvid3,
+                        }), 7));
+                    }
+                    catch (Exception ex)
+                    {
+                        CoreDebug.Log($"[Bilibili] 初始房间观众数进房发送失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
+                        resultSource.TrySetResult(null);
+                    }
+                };
+
+                onMessage = (sender, args) =>
+                {
+                    try
+                    {
+                        if (TryExtractOnlineRankCount(args.RawData, out var count))
+                        {
+                            resultSource.TrySetResult(count);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        CoreDebug.Log($"[Bilibili] 初始房间观众数解析失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
+                    }
+                };
+
+                onError = (sender, args) =>
+                {
+                    CoreDebug.Log($"[Bilibili] 初始房间观众数WS错误 roomId={roomId} err={args.Message}");
+                    resultSource.TrySetResult(null);
+                };
+
+                onClose = (sender, args) =>
+                {
+                    if (args.Code != 1000)
+                    {
+                        CoreDebug.Log($"[Bilibili] 初始房间观众数WS关闭 roomId={roomId} code={args.Code} reason={args.Reason}");
+                    }
+                    resultSource.TrySetResult(null);
+                };
+
+                ws.OnOpen += onOpen;
+                ws.OnMessage += onMessage;
+                ws.OnError += onError;
+                ws.OnClose += onClose;
+
+                try
+                {
+                    Task.Run(() =>
+                    {
+                        try
+                        {
+                            ws.Connect();
+                        }
+                        catch (Exception ex)
+                        {
+                            CoreDebug.Log($"[Bilibili] 初始房间观众数WS连接失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
+                            resultSource.TrySetResult(null);
+                        }
+                    });
+
+                    var completed = await Task.WhenAny(resultSource.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+                    if (completed == resultSource.Task)
+                    {
+                        return await resultSource.Task;
+                    }
+
+                    CoreDebug.Log($"[Bilibili] 初始房间观众数等待超时 roomId={roomId}");
+                    return null;
+                }
+                finally
+                {
+                    ws.OnOpen -= onOpen;
+                    ws.OnMessage -= onMessage;
+                    ws.OnError -= onError;
+                    ws.OnClose -= onClose;
+                    try { ws.Close(); } catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                CoreDebug.Log($"[Bilibili] 初始房间观众数获取失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
+                return null;
+            }
+        }
+
+        private async Task<JToken> GetDanmuInfo(int roomId)
+        {
+            var url = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
+            var query = $"id={roomId}&type=0&web_location=444.8";
+            query = await GetWbiSign(query);
+            var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader());
+            var obj = JObject.Parse(result);
+            if (obj["code"]?.ToInt32() != 0)
+            {
+                CoreDebug.Log($"[Bilibili] getDanmuInfo返回异常 roomId={roomId} code={obj["code"]} message={obj["message"] ?? obj["msg"]}");
+                return null;
+            }
+            return obj["data"];
+        }
+
+        private static bool TryExtractOnlineRankCount(byte[] data, out long count)
+        {
+            count = 0;
+            if (data == null || data.Length < 16)
+            {
+                return false;
+            }
+
+            var offset = 0;
+            while (offset + 16 <= data.Length)
+            {
+                var packetLength = ReadInt32BigEndian(data, offset);
+                if (packetLength < 16 || offset + packetLength > data.Length)
+                {
+                    break;
+                }
+
+                var protocolVersion = ReadInt16BigEndian(data, offset + 6);
+                var operation = ReadInt32BigEndian(data, offset + 8);
+                var bodyLength = packetLength - 16;
+                var body = new byte[bodyLength];
+                Buffer.BlockCopy(data, offset + 16, body, 0, bodyLength);
+
+                if (operation == 5)
+                {
+                    if (protocolVersion == 2)
+                    {
+                        var decompressed = DecompressBilibiliDeflate(body);
+                        if (TryExtractOnlineRankCount(decompressed, out count) || TryParseOnlineRankText(decompressed, out count))
+                        {
+                            return true;
+                        }
+                    }
+                    else if (TryParseOnlineRankText(body, out count))
+                    {
+                        return true;
+                    }
+                }
+
+                offset += packetLength;
+            }
+
+            if (offset == 0)
+            {
+                return TryParseOnlineRankText(data, out count);
+            }
+            return false;
+        }
+
+        private static bool TryParseOnlineRankText(byte[] data, out long count)
+        {
+            count = 0;
+            var text = Encoding.UTF8.GetString(data);
+            var textLines = Regex.Split(text, "[\x00-\x1f]+").Where(x => x.Length > 2 && x[0] == '{').ToArray();
+            foreach (var item in textLines)
+            {
+                try
+                {
+                    var obj = JObject.Parse(item);
+                    var cmd = obj["cmd"]?.ToString() ?? "";
+                    if (cmd != "ONLINE_RANK_COUNT")
+                    {
+                        continue;
+                    }
+                    var viewerCount = obj["data"]?["online_count_text"].ParseCountTextToLong()
+                        ?? obj["data"]?["count_text"].ParseCountTextToLong()
+                        ?? obj["data"]?["online_count"].ParseCountTextToLong()
+                        ?? obj["data"]?["count"].ParseCountTextToLong();
+                    if (viewerCount.HasValue)
+                    {
+                        count = viewerCount.Value;
+                        return true;
+                    }
+                }
+                catch
+                {
+                }
+            }
+            return false;
+        }
+
+        private static byte[] EncodeBilibiliWsData(string msg, int action)
+        {
+            var data = Encoding.UTF8.GetBytes(msg);
+            var buffer = new byte[data.Length + 16];
+            using (var ms = new MemoryStream(buffer))
+            {
+                WriteBigEndian(ms, buffer.Length, 4);
+                WriteBigEndian(ms, 16, 2);
+                WriteBigEndian(ms, 0, 2);
+                WriteBigEndian(ms, action, 4);
+                WriteBigEndian(ms, 1, 4);
+                ms.Write(data, 0, data.Length);
+                return ms.ToArray();
+            }
+        }
+
+        private static byte[] DecompressBilibiliDeflate(byte[] data)
+        {
+            using (var outBuffer = new MemoryStream())
+            using (var compressedStream = new DeflateStream(new MemoryStream(data, 2, data.Length - 2), CompressionMode.Decompress))
+            {
+                var block = new byte[1024];
+                while (true)
+                {
+                    var bytesRead = compressedStream.Read(block, 0, block.Length);
+                    if (bytesRead <= 0)
+                    {
+                        break;
+                    }
+                    outBuffer.Write(block, 0, bytesRead);
+                }
+                return outBuffer.ToArray();
+            }
+        }
+
+        private static int ReadInt32BigEndian(byte[] data, int offset)
+        {
+            return (data[offset] << 24)
+                | (data[offset + 1] << 16)
+                | (data[offset + 2] << 8)
+                | data[offset + 3];
+        }
+
+        private static int ReadInt16BigEndian(byte[] data, int offset)
+        {
+            return (data[offset] << 8) | data[offset + 1];
+        }
+
+        private static void WriteBigEndian(MemoryStream ms, int value, int byteCount)
+        {
+            for (var i = byteCount - 1; i >= 0; i--)
+            {
+                ms.WriteByte((byte)((value >> (i * 8)) & 0xFF));
+            }
+        }
+
+        private static int ToCompatibleOnline(long value)
+        {
+            if (value <= 0)
+            {
+                return 0;
+            }
+            if (value > int.MaxValue)
+            {
+                return int.MaxValue;
+            }
+            return (int)value;
+        }
+
         public async Task<LiveSearchResult> Search(string keyword, int page = 1)
         {
             LiveSearchResult searchResult = new LiveSearchResult()
