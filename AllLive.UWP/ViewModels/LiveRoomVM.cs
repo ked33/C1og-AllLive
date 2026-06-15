@@ -98,6 +98,7 @@ namespace AllLive.UWP.ViewModels
 
         object RoomId;
         public LiveRoomDetail detail { get; set; }
+        private bool allowPopularityFallback = true;
 
         private long _Online = 0;
         public long Online
@@ -196,16 +197,33 @@ namespace AllLive.UWP.ViewModels
                 ViewerCount = null;
                 VipCount = null;
                 Popularity = null;
+                allowPopularityFallback = true;
                 return;
             }
 
+            allowPopularityFallback = roomDetail.AllowPopularityFallback;
             ViewerCount = roomDetail.ViewerCount;
             VipCount = roomDetail.VipCount;
-            Popularity = roomDetail.Popularity;
-            if (!ViewerCount.HasValue && !VipCount.HasValue && !Popularity.HasValue && roomDetail.Online > 0)
+            Popularity = ShouldSuppressPopularityMetric() ? null : roomDetail.Popularity;
+            if (!ViewerCount.HasValue && !VipCount.HasValue && !Popularity.HasValue && roomDetail.Online > 0 && allowPopularityFallback)
             {
                 Popularity = roomDetail.Online;
             }
+        }
+
+        private bool IsBilibiliLiveRoom()
+        {
+            return string.Equals(Site?.Name ?? SiteName, "哔哩哔哩直播", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool ShouldSuppressPopularityMetric()
+        {
+            if (!IsBilibiliLiveRoom())
+            {
+                return false;
+            }
+
+            return ViewerCount.HasValue || !allowPopularityFallback;
         }
 
         private void ApplyAudienceMetricUpdate(LiveMessage message)
@@ -233,6 +251,10 @@ namespace AllLive.UWP.ViewModels
                     }
                     return;
                 case LiveAudienceMetricKind.Popularity:
+                    if (ShouldSuppressPopularityMetric())
+                    {
+                        return;
+                    }
                     Popularity = value;
                     if (detail != null)
                     {
@@ -251,6 +273,10 @@ namespace AllLive.UWP.ViewModels
                     }
                     break;
                 default:
+                    if (ShouldSuppressPopularityMetric())
+                    {
+                        return;
+                    }
                     Popularity = value;
                     if (detail != null)
                     {
@@ -1531,6 +1557,7 @@ namespace AllLive.UWP.ViewModels
             ViewerCount = null;
             VipCount = null;
             Popularity = null;
+            allowPopularityFallback = true;
             Loading = false;
 
         }

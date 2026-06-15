@@ -51,6 +51,10 @@ namespace AllLive.Core.Models
         /// </summary>
         public string PopularitySource { get; set; }
         /// <summary>
+        /// 是否允许在没有真实在线人数时显示人气/热度
+        /// </summary>
+        public bool AllowPopularityFallback { get; set; } = true;
+        /// <summary>
         /// 贵宾数来源
         /// </summary>
         public string VipCountSource { get; set; }

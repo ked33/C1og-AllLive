@@ -165,18 +165,25 @@ namespace AllLive.Core
             long? viewerCount = null;
             long? popularity = null;
             string popularitySource = null;
+            var allowPopularityFallback = false;
             if (isLive)
             {
-                viewerCount = await GetInitialViewerCount(actualRoomId);
+                var viewerCountResult = await GetInitialViewerCount(actualRoomId);
+                viewerCount = viewerCountResult.Count;
+                allowPopularityFallback = viewerCountResult.AllowPopularityFallback;
                 if (viewerCount.HasValue)
                 {
                     CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT={viewerCount.Value}; 跳过热度回退");
+                }
+                else if (!allowPopularityFallback)
+                {
+                    CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT暂未返回，暂不读取热度");
                 }
                 else
                 {
                     popularity = roomInfo["online"].ParseCountTextToLong();
                     popularitySource = "getInfoByRoom.room_info.online";
-                    CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT=null; fallback {popularitySource}={(popularity.HasValue ? popularity.Value.ToString() : "null")}");
+                    CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT失败; fallback {popularitySource}={(popularity.HasValue ? popularity.Value.ToString() : "null")}; reason={viewerCountResult.FailureReason ?? "null"}");
                 }
             }
             else
@@ -194,6 +201,7 @@ namespace AllLive.Core
                 ViewerCount = viewerCount,
                 PopularitySource = popularitySource,
                 ViewerCountSource = viewerCount.HasValue ? "websocket.ONLINE_RANK_COUNT" : null,
+                AllowPopularityFallback = allowPopularityFallback,
                 RoomID = roomInfo["room_id"].ToString(),
                 Title = roomInfo["title"].ToString(),
                 UserName = obj["data"]["anchor_info"]["base_info"]["uname"].ToString(),
@@ -211,11 +219,11 @@ namespace AllLive.Core
             };
         }
 
-        private async Task<long?> GetInitialViewerCount(int roomId)
+        private async Task<InitialViewerCountResult> GetInitialViewerCount(int roomId)
         {
             if (roomId <= 0)
             {
-                return null;
+                return InitialViewerCountResult.Failed("roomId无效");
             }
 
             try
@@ -226,10 +234,10 @@ namespace AllLive.Core
                 if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(host))
                 {
                     CoreDebug.Log($"[Bilibili] 初始房间观众数跳过 roomId={roomId} token/host为空");
-                    return null;
+                    return InitialViewerCountResult.Failed("token/host为空");
                 }
 
-                var resultSource = new TaskCompletionSource<long?>();
+                var resultSource = new TaskCompletionSource<InitialViewerCountResult>();
                 var ws = new WebSocket($"wss://{host}/sub");
                 if (!string.IsNullOrEmpty(Cookie))
                 {
@@ -263,7 +271,7 @@ namespace AllLive.Core
                     catch (Exception ex)
                     {
                         CoreDebug.Log($"[Bilibili] 初始房间观众数进房发送失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
-                        resultSource.TrySetResult(null);
+                        resultSource.TrySetResult(InitialViewerCountResult.Failed("进房发送失败"));
                     }
                 };
 
@@ -273,7 +281,7 @@ namespace AllLive.Core
                     {
                         if (TryExtractOnlineRankCount(args.RawData, out var count))
                         {
-                            resultSource.TrySetResult(count);
+                            resultSource.TrySetResult(InitialViewerCountResult.Success(count));
                         }
                     }
                     catch (Exception ex)
@@ -285,7 +293,7 @@ namespace AllLive.Core
                 onError = (sender, args) =>
                 {
                     CoreDebug.Log($"[Bilibili] 初始房间观众数WS错误 roomId={roomId} err={args.Message}");
-                    resultSource.TrySetResult(null);
+                    resultSource.TrySetResult(InitialViewerCountResult.Failed("WS错误"));
                 };
 
                 onClose = (sender, args) =>
@@ -294,7 +302,7 @@ namespace AllLive.Core
                     {
                         CoreDebug.Log($"[Bilibili] 初始房间观众数WS关闭 roomId={roomId} code={args.Code} reason={args.Reason}");
                     }
-                    resultSource.TrySetResult(null);
+                    resultSource.TrySetResult(InitialViewerCountResult.Failed($"WS关闭:{args.Code}"));
                 };
 
                 ws.OnOpen += onOpen;
@@ -313,7 +321,7 @@ namespace AllLive.Core
                         catch (Exception ex)
                         {
                             CoreDebug.Log($"[Bilibili] 初始房间观众数WS连接失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
-                            resultSource.TrySetResult(null);
+                            resultSource.TrySetResult(InitialViewerCountResult.Failed("WS连接失败"));
                         }
                     });
 
@@ -324,7 +332,7 @@ namespace AllLive.Core
                     }
 
                     CoreDebug.Log($"[Bilibili] 初始房间观众数等待超时 roomId={roomId}");
-                    return null;
+                    return InitialViewerCountResult.Pending("等待超时");
                 }
                 finally
                 {
@@ -338,7 +346,41 @@ namespace AllLive.Core
             catch (Exception ex)
             {
                 CoreDebug.Log($"[Bilibili] 初始房间观众数获取失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
-                return null;
+                return InitialViewerCountResult.Failed("获取失败");
+            }
+        }
+
+        private sealed class InitialViewerCountResult
+        {
+            public long? Count { get; private set; }
+            public bool AllowPopularityFallback { get; private set; }
+            public string FailureReason { get; private set; }
+
+            public static InitialViewerCountResult Success(long count)
+            {
+                return new InitialViewerCountResult()
+                {
+                    Count = count,
+                    AllowPopularityFallback = false
+                };
+            }
+
+            public static InitialViewerCountResult Pending(string reason)
+            {
+                return new InitialViewerCountResult()
+                {
+                    AllowPopularityFallback = false,
+                    FailureReason = reason
+                };
+            }
+
+            public static InitialViewerCountResult Failed(string reason)
+            {
+                return new InitialViewerCountResult()
+                {
+                    AllowPopularityFallback = true,
+                    FailureReason = reason
+                };
             }
         }
 
