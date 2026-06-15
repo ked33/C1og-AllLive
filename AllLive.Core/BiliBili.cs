@@ -170,20 +170,19 @@ namespace AllLive.Core
             {
                 var viewerCountResult = await GetInitialViewerCount(actualRoomId);
                 viewerCount = viewerCountResult.Count;
-                allowPopularityFallback = viewerCountResult.AllowPopularityFallback;
+                // 暂时完全禁用 B 站热度 fallback，只保留真实在线人数显示。
+                // allowPopularityFallback = viewerCountResult.AllowPopularityFallback;
                 if (viewerCount.HasValue)
                 {
                     CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT={viewerCount.Value}; 跳过热度回退");
                 }
-                else if (!allowPopularityFallback)
-                {
-                    CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT暂未返回，暂不读取热度");
-                }
                 else
                 {
-                    popularity = roomInfo["online"].ParseCountTextToLong();
-                    popularitySource = "getInfoByRoom.room_info.online";
-                    CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT失败; fallback {popularitySource}={(popularity.HasValue ? popularity.Value.ToString() : "null")}; reason={viewerCountResult.FailureReason ?? "null"}");
+                    // 暂时注释 B 站热度接口读取。后续如果真实在线人数接口确认失败，再单独设计回退策略。
+                    // popularity = roomInfo["online"].ParseCountTextToLong();
+                    // popularitySource = "getInfoByRoom.room_info.online";
+                    // CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT失败; fallback {popularitySource}={(popularity.HasValue ? popularity.Value.ToString() : "null")}; reason={viewerCountResult.FailureReason ?? "null"}");
+                    CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT未获取到; 已禁用热度读取; reason={viewerCountResult.FailureReason ?? "null"}");
                 }
             }
             else

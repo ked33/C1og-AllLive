@@ -272,13 +272,15 @@ namespace AllLive.Core.Danmaku
             var body = data.Skip(16).ToArray();
             if (operation == 3)
             {
-                var online = BitConverter.ToInt32(body.Reverse().ToArray(), 0);
-                NewMessage?.Invoke(this, new LiveMessage()
-                {
-                    Data = online,
-                    AudienceMetricKind = LiveAudienceMetricKind.Popularity,
-                    Type = LiveMessageType.Online,
-                });
+                // B 站 operation 3 是心跳热度/人气，不是真实在线人数。
+                // 暂时禁用热度显示，只保留 ONLINE_RANK_COUNT 真实在线人数。
+                // var online = BitConverter.ToInt32(body.Reverse().ToArray(), 0);
+                // NewMessage?.Invoke(this, new LiveMessage()
+                // {
+                //     Data = online,
+                //     AudienceMetricKind = LiveAudienceMetricKind.Popularity,
+                //     Type = LiveMessageType.Online,
+                // });
             }
             else if (operation == 5)
             {
