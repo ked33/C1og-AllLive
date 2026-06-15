@@ -90,6 +90,11 @@ namespace AllLive.UWP.ViewModels
         private async Task ReloadAsync(bool deferUiUpdate, bool loadRoomDetail)
         {
             var version = Interlocked.Increment(ref _refreshVersion);
+            Dictionary<string, FavoriteTitleSnapshot> previousTitleStates = null;
+            if (!loadRoomDetail)
+            {
+                previousTitleStates = CaptureFavoriteTitleSnapshots();
+            }
             try
             {
                 Loading = true;
@@ -97,11 +102,6 @@ namespace AllLive.UWP.ViewModels
                 if (version != _refreshVersion)
                 {
                     return;
-                }
-                if (!loadRoomDetail)
-                {
-                    PreserveExistingLiveTitles(list);
-                    ApplyFavoriteLiveInfo(list, MessageCenter.GetFavoriteLiveInfoCache());
                 }
                 if (list.Count == 0)
                 {
@@ -117,6 +117,10 @@ namespace AllLive.UWP.ViewModels
                 if (version != _refreshVersion)
                 {
                     return;
+                }
+                if (!loadRoomDetail)
+                {
+                    ApplyStatusRefreshTitles(list, previousTitleStates);
                 }
                 ApplySortAndFilter(list);
             }
@@ -134,32 +138,71 @@ namespace AllLive.UWP.ViewModels
             }
         }
 
-        private void PreserveExistingLiveTitles(IList<FavoriteItem> items)
+        private Dictionary<string, FavoriteTitleSnapshot> CaptureFavoriteTitleSnapshots()
         {
-            if (items == null || Items == null || Items.Count == 0)
+            if (Items == null || Items.Count == 0)
+            {
+                return new Dictionary<string, FavoriteTitleSnapshot>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            return Items
+                .Where(x => x != null)
+                .GroupBy(GetFavoriteItemKey, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    x => x.Key,
+                    x =>
+                    {
+                        var item = x.First();
+                        return new FavoriteTitleSnapshot()
+                        {
+                            LiveStatus = item.LiveStatus,
+                            LiveTitle = item.LiveTitle ?? string.Empty
+                        };
+                    },
+                    StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static void ApplyStatusRefreshTitles(IList<FavoriteItem> items, IDictionary<string, FavoriteTitleSnapshot> previousTitleStates)
+        {
+            if (items == null)
             {
                 return;
             }
-            var titleMap = Items
-                .Where(x => !string.IsNullOrWhiteSpace(x.LiveTitle))
-                .GroupBy(GetFavoriteItemKey)
-                .ToDictionary(x => x.Key, x => x.First().LiveTitle, StringComparer.OrdinalIgnoreCase);
-            if (titleMap.Count == 0)
-            {
-                return;
-            }
+
             foreach (var item in items)
             {
-                if (titleMap.TryGetValue(GetFavoriteItemKey(item), out var title))
+                if (item == null)
                 {
-                    item.LiveTitle = title;
+                    continue;
                 }
+
+                if (!item.LiveStatus)
+                {
+                    item.LiveTitle = string.Empty;
+                    continue;
+                }
+
+                var title = string.Empty;
+                if (previousTitleStates != null
+                    && previousTitleStates.TryGetValue(GetFavoriteItemKey(item), out var previous)
+                    && previous.LiveStatus)
+                {
+                    title = NormalizeLiveTitle(previous.LiveTitle);
+                }
+
+                item.LiveTitle = title;
             }
         }
 
         private static string GetFavoriteItemKey(FavoriteItem item)
         {
             return $"{item?.SiteName}|{item?.RoomID}";
+        }
+
+        private class FavoriteTitleSnapshot
+        {
+            public bool LiveStatus { get; set; }
+            public string LiveTitle { get; set; }
         }
 
         public void ApplyFavoriteLiveInfo(FavoriteLiveInfo liveInfo)

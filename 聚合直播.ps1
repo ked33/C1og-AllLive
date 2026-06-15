@@ -3,10 +3,30 @@ $workDir = "D:\D-Software\source\C1og-AllLive"
 $uwpProcessName = "AllLive.UWP"
 $uwpAppId = "5421.24244EC421563_a5x6jjv384fej!App" 
 $serviceScriptName = "SignService.ps1"
+$launcherMutexName = "Local\C1og-AllLive.Launcher"
 
 # 强制控制台使用 UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 # ===========================================
+
+$launcherMutex = $null
+$launcherMutexCreated = $false
+try {
+    $launcherMutex = [System.Threading.Mutex]::new($true, $launcherMutexName, [ref]$launcherMutexCreated)
+} catch {
+    Write-Host "[错误] 创建启动脚本实例锁失败: $_" -ForegroundColor Red
+    Start-Sleep -Seconds 1
+    [System.Environment]::Exit(1)
+}
+
+if (-not $launcherMutexCreated) {
+    Write-Host "[退出] 已有聚合直播启动脚本在运行，关闭当前标签页。" -ForegroundColor Yellow
+    if ($launcherMutex) {
+        $launcherMutex.Dispose()
+    }
+    Start-Sleep -Milliseconds 300
+    [System.Environment]::Exit(0)
+}
 
 $code = @"
     [DllImport("user32.dll")]
@@ -93,6 +113,12 @@ finally {
     }
 
     Write-Host "[系统] 清理完毕。" -ForegroundColor White
+    if ($launcherMutex) {
+        try {
+            $launcherMutex.ReleaseMutex()
+        } catch {}
+        $launcherMutex.Dispose()
+    }
     Start-Sleep -Seconds 1
     [System.Environment]::Exit(0)
 }

@@ -160,17 +160,36 @@ namespace AllLive.Core
             var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader());
             var obj = JObject.Parse(result);
             var roomInfo = obj["data"]["room_info"];
-            var popularity = roomInfo["online"].ParseCountTextToLong() ?? 0;
-            const string popularitySource = "getInfoByRoom.room_info.online";
             var isLive = roomInfo["live_status"].ToInt32() == 1;
             var actualRoomId = roomInfo["room_id"].ToInt32();
-            var viewerCount = isLive ? await GetInitialViewerCount(actualRoomId) : null;
-            CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} getInfoByRoom.room_info.online={popularity}; initial ONLINE_RANK_COUNT={(viewerCount.HasValue ? viewerCount.Value.ToString() : "null")}");
+            long? viewerCount = null;
+            long? popularity = null;
+            string popularitySource = null;
+            if (isLive)
+            {
+                viewerCount = await GetInitialViewerCount(actualRoomId);
+                if (viewerCount.HasValue)
+                {
+                    CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT={viewerCount.Value}; 跳过热度回退");
+                }
+                else
+                {
+                    popularity = roomInfo["online"].ParseCountTextToLong();
+                    popularitySource = "getInfoByRoom.room_info.online";
+                    CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT=null; fallback {popularitySource}={(popularity.HasValue ? popularity.Value.ToString() : "null")}");
+                }
+            }
+            else
+            {
+                CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} 未开播，跳过初始观众数和热度");
+            }
+
+            var compatibleOnline = viewerCount ?? popularity ?? 0L;
 
             return new LiveRoomDetail()
             {
                 Cover = roomInfo["cover"].ToString(),
-                Online = ToCompatibleOnline(viewerCount ?? popularity),
+                Online = ToCompatibleOnline(compatibleOnline),
                 Popularity = popularity,
                 ViewerCount = viewerCount,
                 PopularitySource = popularitySource,
