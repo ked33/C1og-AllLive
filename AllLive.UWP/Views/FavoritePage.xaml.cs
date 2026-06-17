@@ -61,7 +61,7 @@ namespace AllLive.UWP.Views
             }
             else
             {
-                favoriteVM.ApplyCachedFavoriteLiveInfo();
+                favoriteVM.RefreshLiveStatusOnly();
             }
 
             StartAutoRefreshTimer();
