@@ -65,6 +65,7 @@ namespace AllLive.UWP.Views
         private string lastConfigSnapshot;
         private string lastUrlAnalysis;
         private string lastProbeSnapshot;
+        private string lastMediaInfoSnapshot;
         private string diagnosticsSnapshot;
         private Task diagnosticsSnapshotTask;
         private DateTimeOffset? lastHuyaRefreshUtc;
@@ -100,6 +101,10 @@ namespace AllLive.UWP.Views
         private string pendingSetPlayerUrl;
         private DateTimeOffset pendingSetPlayerUtc;
         private int mediaSourceAttemptVersion;
+        private System.Threading.CancellationTokenSource playbackSamplingCts;
+        private bool playbackStallProbeStarted;
+        private DateTimeOffset? currentBufferingStartedUtc;
+        private readonly Queue<string> playbackSampleHistory = new Queue<string>();
         private static readonly TimeSpan[] StreamReconnectDelays = new[]
         {
             TimeSpan.FromSeconds(1),
@@ -112,8 +117,18 @@ namespace AllLive.UWP.Views
         private const int MaxStreamReconnectAttempts = 6;
         private static readonly TimeSpan BufferingTimeout = TimeSpan.FromSeconds(8);
         private static readonly TimeSpan DuplicateSetPlayerWindow = TimeSpan.FromSeconds(2);
+        private static readonly TimeSpan PlaybackSampleInterval = TimeSpan.FromSeconds(2);
+        private static readonly TimeSpan PlaybackSampleDuration = TimeSpan.FromSeconds(30);
         private const int DefaultVideoDecoderIndex = 1;
+        private const int MaxPlaybackSampleHistory = 8;
         private bool updatingDecoderSelection;
+
+        private sealed class PlaybackSampleResult
+        {
+            public string Text { get; set; }
+            public bool Suspicious { get; set; }
+            public string Url { get; set; }
+        }
 
         public LiveRoomPage()
         {
@@ -286,6 +301,7 @@ namespace AllLive.UWP.Views
             {
                 PlayerLoading.Visibility = Visibility.Collapsed;
                 StopBufferingTimer();
+                LogBufferingEnded(sender);
             });
 
         }
@@ -304,6 +320,7 @@ namespace AllLive.UWP.Views
             {
                 PlayerLoading.Visibility = Visibility.Visible;
                 PlayerLoadText.Text = "缓冲中";
+                LogBufferingStarted(sender);
                 StartBufferingTimer();
             });
         }
@@ -349,6 +366,7 @@ namespace AllLive.UWP.Views
                 PlayerLoading.Visibility = Visibility.Collapsed;
                 lastMediaOpenedUtc = DateTimeOffset.UtcNow;
                 SetMediaInfo();
+                LogPlaybackMediaInfo("MediaOpened");
             });
         }
 
@@ -368,6 +386,8 @@ namespace AllLive.UWP.Views
                     {
                         lastPlaybackStartUtc = DateTimeOffset.UtcNow;
                         lastPlaybackUrl = liveRoomVM?.CurrentLine?.Url;
+                        LogPlaybackMediaInfo("Playing");
+                        StartPlaybackSampling(System.Threading.Volatile.Read(ref mediaSourceAttemptVersion));
                     }
                 }
                 switch (sender.PlaybackState)
@@ -424,6 +444,341 @@ namespace AllLive.UWP.Views
 
 
 
+        }
+
+        private void LogPlaybackMediaInfo(string source)
+        {
+            var mediaInfo = BuildPlaybackMediaInfoSnapshot(source);
+            if (string.IsNullOrWhiteSpace(mediaInfo))
+            {
+                return;
+            }
+
+            lastMediaInfoSnapshot = mediaInfo;
+            LogHelper.Log(mediaInfo, LogType.DEBUG);
+        }
+
+        private string BuildPlaybackMediaInfoSnapshot(string source)
+        {
+            if (interopMSS == null)
+            {
+                return null;
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"播放媒体信息 source={source}");
+            var context = BuildSafePlaybackContext();
+            if (!string.IsNullOrEmpty(context))
+            {
+                sb.AppendLine(context);
+            }
+            sb.AppendLine($"解码器索引: {GetEffectiveVideoDecoderIndex()}");
+            sb.AppendLine($"解码器日志值: {GetDecoderLogText(GetEffectiveVideoDecoderIndex())}");
+
+            try
+            {
+                var videoStream = interopMSS.CurrentVideoStream;
+                if (videoStream != null)
+                {
+                    AppendPlaybackValue(sb, "Video Codec", () => videoStream.CodecName);
+                    AppendPlaybackValue(sb, "Resolution", () => $"{videoStream.PixelWidth} x {videoStream.PixelHeight}");
+                    AppendPlaybackValue(sb, "Video Bitrate", () => $"{videoStream.Bitrate / 1024} Kbps");
+                    AppendPlaybackValue(sb, "Decoder Engine", () => videoStream.DecoderEngine.ToString());
+                }
+                else
+                {
+                    sb.AppendLine("Video Stream: null");
+                }
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine($"Video Stream读取失败: {BuildExceptionSummary(ex)}");
+            }
+
+            try
+            {
+                if (interopMSS.AudioStreams != null && interopMSS.AudioStreams.Count > 0)
+                {
+                    var audioStream = interopMSS.AudioStreams[0];
+                    AppendPlaybackValue(sb, "Audio Codec", () => audioStream.CodecName);
+                    AppendPlaybackValue(sb, "Audio Bitrate", () => $"{audioStream.Bitrate / 1024} Kbps");
+                }
+                else
+                {
+                    sb.AppendLine("Audio Stream: 空");
+                }
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine($"Audio Stream读取失败: {BuildExceptionSummary(ex)}");
+            }
+
+            var sessionSnapshot = BuildPlaybackSessionSnapshot(mediaPlayer?.PlaybackSession);
+            if (!string.IsNullOrEmpty(sessionSnapshot))
+            {
+                sb.AppendLine(sessionSnapshot);
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private void LogBufferingStarted(MediaPlaybackSession session)
+        {
+            currentBufferingStartedUtc = DateTimeOffset.UtcNow;
+            var snapshot = BuildPlaybackSessionSnapshot(session);
+            LogHelper.Log(JoinNonEmpty(
+                "BufferingStarted",
+                BuildSafePlaybackContext(),
+                snapshot), LogType.DEBUG);
+        }
+
+        private void LogBufferingEnded(MediaPlaybackSession session)
+        {
+            TimeSpan? duration = null;
+            if (currentBufferingStartedUtc.HasValue)
+            {
+                duration = DateTimeOffset.UtcNow - currentBufferingStartedUtc.Value;
+            }
+            currentBufferingStartedUtc = null;
+
+            var durationText = duration.HasValue
+                ? $"BufferingEnded durationMs={duration.Value.TotalMilliseconds:F0}"
+                : "BufferingEnded durationMs=unknown";
+            var snapshot = BuildPlaybackSessionSnapshot(session);
+            LogHelper.Log(JoinNonEmpty(
+                durationText,
+                BuildSafePlaybackContext(),
+                snapshot), LogType.DEBUG);
+        }
+
+        private void StartPlaybackSampling(int attemptVersion)
+        {
+            if (attemptVersion <= 0 || !IsMediaSourceAttemptCurrent(attemptVersion))
+            {
+                return;
+            }
+
+            CancelPlaybackSampling();
+            playbackStallProbeStarted = false;
+            playbackSampleHistory.Clear();
+            var cts = new System.Threading.CancellationTokenSource();
+            playbackSamplingCts = cts;
+            _ = RunPlaybackSamplingAsync(attemptVersion, cts);
+        }
+
+        private async Task RunPlaybackSamplingAsync(int attemptVersion, System.Threading.CancellationTokenSource cts)
+        {
+            var token = cts.Token;
+            var startedUtc = DateTimeOffset.UtcNow;
+            DateTimeOffset? previousUtc = null;
+            TimeSpan? previousPosition = null;
+            var sampleIndex = 0;
+
+            try
+            {
+                while (!token.IsCancellationRequested &&
+                    IsMediaSourceAttemptCurrent(attemptVersion) &&
+                    DateTimeOffset.UtcNow - startedUtc < PlaybackSampleDuration)
+                {
+                    await Task.Delay(PlaybackSampleInterval, token);
+                    if (token.IsCancellationRequested || !IsMediaSourceAttemptCurrent(attemptVersion))
+                    {
+                        return;
+                    }
+
+                    PlaybackSampleResult sample = null;
+                    var now = DateTimeOffset.UtcNow;
+                    await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+                    {
+                        if (token.IsCancellationRequested || !IsMediaSourceAttemptCurrent(attemptVersion))
+                        {
+                            return;
+                        }
+                        sampleIndex++;
+                        sample = BuildPlaybackSample(sampleIndex, now, previousUtc, previousPosition);
+                        if (sample != null && !string.IsNullOrEmpty(sample.Text))
+                        {
+                            AddPlaybackSampleHistory(sample.Text);
+                            LogHelper.Log(sample.Text, LogType.DEBUG);
+                        }
+                        previousUtc = now;
+                        previousPosition = TryReadPlaybackPosition(mediaPlayer?.PlaybackSession);
+                    });
+
+                    if (sample != null && sample.Suspicious && !playbackStallProbeStarted)
+                    {
+                        playbackStallProbeStarted = true;
+                        StartPlaybackStallProbe(sample.Url, sample.Text);
+                    }
+                }
+            }
+            catch (TaskCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"播放采样异常: {BuildExceptionSummary(ex)}", LogType.DEBUG);
+            }
+            finally
+            {
+                if (playbackSamplingCts == cts)
+                {
+                    playbackSamplingCts = null;
+                }
+                cts.Dispose();
+            }
+        }
+
+        private PlaybackSampleResult BuildPlaybackSample(int sampleIndex, DateTimeOffset now, DateTimeOffset? previousUtc, TimeSpan? previousPosition)
+        {
+            var session = mediaPlayer?.PlaybackSession;
+            if (session == null)
+            {
+                return null;
+            }
+
+            var position = TryReadPlaybackPosition(session);
+            var state = TryReadPlaybackState(session);
+            var wallDelta = previousUtc.HasValue ? now - previousUtc.Value : (TimeSpan?)null;
+            var positionDelta = previousPosition.HasValue && position.HasValue ? position.Value - previousPosition.Value : (TimeSpan?)null;
+            var suspicious = state == MediaPlaybackState.Playing &&
+                wallDelta.HasValue &&
+                wallDelta.Value.TotalSeconds >= 1.5 &&
+                (!positionDelta.HasValue || positionDelta.Value.TotalSeconds < 0.3);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"播放采样 #{sampleIndex}");
+            sb.AppendLine($"Utc: {now:O}");
+            sb.AppendLine($"State: {(state.HasValue ? state.Value.ToString() : "unknown")}");
+            sb.AppendLine($"Position: {(position.HasValue ? position.Value.ToString() : "unknown")}");
+            if (wallDelta.HasValue)
+            {
+                sb.AppendLine($"WallDeltaMs: {wallDelta.Value.TotalMilliseconds:F0}");
+            }
+            if (positionDelta.HasValue)
+            {
+                sb.AppendLine($"PositionDeltaMs: {positionDelta.Value.TotalMilliseconds:F0}");
+            }
+            else if (previousPosition.HasValue)
+            {
+                sb.AppendLine("PositionDeltaMs: unknown");
+            }
+            sb.AppendLine($"疑似进度停滞: {suspicious}");
+            AppendPlaybackValue(sb, "BufferingProgress", () => session.BufferingProgress.ToString("P"));
+            AppendPlaybackValue(sb, "DownloadProgress", () => session.DownloadProgress.ToString("P"));
+            AppendPlaybackValue(sb, "PlaybackRate", () => session.PlaybackRate.ToString());
+            sb.AppendLine($"AppMemory: {Windows.System.MemoryManager.AppMemoryUsage}");
+            sb.AppendLine($"ManagedMemory: {GC.GetTotalMemory(false)}");
+            var urlSummary = BuildUrlSummary(liveRoomVM?.CurrentLine?.Url ?? lastPlaybackUrl);
+            if (!string.IsNullOrEmpty(urlSummary))
+            {
+                sb.AppendLine(urlSummary);
+            }
+
+            return new PlaybackSampleResult
+            {
+                Text = sb.ToString().TrimEnd(),
+                Suspicious = suspicious,
+                Url = liveRoomVM?.CurrentLine?.Url ?? lastPlaybackUrl
+            };
+        }
+
+        private void StartPlaybackStallProbe(string url, string sampleText)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                var probe = await ProbeUrlAsync(url);
+                var flvProbe = await ProbeFlvAsync(url);
+                var merged = JoinNonEmpty(
+                    "疑似播放进度停滞预检",
+                    lastMediaInfoSnapshot,
+                    sampleText,
+                    BuildRecentPlaybackSamplesSnapshot(),
+                    probe,
+                    flvProbe);
+                if (!string.IsNullOrEmpty(merged))
+                {
+                    LogHelper.Log(merged, LogType.DEBUG);
+                }
+            });
+        }
+
+        private void CancelPlaybackSampling()
+        {
+            var cts = playbackSamplingCts;
+            playbackSamplingCts = null;
+            if (cts != null)
+            {
+                try { cts.Cancel(); } catch { }
+            }
+        }
+
+        private void ResetPlaybackDiagnosticsForNewAttempt()
+        {
+            CancelPlaybackSampling();
+            playbackStallProbeStarted = false;
+            currentBufferingStartedUtc = null;
+            lastMediaInfoSnapshot = null;
+            playbackSampleHistory.Clear();
+        }
+
+        private void AddPlaybackSampleHistory(string sample)
+        {
+            if (string.IsNullOrWhiteSpace(sample))
+            {
+                return;
+            }
+
+            playbackSampleHistory.Enqueue(sample);
+            while (playbackSampleHistory.Count > MaxPlaybackSampleHistory)
+            {
+                playbackSampleHistory.Dequeue();
+            }
+        }
+
+        private string BuildRecentPlaybackSamplesSnapshot()
+        {
+            if (playbackSampleHistory.Count == 0)
+            {
+                return null;
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine("最近播放采样:");
+            foreach (var sample in playbackSampleHistory)
+            {
+                sb.AppendLine(sample);
+            }
+            return sb.ToString().TrimEnd();
+        }
+
+        private TimeSpan? TryReadPlaybackPosition(MediaPlaybackSession session)
+        {
+            try
+            {
+                return session?.Position;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private MediaPlaybackState? TryReadPlaybackState(MediaPlaybackSession session)
+        {
+            try
+            {
+                return session?.PlaybackState;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         #endregion
@@ -849,11 +1204,13 @@ namespace AllLive.UWP.Views
 
         private int BeginMediaSourceAttempt()
         {
+            ResetPlaybackDiagnosticsForNewAttempt();
             return System.Threading.Interlocked.Increment(ref mediaSourceAttemptVersion);
         }
 
         private void InvalidateMediaSourceAttempt()
         {
+            CancelPlaybackSampling();
             System.Threading.Interlocked.Increment(ref mediaSourceAttemptVersion);
         }
 
@@ -1041,6 +1398,52 @@ namespace AllLive.UWP.Views
             }
             return sb.ToString().TrimEnd();
         }
+
+        private string BuildSafePlaybackContext()
+        {
+            var sb = new StringBuilder();
+            if (!string.IsNullOrEmpty(liveRoomVM?.SiteName))
+            {
+                sb.AppendLine($"站点: {liveRoomVM.SiteName}");
+            }
+            if (!string.IsNullOrEmpty(liveRoomVM?.RoomID))
+            {
+                sb.AppendLine($"房间ID: {liveRoomVM.RoomID}");
+            }
+            if (!string.IsNullOrEmpty(liveRoomVM?.Title))
+            {
+                sb.AppendLine($"标题: {liveRoomVM.Title}");
+            }
+            if (!string.IsNullOrEmpty(liveRoomVM?.CurrentQuality?.Quality))
+            {
+                sb.AppendLine($"清晰度: {liveRoomVM.CurrentQuality.Quality}");
+            }
+            if (liveRoomVM?.Lines != null && liveRoomVM.CurrentLine != null)
+            {
+                var lineIndex = liveRoomVM.Lines.IndexOf(liveRoomVM.CurrentLine);
+                if (lineIndex >= 0)
+                {
+                    sb.AppendLine($"线路: {liveRoomVM.CurrentLine.Name} ({lineIndex + 1}/{liveRoomVM.Lines.Count})");
+                }
+                else
+                {
+                    sb.AppendLine($"线路: {liveRoomVM.CurrentLine.Name}");
+                }
+            }
+            sb.AppendLine($"解码模式: {GetDecoderModeText()}");
+            var state = mediaPlayer?.PlaybackSession?.PlaybackState.ToString();
+            if (!string.IsNullOrEmpty(state))
+            {
+                sb.AppendLine($"播放器状态: {state}");
+            }
+            var urlSummary = BuildUrlSummary(liveRoomVM?.CurrentLine?.Url ?? lastPlaybackUrl);
+            if (!string.IsNullOrEmpty(urlSummary))
+            {
+                sb.AppendLine(urlSummary);
+            }
+            return sb.ToString().TrimEnd();
+        }
+
         private string BuildConfigSnapshot(MediaSourceConfig config)
         {
             if (config == null)
@@ -1121,6 +1524,31 @@ namespace AllLive.UWP.Views
                 return $"URL分析失败: {BuildExceptionSummary(ex)}";
             }
         }
+
+        private string BuildUrlSummary(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return null;
+            }
+
+            try
+            {
+                var uri = new Uri(url);
+                var sb = new StringBuilder();
+                sb.AppendLine("URL摘要:");
+                sb.AppendLine($"Scheme: {uri.Scheme}");
+                sb.AppendLine($"Host: {uri.Host}");
+                sb.AppendLine($"Path: {uri.AbsolutePath}");
+                sb.AppendLine($"QueryLength: {uri.Query?.Length ?? 0}");
+                return sb.ToString().TrimEnd();
+            }
+            catch (Exception ex)
+            {
+                return $"URL摘要失败: {BuildExceptionSummary(ex)}";
+            }
+        }
+
         private string BuildPlaybackSessionSnapshot(MediaPlaybackSession session)
         {
             if (session == null)
@@ -1159,7 +1587,12 @@ namespace AllLive.UWP.Views
             {
                 var probe = await ProbeUrlAsync(url);
                 var flvProbe = await ProbeFlvAsync(url);
-                var merged = JoinNonEmpty($"短播放预检: {reasonText}", probe, flvProbe);
+                var merged = JoinNonEmpty(
+                    $"短播放预检: {reasonText}",
+                    lastMediaInfoSnapshot,
+                    BuildRecentPlaybackSamplesSnapshot(),
+                    probe,
+                    flvProbe);
                 if (!string.IsNullOrEmpty(merged))
                 {
                     LogHelper.Log(merged, LogType.DEBUG);
@@ -1611,6 +2044,15 @@ namespace AllLive.UWP.Views
             {
                 sb.AppendLine(diagnosticsSnapshot);
             }
+            if (!string.IsNullOrEmpty(lastMediaInfoSnapshot))
+            {
+                sb.AppendLine(lastMediaInfoSnapshot);
+            }
+            var samples = BuildRecentPlaybackSamplesSnapshot();
+            if (!string.IsNullOrEmpty(samples))
+            {
+                sb.AppendLine(samples);
+            }
             var exceptionDetail = BuildExceptionDetail(ex);
             if (!string.IsNullOrEmpty(exceptionDetail))
             {
@@ -1994,8 +2436,12 @@ namespace AllLive.UWP.Views
             lastConfigSnapshot = null;
             lastUrlAnalysis = null;
             lastProbeSnapshot = null;
+            lastMediaInfoSnapshot = null;
             diagnosticsSnapshot = null;
             diagnosticsSnapshotTask = null;
+            playbackStallProbeStarted = false;
+            currentBufferingStartedUtc = null;
+            playbackSampleHistory.Clear();
 
             if (mediaPlayer != null)
             {
