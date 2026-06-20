@@ -621,82 +621,426 @@ namespace AllLive.Core
                 return Task.FromResult(qualities);
             }
             var data = roomDetail.Data as JToken;
-            var qulityList = data["live_core_sdk_data"]["pull_data"]["options"]["qualities"];
-            var streamData = data["live_core_sdk_data"]["pull_data"]["stream_data"].ToString();
-
-            if (!streamData.StartsWith("{"))
+            if (data == null)
             {
-                var flvList = (data["flv_pull_url"] as JToken).Values().Select(c => c.ToString()).ToList();
-                var hlsList = (data["hls_pull_url_map"] as JToken).Values().Select(c => c.ToString()).ToList();
-                foreach (var quality in qulityList)
+                return Task.FromResult(qualities);
+            }
+
+            MergeDouyinOriginStream(data, roomDetail.RoomID);
+
+            var qulityList = data["live_core_sdk_data"]?["pull_data"]?["options"]?["qualities"] as JArray;
+            var streamData = GetDouyinStreamData(data);
+            var streamDataRoot = TryParseDouyinStreamData(streamData);
+            var streamQualityData = streamDataRoot?["data"] as JObject;
+            var flvCandidates = BuildDouyinCandidates(data, streamQualityData, "flv", "flv_pull_url");
+            var hlsCandidates = BuildDouyinCandidates(data, streamQualityData, "hls", "hls_pull_url_map");
+            var legacyFlvList = ReadDouyinMapUrls(data["flv_pull_url"]);
+            var legacyHlsList = ReadDouyinMapUrls(data["hls_pull_url_map"]);
+            var streamKeys = streamQualityData?.Properties().Select(p => p.Name).ToList() ?? new List<string>();
+
+            CoreDebug.Log($"[Douyin] 取流候选 roomId={roomDetail.RoomID} qualities={qulityList?.Count ?? 0} flvKeys={BuildKeyListForLog(flvCandidates)} hlsKeys={BuildKeyListForLog(hlsCandidates)} streamKeys={string.Join(",", streamKeys)}");
+
+            if (qulityList == null)
+            {
+                return Task.FromResult(qualities);
+            }
+
+            foreach (var quality in qulityList)
+            {
+                int level = quality["level"]?.ToObject<int>() ?? 0;
+                var qualityName = quality["name"]?.ToString() ?? "";
+                var sdkKey = quality["sdk_key"]?.ToString() ?? "";
+                var preferredKeys = BuildDouyinPreferredKeys(qualityName, sdkKey, level);
+                var urls = BuildDouyinQualityUrls(
+                    preferredKeys,
+                    flvCandidates,
+                    hlsCandidates,
+                    legacyFlvList,
+                    legacyHlsList,
+                    level);
+
+                CoreDebug.Log($"[Douyin] 清晰度候选 roomId={roomDetail.RoomID} quality={qualityName} level={level} sdkKey={sdkKey} prefer={string.Join(",", preferredKeys)} urls={BuildUrlListBrief(urls)}");
+
+                if (urls.Count > 0)
                 {
-                    int level = quality["level"].ToObject<int>();
-                    List<String> urls = new List<string>();
-                    var flvIndex = flvList.Count - level;
-                    if (flvIndex >= 0 && flvIndex < flvList.Count)
+                    qualities.Add(new LivePlayQuality()
                     {
-                        urls.Add(flvList[flvIndex]);
-                    }
-                    var hlsIndex = hlsList.Count - level;
-                    if (hlsIndex >= 0 && hlsIndex < hlsList.Count)
-                    {
-                        urls.Add(hlsList[hlsIndex]);
-                    }
-                    var qualityItem = new LivePlayQuality()
-                    {
-                        Quality = quality["name"].ToString(),
+                        Quality = qualityName,
                         Sort = level,
                         Data = urls,
-                    };
-                    if (urls.Count > 0)
-                    {
-                        qualities.Add(qualityItem);
-                    }
+                    });
                 }
             }
-            else
-            {
-                var qualityData = JObject.Parse(streamData)["data"] as JObject;
-                foreach (var quality in qulityList)
-                {
-                    List<string> urls = new List<string>();
 
-                    var flvUrl =
-                        qualityData[quality["sdk_key"].ToString()]?["main"]?["flv"]?.ToString();
-
-                    if (flvUrl != null && flvUrl.Length > 0)
-                    {
-                        urls.Add(flvUrl);
-                    }
-                    var hlsUrl =
-                        qualityData[quality["sdk_key"].ToString()]?["main"]?["hls"]?.ToString();
-                    if (hlsUrl != null && hlsUrl.Length > 0)
-                    {
-                        urls.Add(hlsUrl);
-                    }
-                    var qualityItem = new LivePlayQuality()
-                    {
-                        Quality = quality["name"].ToString(),
-                        Sort = quality["level"].ToObject<int>(),
-                        Data = urls,
-                    };
-                    if (urls.Count > 0)
-                    {
-                        qualities.Add(qualityItem);
-                    }
-                }
-            }
-            // var qualityData = json.decode(
-            //     detail.data["live_core_sdk_data"]["pull_data"]["stream_data"])["data"];
-
-            //qualities.sort((a, b) => b.sort.compareTo(a.sort));
             qualities = qualities.OrderByDescending(q => q.Sort).ToList();
             return Task.FromResult(qualities);
         }
 
         public Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn)
         {
-            return Task.FromResult(qn.Data as List<string>);
+            var urls = qn?.Data as List<string> ?? new List<string>();
+            CoreDebug.Log($"[Douyin] 播放URL选择 roomId={roomDetail?.RoomID} quality={qn?.Quality} total={urls.Count} flv={urls.Count(IsFlvUrl)} hls={urls.Count(IsHlsUrl)} first={BuildDouyinUrlBrief(urls.FirstOrDefault())}");
+            return Task.FromResult(urls);
+        }
+
+        private class DouyinStreamCandidate
+        {
+            public string Key { get; set; }
+            public string Url { get; set; }
+            public string Source { get; set; }
+        }
+
+        private static void MergeDouyinOriginStream(JToken streamUrl, string roomId)
+        {
+            var streamData = GetDouyinStreamData(streamUrl);
+            var streamDataRoot = TryParseDouyinStreamData(streamData);
+            var originMain = streamDataRoot?["data"]?["origin"]?["main"];
+            if (originMain == null)
+            {
+                CoreDebug.Log($"[Douyin] ORIGIN补源跳过 roomId={roomId} reason=origin_missing");
+                return;
+            }
+
+            var originCodec = TryGetDouyinOriginCodec(originMain["sdk_params"]?.ToString());
+            var originFlv = AppendDouyinCodec(originMain["flv"]?.ToString(), originCodec);
+            var originHls = AppendDouyinCodec(originMain["hls"]?.ToString(), originCodec);
+            var addedFlv = InsertDouyinOriginUrl(streamUrl, "flv_pull_url", originFlv);
+            var addedHls = InsertDouyinOriginUrl(streamUrl, "hls_pull_url_map", originHls);
+
+            CoreDebug.Log($"[Douyin] ORIGIN补源 roomId={roomId} flv={BuildDouyinUrlBrief(originFlv)} hls={BuildDouyinUrlBrief(originHls)} codec={originCodec} addedFlv={addedFlv} addedHls={addedHls}");
+        }
+
+        private static string GetDouyinStreamData(JToken streamUrl)
+        {
+            var pullDatas = streamUrl?["pull_datas"] as JObject;
+            if (pullDatas != null)
+            {
+                foreach (var property in pullDatas.Properties())
+                {
+                    var streamData = property.Value?["stream_data"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(streamData))
+                    {
+                        return streamData;
+                    }
+                }
+            }
+
+            return streamUrl?["live_core_sdk_data"]?["pull_data"]?["stream_data"]?.ToString() ?? "";
+        }
+
+        private static JObject TryParseDouyinStreamData(string streamData)
+        {
+            if (string.IsNullOrWhiteSpace(streamData) || !streamData.TrimStart().StartsWith("{"))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JObject.Parse(streamData);
+            }
+            catch (Exception ex)
+            {
+                CoreDebug.Log($"[Douyin] stream_data解析失败: {ex.GetType().FullName}: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static string TryGetDouyinOriginCodec(string sdkParams)
+        {
+            if (string.IsNullOrWhiteSpace(sdkParams))
+            {
+                return "";
+            }
+
+            try
+            {
+                return JObject.Parse(sdkParams)["VCodec"]?.ToString() ?? "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static string AppendDouyinCodec(string url, string codec)
+        {
+            if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(codec))
+            {
+                return url;
+            }
+            if (Regex.IsMatch(url, @"[?&]codec=", RegexOptions.IgnoreCase))
+            {
+                return url;
+            }
+
+            var separator = url.Contains("?") ? "&" : "?";
+            return $"{url}{separator}codec={HttpUtility.UrlEncode(codec)}";
+        }
+
+        private static bool InsertDouyinOriginUrl(JToken streamUrl, string mapName, string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return false;
+            }
+
+            var streamObject = streamUrl as JObject;
+            if (streamObject == null)
+            {
+                return false;
+            }
+
+            var existingMap = streamObject[mapName] as JObject;
+            var newMap = new JObject
+            {
+                ["ORIGIN"] = url
+            };
+            if (existingMap != null)
+            {
+                foreach (var property in existingMap.Properties().ToList())
+                {
+                    if (!string.Equals(property.Name, "ORIGIN", StringComparison.OrdinalIgnoreCase))
+                    {
+                        newMap[property.Name] = property.Value.DeepClone();
+                    }
+                }
+            }
+            streamObject[mapName] = newMap;
+            return true;
+        }
+
+        private static List<DouyinStreamCandidate> BuildDouyinCandidates(JToken streamUrl, JObject streamQualityData, string protocol, string mapName)
+        {
+            var candidates = new List<DouyinStreamCandidate>();
+            AddDouyinMapCandidates(candidates, streamUrl?[mapName] as JObject, mapName);
+            AddDouyinStreamDataCandidates(candidates, streamQualityData, protocol);
+            return candidates;
+        }
+
+        private static void AddDouyinMapCandidates(List<DouyinStreamCandidate> candidates, JObject map, string source)
+        {
+            if (map == null)
+            {
+                return;
+            }
+
+            foreach (var property in map.Properties())
+            {
+                AddDouyinCandidate(candidates, property.Name, property.Value?.ToString(), source);
+            }
+        }
+
+        private static void AddDouyinStreamDataCandidates(List<DouyinStreamCandidate> candidates, JObject streamQualityData, string protocol)
+        {
+            if (streamQualityData == null)
+            {
+                return;
+            }
+
+            foreach (var property in streamQualityData.Properties())
+            {
+                var url = property.Value?["main"]?[protocol]?.ToString();
+                AddDouyinCandidate(candidates, property.Name, url, "stream_data");
+            }
+        }
+
+        private static void AddDouyinCandidate(List<DouyinStreamCandidate> candidates, string key, string url, string source)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+            if (candidates.Any(x => string.Equals(x.Url, url, StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            candidates.Add(new DouyinStreamCandidate
+            {
+                Key = key ?? "",
+                Url = url,
+                Source = source,
+            });
+        }
+
+        private static List<string> BuildDouyinPreferredKeys(string qualityName, string sdkKey, int level)
+        {
+            var keys = new List<string>();
+            var normalizedName = qualityName ?? "";
+            var normalizedSdkKey = (sdkKey ?? "").Trim();
+            var upperSdkKey = normalizedSdkKey.ToUpperInvariant();
+
+            if (normalizedName.Contains("原画") || upperSdkKey == "ORIGIN" || upperSdkKey == "OD")
+            {
+                AddKey(keys, "ORIGIN");
+                AddKey(keys, "origin");
+                AddKey(keys, "OD");
+                AddKey(keys, "FULL_HD1");
+            }
+            else if (normalizedName.Contains("高清") || upperSdkKey == "UHD" || upperSdkKey == "FULL_HD1")
+            {
+                AddKey(keys, "FULL_HD1");
+                AddKey(keys, "UHD");
+                AddKey(keys, "HD1");
+            }
+            else if (normalizedName.Contains("标清") || upperSdkKey == "BD" || upperSdkKey == "HD1")
+            {
+                AddKey(keys, "HD1");
+                AddKey(keys, "BD");
+                AddKey(keys, "SD1");
+                AddKey(keys, "SD2");
+            }
+            else if (normalizedName.Contains("流畅") || upperSdkKey == "SD" || upperSdkKey == "SD1" || upperSdkKey == "SD2")
+            {
+                AddKey(keys, "SD1");
+                AddKey(keys, "SD2");
+                AddKey(keys, "LD");
+            }
+
+            AddKey(keys, normalizedSdkKey);
+            if (level >= 3)
+            {
+                AddKey(keys, "ORIGIN");
+                AddKey(keys, "FULL_HD1");
+            }
+            AddKey(keys, "FULL_HD1");
+            AddKey(keys, "HD1");
+            AddKey(keys, "SD1");
+            AddKey(keys, "SD2");
+            return keys;
+        }
+
+        private static List<string> BuildDouyinQualityUrls(
+            List<string> preferredKeys,
+            List<DouyinStreamCandidate> flvCandidates,
+            List<DouyinStreamCandidate> hlsCandidates,
+            List<string> legacyFlvList,
+            List<string> legacyHlsList,
+            int level)
+        {
+            var urls = new List<string>();
+            AddCandidatesByKeys(urls, preferredKeys, flvCandidates);
+            AddLegacyUrlByLevel(urls, legacyFlvList, level);
+            AddCandidatesByKeys(urls, preferredKeys, hlsCandidates);
+            AddLegacyUrlByLevel(urls, legacyHlsList, level);
+            return urls;
+        }
+
+        private static void AddCandidatesByKeys(List<string> urls, List<string> preferredKeys, List<DouyinStreamCandidate> candidates)
+        {
+            foreach (var key in preferredKeys)
+            {
+                foreach (var candidate in candidates.Where(x => string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase)))
+                {
+                    AddUrlDistinct(urls, candidate.Url);
+                }
+            }
+        }
+
+        private static void AddLegacyUrlByLevel(List<string> urls, List<string> legacyUrls, int level)
+        {
+            var index = legacyUrls.Count - level;
+            if (index >= 0 && index < legacyUrls.Count)
+            {
+                AddUrlDistinct(urls, legacyUrls[index]);
+            }
+        }
+
+        private static List<string> ReadDouyinMapUrls(JToken map)
+        {
+            var mapObject = map as JObject;
+            if (mapObject == null)
+            {
+                return new List<string>();
+            }
+
+            return mapObject.Properties()
+                .Where(p => !string.Equals(p.Name, "ORIGIN", StringComparison.OrdinalIgnoreCase))
+                .Select(p => p.Value?.ToString())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToList();
+        }
+
+        private static void AddUrlDistinct(List<string> urls, string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+            if (!urls.Any(x => string.Equals(x, url, StringComparison.OrdinalIgnoreCase)))
+            {
+                urls.Add(url);
+            }
+        }
+
+        private static void AddKey(List<string> keys, string key)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return;
+            }
+            if (!keys.Any(x => string.Equals(x, key, StringComparison.OrdinalIgnoreCase)))
+            {
+                keys.Add(key);
+            }
+        }
+
+        private static string BuildKeyListForLog(List<DouyinStreamCandidate> candidates)
+        {
+            return string.Join(",", candidates.Select(x => $"{x.Key}:{x.Source}"));
+        }
+
+        private static string BuildUrlListBrief(List<string> urls)
+        {
+            if (urls == null || urls.Count == 0)
+            {
+                return "";
+            }
+
+            return string.Join(";", urls.Select(BuildDouyinUrlBrief));
+        }
+
+        private static string BuildDouyinUrlBrief(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return "";
+            }
+
+            try
+            {
+                Uri uri;
+                if (Uri.TryCreate(url, UriKind.Absolute, out uri))
+                {
+                    var codecMatch = Regex.Match(uri.Query ?? "", @"[?&]codec=([^&]+)", RegexOptions.IgnoreCase);
+                    var codec = codecMatch.Success ? $"?codec={codecMatch.Groups[1].Value}" : "";
+                    return $"{uri.Host}{uri.AbsolutePath}{codec}";
+                }
+            }
+            catch
+            {
+            }
+
+            return TrimForLog(url, 160);
+        }
+
+        private static bool IsFlvUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return false;
+            }
+            return url.IndexOf(".flv", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsHlsUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return false;
+            }
+            return url.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public async Task<LiveSearchResult> Search(string keyword, int page = 1)
