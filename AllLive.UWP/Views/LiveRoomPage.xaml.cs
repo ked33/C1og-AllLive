@@ -120,6 +120,7 @@ namespace AllLive.UWP.Views
         private static readonly TimeSpan PlaybackSampleInterval = TimeSpan.FromSeconds(2);
         private static readonly TimeSpan PlaybackSampleDuration = TimeSpan.FromSeconds(30);
         private const int DefaultVideoDecoderIndex = 1;
+        private const int ExperimentalD3D11VideoDecoderIndex = 3;
         private const int MaxPlaybackSampleHistory = 8;
         private bool updatingDecoderSelection;
 
@@ -1342,6 +1343,8 @@ namespace AllLive.UWP.Views
                     return "系统硬解";
                 case 2:
                     return "FFmpeg软件解码";
+                case ExperimentalD3D11VideoDecoderIndex:
+                    return "实验D3D11VA";
                 default:
                     return "自动";
             }
@@ -2103,6 +2106,11 @@ namespace AllLive.UWP.Views
                         break;
                     case 2:
                         config.Video.VideoDecoderMode = VideoDecoderMode.ForceFFmpegSoftwareDecoder;
+                        break;
+                    case ExperimentalD3D11VideoDecoderIndex:
+                        config.Video.VideoDecoderMode = VideoDecoderMode.Automatic;
+                        config.FFmpegOptions.Add("hwaccel", "d3d11va");
+                        config.FFmpegOptions.Add("hwaccel_output_format", "d3d11");
                         break;
                     default:
                         config.Video.VideoDecoderMode = VideoDecoderMode.Automatic;
@@ -2931,7 +2939,7 @@ namespace AllLive.UWP.Views
 
         private int ClampVideoDecoderIndex(int value)
         {
-            return value >= 0 && value <= 2 ? value : DefaultVideoDecoderIndex;
+            return value >= 0 && value <= ExperimentalD3D11VideoDecoderIndex ? value : DefaultVideoDecoderIndex;
         }
 
         private void SyncDecoderControls(int decoder)
@@ -3027,6 +3035,8 @@ namespace AllLive.UWP.Views
                     return "硬解";
                 case 2:
                     return "软解";
+                case ExperimentalD3D11VideoDecoderIndex:
+                    return "D3D11VA";
                 default:
                     return "自动解码";
             }
@@ -3040,6 +3050,8 @@ namespace AllLive.UWP.Views
                     return "ForceSystemDecoder";
                 case 2:
                     return "ForceFFmpegSoftwareDecoder";
+                case ExperimentalD3D11VideoDecoderIndex:
+                    return "ExperimentalD3D11VA";
                 default:
                     return "Automatic";
             }

@@ -239,6 +239,7 @@
                                             <ComboBoxItem>自动</ComboBoxItem>
                                             <ComboBoxItem>强制硬解</ComboBoxItem>
                                             <ComboBoxItem>强制软解</ComboBoxItem>
+                                            <ComboBoxItem>实验D3D11VA</ComboBoxItem>
                                         </ComboBox.Items>
                                     </ComboBox>
                                 </Grid>
@@ -690,6 +691,7 @@
                                             <ComboBoxItem>自动</ComboBoxItem>
                                             <ComboBoxItem>硬解</ComboBoxItem>
                                             <ComboBoxItem>软解</ComboBoxItem>
+                                            <ComboBoxItem>D3D11VA</ComboBoxItem>
                                         </ComboBox.Items>
                                     </ComboBox>
                                     <Button
@@ -1172,6 +1174,7 @@
                                             <ComboBoxItem>自动</ComboBoxItem>
                                             <ComboBoxItem>强制硬解</ComboBoxItem>
                                             <ComboBoxItem>强制软解</ComboBoxItem>
+                                            <ComboBoxItem>实验D3D11VA</ComboBoxItem>
                                         </ComboBox.Items>
                                     </ComboBox>
                                     <TextBlock Margin="0,12,0,0">保留醒目留言</TextBlock>

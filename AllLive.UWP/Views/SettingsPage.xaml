@@ -175,6 +175,7 @@
                                 <ComboBoxItem>自动</ComboBoxItem>
                                 <ComboBoxItem>硬件解码</ComboBoxItem>
                                 <ComboBoxItem>软件解码</ComboBoxItem>
+                                <ComboBoxItem>实验D3D11VA</ComboBoxItem>
                             </ComboBox.Items>
                         </ComboBox>
                     </Grid>

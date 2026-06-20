@@ -195,7 +195,7 @@ namespace AllLive.UWP.Views
                 });
             });
             //视频解码
-            cbDecoder.SelectedIndex = SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1);
+            cbDecoder.SelectedIndex = ClampInt(SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1), 0, 3);
             cbDecoder.Loaded += new RoutedEventHandler((sender, e) =>
             {
                 cbDecoder.SelectionChanged += new SelectionChangedEventHandler((obj, args) =>
@@ -583,7 +583,7 @@ namespace AllLive.UWP.Views
             var favoriteRefreshMinutes = NormalizeFavoriteRefreshMinutes(data.FavoriteAutoRefreshMinutes);
             var favoriteHideOffline = data.FavoriteHideOffline ?? SettingHelper.GetValue<bool>(SettingHelper.FAVORITE_HIDE_OFFLINE, false);
             var newWindowLiveRoom = data.NewWindowLiveRoom ?? SettingHelper.GetValue<bool>(SettingHelper.NEW_WINDOW_LIVEROOM, true);
-            var videoDecoder = ClampInt(data.VideoDecoder ?? SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1), 0, 2);
+            var videoDecoder = ClampInt(data.VideoDecoder ?? SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1), 0, 3);
             var douyuSignEnabled = data.DouyuSignEnabled ?? SettingHelper.GetValue<bool>(SettingHelper.DOUYU_SIGN_ENABLED, true);
             var douyuSignUrl = data.DouyuSignUrl ?? SettingHelper.GetValue<string>(SettingHelper.DOUYU_SIGN_URL, SettingHelper.DOUYU_SIGN_URL_DEFAULT);
             var douyinSignEnabled = data.DouyinSignEnabled ?? SettingHelper.GetValue<bool>(SettingHelper.DOUYIN_SIGN_ENABLED, true);
