@@ -1,4 +1,5 @@
-﻿using AllLive.Core.Interface;
+﻿using AllLive.Core;
+using AllLive.Core.Interface;
 using AllLive.Core.Models;
 using System;
 using System.Collections.Generic;
@@ -575,6 +576,11 @@ namespace AllLive.UWP.ViewModels
                     UserName = Name
                 });
 
+            }
+            catch (DouyinRoomDataBlockedException ex)
+            {
+                LogHelper.Log(ex.Message, LogType.ERROR, ex);
+                Utils.ShowMessageToast(DouyinRoomDataBlockedException.UserMessage);
             }
             catch (Exception ex)
             {

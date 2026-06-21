@@ -18,6 +18,21 @@ using System.Xml.Linq;
 
 namespace AllLive.Core
 {
+    public class DouyinRoomDataBlockedException : Exception
+    {
+        public const string UserMessage = "抖音验证码/风控拦截，请稍后重试或在设置中填写抖音Cookie";
+
+        public DouyinRoomDataBlockedException(string detail)
+            : base($"{UserMessage}。{detail}")
+        {
+        }
+
+        public DouyinRoomDataBlockedException(string detail, Exception innerException)
+            : base($"{UserMessage}。{detail}", innerException)
+        {
+        }
+    }
+
     public class Douyin : ILiveSite
     {
         public string Name => "抖音直播";
@@ -28,6 +43,12 @@ namespace AllLive.Core
         private const string ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en;q=0.8";
         private const string REFERER = "https://live.douyin.com";
         private const string AUTHORITY = "live.douyin.com";
+        private static readonly TimeSpan[] RoomDetailRetryDelays =
+        {
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(15),
+            TimeSpan.FromSeconds(30),
+        };
 
         Dictionary<string, string> headers = new Dictionary<string, string>
         {
@@ -341,6 +362,37 @@ namespace AllLive.Core
         /// <returns></returns>
         private async Task<LiveRoomDetail> GetRoomDetailByWebRid(string webRid)
         {
+            Exception lastBlockedException = null;
+            var totalAttempts = RoomDetailRetryDelays.Length + 1;
+            for (var attempt = 1; attempt <= totalAttempts; attempt++)
+            {
+                try
+                {
+                    if (attempt > 1)
+                    {
+                        CoreDebug.Log($"[Douyin] 房间详情重试开始 webRid={webRid} attempt={attempt}/{totalAttempts}");
+                    }
+                    return await GetRoomDetailByWebRidOnce(webRid);
+                }
+                catch (DouyinRoomDataBlockedException ex)
+                {
+                    lastBlockedException = ex;
+                    if (attempt >= totalAttempts)
+                    {
+                        break;
+                    }
+
+                    var delay = RoomDetailRetryDelays[attempt - 1];
+                    CoreDebug.Log($"[Douyin] 房间详情被风控/验证码拦截，准备重试 webRid={webRid} attempt={attempt}/{totalAttempts} delayMs={(int)delay.TotalMilliseconds} err={ex.Message}");
+                    await Task.Delay(delay);
+                }
+            }
+
+            throw new DouyinRoomDataBlockedException($"已重试{totalAttempts}次仍无法读取直播间数据", lastBlockedException);
+        }
+
+        private async Task<LiveRoomDetail> GetRoomDetailByWebRidOnce(string webRid)
+        {
             try
             {
                 var result = await GetRoomDetailByWebRidApi(webRid);
@@ -481,29 +533,7 @@ namespace AllLive.Core
         /// <returns></returns>
         private async Task<string> GetWebCookie(string webRid)
         {
-            var manualCookie = CoreConfig.GetDouyinCookie();
-            if (!string.IsNullOrWhiteSpace(manualCookie))
-            {
-                return await ResolveCookieAsync(webRid);
-            }
-            var dyCookie = "";
-            using (var resp = await HttpUtil.Head($"https://live.douyin.com/{webRid}",
-                headers: await GetRequestHeaders()
-            ))
-            {
-                if (resp.Headers.TryGetValues("Set-Cookie", out var values))
-                {
-                    foreach (var item in values)
-                    {
-                        var cookie = item.Split(';')[0];
-                        if (cookie.Contains("ttwid") || cookie.Contains("__ac_nonce") || cookie.Contains("msToken"))
-                        {
-                            dyCookie += $"{cookie};";
-                        }
-                    }
-                }
-            }
-            return dyCookie;
+            return await ResolveCookieAsync(webRid);
         }
 
         /// <summary>
@@ -541,6 +571,12 @@ namespace AllLive.Core
                 if (!response.IsSuccessStatusCode && statusCode == 444)
                 {
                     CoreDebug.Log("[Douyin] GetRoomDataHtml触发风控(444)");
+                    throw new DouyinRoomDataBlockedException("直播间HTML请求返回444");
+                }
+                if (IsDouyinCaptchaPage(resp))
+                {
+                    CoreDebug.Log("[Douyin] GetRoomDataHtml触发验证码中间页");
+                    throw new DouyinRoomDataBlockedException("直播间HTML返回验证码中间页");
                 }
 
                 var state = TryParseRenderData(resp);
@@ -555,7 +591,7 @@ namespace AllLive.Core
                 if (string.IsNullOrEmpty(json))
                 {
                     CoreDebug.Log("[Douyin] GetRoomDataHtml解析失败: 未找到RENDER_DATA或state");
-                    throw new Exception("无法读取直播间数据");
+                    throw new DouyinRoomDataBlockedException("直播间HTML缺少RENDER_DATA或state");
                 }
                 json = json.Trim().Replace("\\\"", "\"").Replace("\\\\", "\\").Replace("]\\n", "");
                 return JObject.Parse(json)["state"];
@@ -587,9 +623,24 @@ namespace AllLive.Core
             var url = $"https://live.douyin.com/webcast/room/web/enter/?{Utils.BuildQueryString(reqParams)}";
 
             var requestUrl = await GetABougs(url);
-            var resp = await HttpUtil.GetString(requestUrl,
-                headers: await GetRequestHeaders()
-            );
+            string resp;
+            using (var response = await HttpUtil.Get(requestUrl,
+                headers: await GetRequestHeaders(),
+                ensureSuccess: false
+            ))
+            {
+                resp = await response.Content.ReadAsStringAsync();
+                var statusCode = (int)response.StatusCode;
+                if (!response.IsSuccessStatusCode)
+                {
+                    CoreDebug.Log($"[Douyin] GetRoomDataApi status={statusCode} respLen={resp?.Length ?? 0} head={TrimForLog(resp)}");
+                    if (statusCode == 444)
+                    {
+                        throw new DouyinRoomDataBlockedException("直播间详情API返回444");
+                    }
+                    response.EnsureSuccessStatusCode();
+                }
+            }
 
 
            
@@ -1251,6 +1302,16 @@ namespace AllLive.Core
             }
         }
 
+        private static bool IsDouyinCaptchaPage(string html)
+        {
+            if (string.IsNullOrEmpty(html))
+            {
+                return false;
+            }
+            return html.IndexOf("验证码中间页", StringComparison.OrdinalIgnoreCase) >= 0
+                || html.IndexOf("captcha", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         private static string TrimForLog(string value, int maxLen = 200)
         {
             if (string.IsNullOrEmpty(value))
@@ -1285,6 +1346,15 @@ namespace AllLive.Core
             if (!string.IsNullOrWhiteSpace(manualCookie))
             {
                 cookieMap = ParseCookie(NormalizeCookie(manualCookie));
+            }
+            else
+            {
+                string existingCookie;
+                if ((headers.TryGetValue("Cookie", out existingCookie) || headers.TryGetValue("cookie", out existingCookie))
+                    && !string.IsNullOrWhiteSpace(existingCookie))
+                {
+                    cookieMap = ParseCookie(existingCookie);
+                }
             }
 
             if (!cookieMap.ContainsKey("ttwid"))
