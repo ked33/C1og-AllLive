@@ -37,6 +37,7 @@ using Windows.Media.Playback;
 using System.Text;
 using Windows.Web.Http;
 using Windows.Web.Http.Headers;
+using Windows.Web;
 using Windows.Networking.Connectivity;
 using Windows.System.Profile;
 using Windows.Storage.Streams;
@@ -137,6 +138,8 @@ namespace AllLive.UWP.Views
         private const uint UrlFirstBytesProbeBytes = 32;
         private const uint FlvDiagnosticProbeBytes = 1048576;
         private const uint ThroughputProbeBytes = 1048576;
+        private const uint ConnectivityProbeBytes = 4096;
+        private const string ConnectivityProbeUrl = "http://www.msftconnecttest.com/connecttest.txt";
         private bool updatingDecoderSelection;
 
         private sealed class PlaybackSampleResult
@@ -767,6 +770,8 @@ namespace AllLive.UWP.Views
                 var probe = await ProbeUrlAsync(url);
                 var throughputProbe = await ProbeThroughputAsync(url);
                 var flvProbe = await ProbeFlvAsync(url);
+                var connectivityProbe = await ProbeConnectivityBaselineAsync();
+                var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe);
                 var merged = JoinNonEmpty(
                     $"播放卡顿诊断 reason={reason} attempt={attemptVersion}",
                     lastMediaInfoSnapshot,
@@ -776,9 +781,11 @@ namespace AllLive.UWP.Views
                     BuildUiHealthSnapshot(DateTimeOffset.UtcNow),
                     BuildRuntimeResourceSnapshot(),
                     BuildNetworkStateSnapshot(),
+                    correlation,
                     probe,
                     throughputProbe,
-                    flvProbe);
+                    flvProbe,
+                    connectivityProbe);
                 if (!string.IsNullOrEmpty(merged))
                 {
                     LogHelper.Log(merged, LogType.DEBUG);
@@ -1849,6 +1856,8 @@ namespace AllLive.UWP.Views
                 var probe = await ProbeUrlAsync(url);
                 var throughputProbe = await ProbeThroughputAsync(url);
                 var flvProbe = await ProbeFlvAsync(url);
+                var connectivityProbe = await ProbeConnectivityBaselineAsync();
+                var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe);
                 var merged = JoinNonEmpty(
                     $"短播放预检: {reasonText}",
                     lastMediaInfoSnapshot,
@@ -1857,9 +1866,11 @@ namespace AllLive.UWP.Views
                     BuildUiHealthSnapshot(DateTimeOffset.UtcNow),
                     BuildRuntimeResourceSnapshot(),
                     BuildNetworkStateSnapshot(),
+                    correlation,
                     probe,
                     throughputProbe,
-                    flvProbe);
+                    flvProbe,
+                    connectivityProbe);
                 if (!string.IsNullOrEmpty(merged))
                 {
                     LogHelper.Log(merged, LogType.DEBUG);
@@ -1873,6 +1884,7 @@ namespace AllLive.UWP.Views
             {
                 return null;
             }
+            var probeStarted = Stopwatch.StartNew();
             try
             {
                 var uri = new Uri(url);
@@ -1880,6 +1892,7 @@ namespace AllLive.UWP.Views
                 sb.AppendLine("FLV样本预检:");
                 sb.AppendLine($"Host: {uri.Host}");
                 sb.AppendLine($"Path: {uri.AbsolutePath}");
+                AppendProbeTargetSummary(sb, uri);
                 var maxBytes = FlvDiagnosticProbeBytes;
                 using (var client = new HttpClient())
                 using (var request = new HttpRequestMessage(HttpMethod.Get, uri))
@@ -1888,6 +1901,7 @@ namespace AllLive.UWP.Views
                     request.Headers.Append("Range", $"bytes=0-{maxBytes - 1}");
                     var response = await client.SendRequestAsync(request, HttpCompletionOption.ResponseHeadersRead);
                     sb.AppendLine($"GET Range=0-{maxBytes - 1} => {(int)response.StatusCode} {response.ReasonPhrase}");
+                    AppendHttpStatusClassification(sb, response.StatusCode);
                     if (response.Content?.Headers?.ContentType != null)
                     {
                         sb.AppendLine($"Content-Type: {response.Content.Headers.ContentType}");
@@ -1895,6 +1909,13 @@ namespace AllLive.UWP.Views
                     if (response.Content?.Headers?.ContentLength != null)
                     {
                         sb.AppendLine($"Content-Length: {response.Content.Headers.ContentLength}");
+                    }
+                    if (response.Content == null)
+                    {
+                        sb.AppendLine("响应无 Content");
+                        probeStarted.Stop();
+                        sb.AppendLine($"FLV样本预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
+                        return sb.ToString().TrimEnd();
                     }
                     using (var stream = await response.Content.ReadAsInputStreamAsync())
                     {
@@ -1909,12 +1930,15 @@ namespace AllLive.UWP.Views
                             sb.AppendLine(AnalyzeFlvTags(read.Buffer, (int)read.BytesRead));
                         }
                     }
+                    probeStarted.Stop();
+                    sb.AppendLine($"FLV样本预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
                     return sb.ToString().TrimEnd();
                 }
             }
             catch (Exception ex)
             {
-                return $"FLV样本预检失败: {BuildExceptionSummary(ex)}";
+                probeStarted.Stop();
+                return BuildProbeFailure("FLV样本预检失败", ex, probeStarted.ElapsedMilliseconds);
             }
         }
         private string AnalyzeFlvTags(byte[] buffer, int length)
@@ -2141,6 +2165,214 @@ namespace AllLive.UWP.Views
             }
             return $"{ex.GetType().FullName} (0x{ex.HResult:X8}): {ex.Message}";
         }
+        private string BuildProbeFailure(string title, Exception ex, long elapsedMs)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"{title}: {BuildExceptionSummary(ex)}");
+            var classification = BuildNetworkFailureClassification(ex);
+            if (!string.IsNullOrEmpty(classification))
+            {
+                sb.AppendLine(classification);
+            }
+            if (elapsedMs >= 0)
+            {
+                sb.AppendLine($"ProbeElapsedMs: {elapsedMs}");
+            }
+            return sb.ToString().TrimEnd();
+        }
+        private string BuildNetworkFailureClassification(Exception ex)
+        {
+            if (ex == null)
+            {
+                return null;
+            }
+            var status = TryGetWebErrorStatus(ex);
+            var hresult = GetPrimaryHResult(ex);
+            var win32Code = TryGetWin32Code(hresult);
+            var category = ClassifyNetworkFailure(status, hresult, ex);
+            var sb = new StringBuilder();
+            sb.AppendLine("网络错误归类:");
+            sb.AppendLine($"NetworkFailureCategory: {category}");
+            if (status.HasValue)
+            {
+                sb.AppendLine($"WebErrorStatus: {status.Value}");
+            }
+            sb.AppendLine($"HResult: 0x{hresult:X8}");
+            if (win32Code.HasValue)
+            {
+                sb.AppendLine($"Win32Code: {win32Code.Value}");
+            }
+            sb.AppendLine($"LikelyLayer: {BuildLikelyNetworkLayer(category)}");
+            return sb.ToString().TrimEnd();
+        }
+        private static WebErrorStatus? TryGetWebErrorStatus(Exception ex)
+        {
+            var current = ex;
+            var depth = 0;
+            while (current != null && depth < 5)
+            {
+                try
+                {
+                    var status = WebError.GetStatus(current.HResult);
+                    if (status != WebErrorStatus.Unknown)
+                    {
+                        return status;
+                    }
+                }
+                catch
+                {
+                }
+                current = current.InnerException;
+                depth++;
+            }
+            return null;
+        }
+        private static int GetPrimaryHResult(Exception ex)
+        {
+            var current = ex;
+            var depth = 0;
+            while (current != null && depth < 5)
+            {
+                if (current.HResult != 0)
+                {
+                    return current.HResult;
+                }
+                current = current.InnerException;
+                depth++;
+            }
+            return 0;
+        }
+        private static int? TryGetWin32Code(int hresult)
+        {
+            var value = unchecked((uint)hresult);
+            if ((value & 0xFFFF0000) == 0x80070000)
+            {
+                return (int)(value & 0xFFFF);
+            }
+            return null;
+        }
+        private static string ClassifyNetworkFailure(WebErrorStatus? status, int hresult, Exception ex)
+        {
+            var statusText = status.HasValue ? status.Value.ToString() : string.Empty;
+            var message = ex?.Message ?? string.Empty;
+            if (statusText == "HostNameNotResolved" ||
+                hresult == unchecked((int)0x80072EE7) ||
+                message.IndexOf("无法解析", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("resolve", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "DnsNameResolutionFailure";
+            }
+            if (statusText == "CannotConnect" ||
+                statusText == "ServerUnreachable" ||
+                hresult == unchecked((int)0x80072EFD))
+            {
+                return "ConnectFailure";
+            }
+            if (statusText == "Timeout" ||
+                statusText == "GatewayTimeout" ||
+                hresult == unchecked((int)0x80072EE2))
+            {
+                return "NetworkTimeout";
+            }
+            if (statusText == "ConnectionAborted" ||
+                statusText == "ConnectionReset" ||
+                statusText == "Disconnected" ||
+                hresult == unchecked((int)0x80072EFE))
+            {
+                return "ConnectionInterrupted";
+            }
+            if (statusText.IndexOf("Certificate", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                statusText.IndexOf("Https", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "TlsOrCertificateFailure";
+            }
+            if (statusText == "Forbidden" ||
+                statusText == "Unauthorized" ||
+                statusText == "NotFound" ||
+                statusText == "TooManyRequests" ||
+                statusText == "BadGateway" ||
+                statusText == "ServiceUnavailable")
+            {
+                return "HttpStatusFailure";
+            }
+            return "UnknownNetworkFailure";
+        }
+        private static string BuildLikelyNetworkLayer(string category)
+        {
+            switch (category)
+            {
+                case "DnsNameResolutionFailure":
+                    return "DNS/NameResolution";
+                case "ConnectFailure":
+                    return "TCP/Route/CDNReachability";
+                case "NetworkTimeout":
+                    return "NetworkTimeout/CDNLatency";
+                case "ConnectionInterrupted":
+                    return "ConnectionResetOrDrop";
+                case "TlsOrCertificateFailure":
+                    return "TLS/Certificate";
+                case "HttpStatusFailure":
+                    return "HTTP/CDNPolicy";
+                default:
+                    return "Unknown";
+            }
+        }
+        private static void AppendProbeTargetSummary(StringBuilder sb, Uri uri)
+        {
+            if (sb == null || uri == null)
+            {
+                return;
+            }
+            sb.AppendLine("ProbeTarget:");
+            sb.AppendLine($"Scheme: {uri.Scheme}");
+            sb.AppendLine($"Host: {uri.Host}");
+            sb.AppendLine($"Port: {uri.Port}");
+            sb.AppendLine($"PathExt: {Path.GetExtension(uri.AbsolutePath)}");
+            sb.AppendLine($"PathLength: {uri.AbsolutePath?.Length ?? 0}");
+            sb.AppendLine($"QueryLength: {uri.Query?.Length ?? 0}");
+        }
+        private static void AppendHttpStatusClassification(StringBuilder sb, HttpStatusCode statusCode)
+        {
+            if (sb == null)
+            {
+                return;
+            }
+            var code = (int)statusCode;
+            string category;
+            if (code >= 200 && code <= 299)
+            {
+                category = "Success";
+            }
+            else if (code >= 300 && code <= 399)
+            {
+                category = "Redirect";
+            }
+            else if (code == 401 || code == 403)
+            {
+                category = "AuthOrHotlinkDenied";
+            }
+            else if (code == 404 || code == 410)
+            {
+                category = "UrlMissingOrExpired";
+            }
+            else if (code == 416)
+            {
+                category = "RangeRejected";
+            }
+            else if (code == 429)
+            {
+                category = "RateLimited";
+            }
+            else if (code >= 500 && code <= 599)
+            {
+                category = "CdnServerError";
+            }
+            else
+            {
+                category = "OtherHttpStatus";
+            }
+            sb.AppendLine($"HttpStatusCategory: {category}");
+        }
         private void ApplyProbeHeaders(HttpRequestMessage request)
         {
             if (liveRoomVM?.SiteName == "哔哩哔哩直播")
@@ -2160,6 +2392,7 @@ namespace AllLive.UWP.Views
             {
                 return null;
             }
+            var probeStarted = Stopwatch.StartNew();
             try
             {
                 var uri = new Uri(url);
@@ -2168,15 +2401,19 @@ namespace AllLive.UWP.Views
                 sb.AppendLine($"Host: {uri.Host}");
                 sb.AppendLine($"Scheme: {uri.Scheme}");
                 sb.AppendLine($"Path: {uri.AbsolutePath}");
+                AppendProbeTargetSummary(sb, uri);
                 var headResult = await SendProbeAsync(uri, "HEAD", useRange: false);
                 sb.AppendLine(headResult);
                 var rangeResult = await SendProbeAsync(uri, "GET", useRange: true);
                 sb.AppendLine(rangeResult);
+                probeStarted.Stop();
+                sb.AppendLine($"URL预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
                 return sb.ToString().TrimEnd();
             }
             catch (Exception ex)
             {
-                return $"URL预检失败: {BuildExceptionSummary(ex)}";
+                probeStarted.Stop();
+                return BuildProbeFailure("URL预检失败", ex, probeStarted.ElapsedMilliseconds);
             }
         }
         private async Task<string> ProbeThroughputAsync(string url)
@@ -2185,6 +2422,7 @@ namespace AllLive.UWP.Views
             {
                 return null;
             }
+            var probeStarted = Stopwatch.StartNew();
             try
             {
                 var uri = new Uri(url);
@@ -2193,6 +2431,7 @@ namespace AllLive.UWP.Views
                 sb.AppendLine($"Host: {uri.Host}");
                 sb.AppendLine($"Scheme: {uri.Scheme}");
                 sb.AppendLine($"Path: {uri.AbsolutePath}");
+                AppendProbeTargetSummary(sb, uri);
                 using (var client = new HttpClient())
                 using (var request = new HttpRequestMessage(HttpMethod.Get, uri))
                 {
@@ -2202,6 +2441,7 @@ namespace AllLive.UWP.Views
                     var response = await client.SendRequestAsync(request, HttpCompletionOption.ResponseHeadersRead);
                     responseStarted.Stop();
                     sb.AppendLine($"GET Range=0-{ThroughputProbeBytes - 1} => {(int)response.StatusCode} {response.ReasonPhrase} headerElapsedMs={responseStarted.ElapsedMilliseconds}");
+                    AppendHttpStatusClassification(sb, response.StatusCode);
                     if (response.RequestMessage?.RequestUri != null && response.RequestMessage.RequestUri != uri)
                     {
                         sb.AppendLine("Final-Uri:");
@@ -2222,6 +2462,8 @@ namespace AllLive.UWP.Views
                     if (response.Content == null)
                     {
                         sb.AppendLine("响应无 Content");
+                        probeStarted.Stop();
+                        sb.AppendLine($"吞吐预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
                         return sb.ToString().TrimEnd();
                     }
                     using (var stream = await response.Content.ReadAsInputStreamAsync())
@@ -2229,12 +2471,65 @@ namespace AllLive.UWP.Views
                         var read = await ReadProbeBytesAsync(stream, ThroughputProbeBytes, ProbeReadTimeout);
                         AppendProbeReadSummary(sb, "吞吐读取", read);
                     }
+                    probeStarted.Stop();
+                    sb.AppendLine($"吞吐预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
                     return sb.ToString().TrimEnd();
                 }
             }
             catch (Exception ex)
             {
-                return $"吞吐预检失败: {BuildExceptionSummary(ex)}";
+                probeStarted.Stop();
+                return BuildProbeFailure("吞吐预检失败", ex, probeStarted.ElapsedMilliseconds);
+            }
+        }
+        private async Task<string> ProbeConnectivityBaselineAsync()
+        {
+            var probeStarted = Stopwatch.StartNew();
+            try
+            {
+                var uri = new Uri(ConnectivityProbeUrl);
+                var sb = new StringBuilder();
+                sb.AppendLine("网络对照预检:");
+                sb.AppendLine("Purpose: 判断AppContainer内通用HTTP联网是否可用，不代表直播CDN健康");
+                AppendProbeTargetSummary(sb, uri);
+                using (var client = new HttpClient())
+                using (var request = new HttpRequestMessage(HttpMethod.Get, uri))
+                {
+                    request.Headers.Append("Range", $"bytes=0-{ConnectivityProbeBytes - 1}");
+                    var responseStarted = Stopwatch.StartNew();
+                    var response = await client.SendRequestAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                    responseStarted.Stop();
+                    sb.AppendLine($"GET Range=0-{ConnectivityProbeBytes - 1} => {(int)response.StatusCode} {response.ReasonPhrase} headerElapsedMs={responseStarted.ElapsedMilliseconds}");
+                    AppendHttpStatusClassification(sb, response.StatusCode);
+                    if (response.Content?.Headers?.ContentType != null)
+                    {
+                        sb.AppendLine($"Content-Type: {response.Content.Headers.ContentType}");
+                    }
+                    if (response.Content?.Headers?.ContentLength != null)
+                    {
+                        sb.AppendLine($"Content-Length: {response.Content.Headers.ContentLength}");
+                    }
+                    if (response.Content == null)
+                    {
+                        sb.AppendLine("响应无 Content");
+                        probeStarted.Stop();
+                        sb.AppendLine($"网络对照预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
+                        return sb.ToString().TrimEnd();
+                    }
+                    using (var stream = await response.Content.ReadAsInputStreamAsync())
+                    {
+                        var read = await ReadProbeBytesAsync(stream, ConnectivityProbeBytes, ProbeReadTimeout);
+                        AppendProbeReadSummary(sb, "对照读取", read);
+                    }
+                    probeStarted.Stop();
+                    sb.AppendLine($"网络对照预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
+                    return sb.ToString().TrimEnd();
+                }
+            }
+            catch (Exception ex)
+            {
+                probeStarted.Stop();
+                return BuildProbeFailure("网络对照预检失败", ex, probeStarted.ElapsedMilliseconds);
             }
         }
         private string AnalyzeFirstBytes(byte[] buffer)
@@ -2268,64 +2563,73 @@ namespace AllLive.UWP.Views
         }
         private async Task<string> SendProbeAsync(Uri uri, string method, bool useRange)
         {
-            using (var client = new HttpClient())
-            using (var request = new HttpRequestMessage(new HttpMethod(method), uri))
+            var responseStarted = Stopwatch.StartNew();
+            try
             {
-                ApplyProbeHeaders(request);
-                if (useRange)
+                using (var client = new HttpClient())
+                using (var request = new HttpRequestMessage(new HttpMethod(method), uri))
                 {
-                    request.Headers.Append("Range", "bytes=0-4095");
-                }
-                var responseStarted = Stopwatch.StartNew();
-                var response = await client.SendRequestAsync(request, HttpCompletionOption.ResponseHeadersRead);
-                responseStarted.Stop();
-                var sb = new StringBuilder();
-                sb.AppendLine($"{method} {(useRange ? "Range=0-4095" : "")} => {(int)response.StatusCode} {response.ReasonPhrase} headerElapsedMs={responseStarted.ElapsedMilliseconds}");
-                if (response.RequestMessage?.RequestUri != null && response.RequestMessage.RequestUri != uri)
-                {
-                    sb.AppendLine("Final-Uri:");
-                    sb.AppendLine(BuildUrlSummary(response.RequestMessage.RequestUri.ToString()));
-                }
-                if (response.Headers.TryGetValue("Accept-Ranges", out string acceptRanges))
-                {
-                    sb.AppendLine($"Accept-Ranges: {acceptRanges}");
-                }
-                if (response.Content?.Headers?.ContentType != null)
-                {
-                    sb.AppendLine($"Content-Type: {response.Content.Headers.ContentType}");
-                }
-                if (response.Content?.Headers?.ContentLength != null)
-                {
-                    sb.AppendLine($"Content-Length: {response.Content.Headers.ContentLength}");
-                }
-                if (response.Content?.Headers?.ContentRange != null)
-                {
-                    sb.AppendLine($"Content-Range: {response.Content.Headers.ContentRange}");
-                }
-                if (useRange && response.Content != null)
-                {
-                    try
+                    ApplyProbeHeaders(request);
+                    if (useRange)
                     {
-                        using (var stream = await response.Content.ReadAsInputStreamAsync())
+                        request.Headers.Append("Range", "bytes=0-4095");
+                    }
+                    var response = await client.SendRequestAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                    responseStarted.Stop();
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"{method} {(useRange ? "Range=0-4095" : "")} => {(int)response.StatusCode} {response.ReasonPhrase} headerElapsedMs={responseStarted.ElapsedMilliseconds}");
+                    AppendHttpStatusClassification(sb, response.StatusCode);
+                    if (response.RequestMessage?.RequestUri != null && response.RequestMessage.RequestUri != uri)
+                    {
+                        sb.AppendLine("Final-Uri:");
+                        sb.AppendLine(BuildUrlSummary(response.RequestMessage.RequestUri.ToString()));
+                    }
+                    if (response.Headers.TryGetValue("Accept-Ranges", out string acceptRanges))
+                    {
+                        sb.AppendLine($"Accept-Ranges: {acceptRanges}");
+                    }
+                    if (response.Content?.Headers?.ContentType != null)
+                    {
+                        sb.AppendLine($"Content-Type: {response.Content.Headers.ContentType}");
+                    }
+                    if (response.Content?.Headers?.ContentLength != null)
+                    {
+                        sb.AppendLine($"Content-Length: {response.Content.Headers.ContentLength}");
+                    }
+                    if (response.Content?.Headers?.ContentRange != null)
+                    {
+                        sb.AppendLine($"Content-Range: {response.Content.Headers.ContentRange}");
+                    }
+                    if (useRange && response.Content != null)
+                    {
+                        try
                         {
-                            var read = await ReadProbeBytesAsync(stream, UrlFirstBytesProbeBytes, ProbeReadTimeout);
-                            AppendProbeReadSummary(sb, "首包读取", read);
-                            if (read.BytesRead > 0 && read.Buffer != null)
+                            using (var stream = await response.Content.ReadAsInputStreamAsync())
                             {
-                                sb.AppendLine(AnalyzeFirstBytes(read.Buffer));
-                            }
-                            else
-                            {
-                                sb.AppendLine("首包读取为空");
+                                var read = await ReadProbeBytesAsync(stream, UrlFirstBytesProbeBytes, ProbeReadTimeout);
+                                AppendProbeReadSummary(sb, "首包读取", read);
+                                if (read.BytesRead > 0 && read.Buffer != null)
+                                {
+                                    sb.AppendLine(AnalyzeFirstBytes(read.Buffer));
+                                }
+                                else
+                                {
+                                    sb.AppendLine("首包读取为空");
+                                }
                             }
                         }
+                        catch (Exception ex)
+                        {
+                            sb.AppendLine(BuildProbeFailure("首包读取失败", ex, -1));
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        sb.AppendLine($"首包读取失败: {BuildExceptionSummary(ex)}");
-                    }
+                    return sb.ToString().TrimEnd();
                 }
-                return sb.ToString().TrimEnd();
+            }
+            catch (Exception ex)
+            {
+                responseStarted.Stop();
+                return BuildProbeFailure($"{method} {(useRange ? "Range=0-4095 " : "")}请求失败", ex, responseStarted.ElapsedMilliseconds);
             }
         }
         private async Task<ProbeReadResult> ReadProbeBytesAsync(IInputStream stream, uint maxBytes, TimeSpan timeout)
@@ -2376,7 +2680,7 @@ namespace AllLive.UWP.Views
                 }
                 catch (Exception ex)
                 {
-                    result.Error = BuildExceptionSummary(ex);
+                    result.Error = BuildProbeFailure("读取异常", ex, -1);
                 }
             }
             sw.Stop();
@@ -2402,6 +2706,80 @@ namespace AllLive.UWP.Views
             {
                 sb.AppendLine($"{title}错误: {read.Error}");
             }
+            if (read.TimedOut)
+            {
+                sb.AppendLine($"{title}结果分类: ReadTimeout");
+            }
+            else if (read.BytesRead == 0)
+            {
+                sb.AppendLine($"{title}结果分类: NoData");
+            }
+            else if (read.ElapsedMs > 0)
+            {
+                var kbps = read.BytesRead * 1000.0 / read.ElapsedMs / 1024.0;
+                sb.AppendLine($"{title}结果分类: {(kbps < 128 ? "VerySlowRead" : "Readable")}");
+            }
+        }
+        private string BuildProbeCorrelationSummary(string urlProbe, string throughputProbe, string flvProbe, string connectivityProbe)
+        {
+            var targetText = JoinNonEmpty(urlProbe, throughputProbe, flvProbe) ?? string.Empty;
+            var baselineText = connectivityProbe ?? string.Empty;
+            var targetDnsFailure = ContainsOrdinalIgnoreCase(targetText, "NetworkFailureCategory: DnsNameResolutionFailure");
+            var targetConnectFailure = ContainsOrdinalIgnoreCase(targetText, "NetworkFailureCategory: ConnectFailure");
+            var targetTimeout = ContainsOrdinalIgnoreCase(targetText, "NetworkFailureCategory: NetworkTimeout") ||
+                ContainsOrdinalIgnoreCase(targetText, "结果分类: ReadTimeout");
+            var targetSlowRead = ContainsOrdinalIgnoreCase(targetText, "结果分类: VerySlowRead");
+            var targetHttpFailure = ContainsOrdinalIgnoreCase(targetText, "HttpStatusCategory: AuthOrHotlinkDenied") ||
+                ContainsOrdinalIgnoreCase(targetText, "HttpStatusCategory: UrlMissingOrExpired") ||
+                ContainsOrdinalIgnoreCase(targetText, "HttpStatusCategory: RateLimited") ||
+                ContainsOrdinalIgnoreCase(targetText, "HttpStatusCategory: CdnServerError");
+            var baselineFailure = ContainsOrdinalIgnoreCase(baselineText, "网络对照预检失败") ||
+                ContainsOrdinalIgnoreCase(baselineText, "NetworkFailureCategory:") ||
+                ContainsOrdinalIgnoreCase(baselineText, "结果分类: ReadTimeout") ||
+                ContainsOrdinalIgnoreCase(baselineText, "结果分类: NoData");
+            var baselineSuccess = ContainsOrdinalIgnoreCase(baselineText, "HttpStatusCategory: Success") &&
+                ContainsOrdinalIgnoreCase(baselineText, "对照读取结果分类: Readable");
+
+            var sb = new StringBuilder();
+            sb.AppendLine("网络探测归因:");
+            sb.AppendLine($"TargetDnsFailure: {targetDnsFailure}");
+            sb.AppendLine($"TargetConnectFailure: {targetConnectFailure}");
+            sb.AppendLine($"TargetTimeout: {targetTimeout}");
+            sb.AppendLine($"TargetSlowRead: {targetSlowRead}");
+            sb.AppendLine($"TargetHttpFailure: {targetHttpFailure}");
+            sb.AppendLine($"BaselineSuccess: {baselineSuccess}");
+            sb.AppendLine($"BaselineFailure: {baselineFailure}");
+            if (targetDnsFailure && baselineSuccess)
+            {
+                sb.AppendLine("LikelyRoot: CurrentCdnDnsOrHostResolutionFailure");
+            }
+            else if ((targetDnsFailure || targetConnectFailure || targetTimeout) && baselineFailure)
+            {
+                sb.AppendLine("LikelyRoot: AppContainerOrSystemNetworkFailure");
+            }
+            else if (targetConnectFailure && baselineSuccess)
+            {
+                sb.AppendLine("LikelyRoot: CurrentCdnConnectionFailure");
+            }
+            else if ((targetSlowRead || targetTimeout) && baselineSuccess)
+            {
+                sb.AppendLine("LikelyRoot: CurrentCdnThroughputOrReadStall");
+            }
+            else if (targetHttpFailure)
+            {
+                sb.AppendLine("LikelyRoot: CurrentCdnHttpStatusFailure");
+            }
+            else
+            {
+                sb.AppendLine("LikelyRoot: UnclassifiedProbeResult");
+            }
+            return sb.ToString().TrimEnd();
+        }
+        private static bool ContainsOrdinalIgnoreCase(string text, string value)
+        {
+            return !string.IsNullOrEmpty(text) &&
+                !string.IsNullOrEmpty(value) &&
+                text.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
         }
         private static string JoinNonEmpty(params string[] parts)
         {
@@ -2656,9 +3034,15 @@ namespace AllLive.UWP.Views
                         if (completedTask != createTask)
                         {
                             _ = DisposeLateMediaSourceAsync(createTask, url, attemptVersion);
+                            var timeoutProbe = await ProbeUrlAsync(url);
+                            var timeoutConnectivityProbe = await ProbeConnectivityBaselineAsync();
+                            var timeoutCorrelation = BuildProbeCorrelationSummary(timeoutProbe, null, null, timeoutConnectivityProbe);
                             var timeoutExtra = JoinNonEmpty(
                                 lastConfigSnapshot,
                                 lastUrlAnalysis,
+                                timeoutCorrelation,
+                                timeoutProbe,
+                                timeoutConnectivityProbe,
                                 $"播放器建源超时: {createTimeout.Value.TotalSeconds:F0}s elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0}");
                             LogPlayError("播放器初始化超时",
                                 new TimeoutException($"FFmpegMediaSource.CreateFromUriAsync 超时 {createTimeout.Value.TotalSeconds:F0}s"),
@@ -2687,8 +3071,10 @@ namespace AllLive.UWP.Views
                         return;
                     }
                     var probe = await ProbeUrlAsync(url);
+                    var connectivityProbe = await ProbeConnectivityBaselineAsync();
+                    var correlation = BuildProbeCorrelationSummary(probe, null, null, connectivityProbe);
                     lastProbeSnapshot = probe;
-                    var mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, probe);
+                    var mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, correlation, probe, connectivityProbe);
                     LogPlayError("播放器初始化失败", ex, mergedExtra);
                     PlayError();
                     return;
@@ -2706,8 +3092,10 @@ namespace AllLive.UWP.Views
                     return;
                 }
                 var probe = await ProbeUrlAsync(url);
+                var connectivityProbe = await ProbeConnectivityBaselineAsync();
+                var correlation = BuildProbeCorrelationSummary(probe, null, null, connectivityProbe);
                 lastProbeSnapshot = probe;
-                var mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, probe);
+                var mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, correlation, probe, connectivityProbe);
                 LogPlayError("播放失败", ex, mergedExtra);
                 Utils.ShowMessageToast("播放失败" + ex.Message);
             }
