@@ -26,6 +26,32 @@ namespace AllLive.UWP.Helper
         {
             Enabled = enabled;
         }
+        public static void LogDebug(string message)
+        {
+            if (!Enabled || string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            Log(message, LogType.DEBUG);
+        }
+
+        public static void LogDebug(Func<string> messageFactory)
+        {
+            if (!Enabled || messageFactory == null)
+            {
+                return;
+            }
+
+            var message = messageFactory();
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            Log(message, LogType.DEBUG);
+        }
+
         public static void Log(string message, LogType type, Exception ex = null)
         {
             if (!Enabled)

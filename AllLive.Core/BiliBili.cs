@@ -174,7 +174,7 @@ namespace AllLive.Core
                 // allowPopularityFallback = viewerCountResult.AllowPopularityFallback;
                 if (viewerCount.HasValue)
                 {
-                    CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT={viewerCount.Value}; 跳过热度回退");
+                    CoreDebug.Log(() => $"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT={viewerCount.Value}; 跳过热度回退");
                 }
                 else
                 {
@@ -182,12 +182,12 @@ namespace AllLive.Core
                     // popularity = roomInfo["online"].ParseCountTextToLong();
                     // popularitySource = "getInfoByRoom.room_info.online";
                     // CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT失败; fallback {popularitySource}={(popularity.HasValue ? popularity.Value.ToString() : "null")}; reason={viewerCountResult.FailureReason ?? "null"}");
-                    CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT未获取到; 已禁用热度读取; reason={viewerCountResult.FailureReason ?? "null"}");
+                    CoreDebug.Log(() => $"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT未获取到; 已禁用热度读取; reason={viewerCountResult.FailureReason ?? "null"}");
                 }
             }
             else
             {
-                CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} 未开播，跳过初始观众数和热度");
+                CoreDebug.Log(() => $"[Bilibili] 房间详情人数 roomId={roomId} 未开播，跳过初始观众数和热度");
             }
 
             var compatibleOnline = viewerCount ?? popularity ?? 0L;
@@ -232,7 +232,7 @@ namespace AllLive.Core
                 var host = (danmuInfo?["host_list"] as JArray)?.LastOrDefault()?["host"]?.ToString();
                 if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(host))
                 {
-                    CoreDebug.Log($"[Bilibili] 初始房间观众数跳过 roomId={roomId} token/host为空");
+                    CoreDebug.Log(() => $"[Bilibili] 初始房间观众数跳过 roomId={roomId} token/host为空");
                     return InitialViewerCountResult.Failed("token/host为空");
                 }
 
@@ -269,7 +269,7 @@ namespace AllLive.Core
                     }
                     catch (Exception ex)
                     {
-                        CoreDebug.Log($"[Bilibili] 初始房间观众数进房发送失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
+                        CoreDebug.Log(() => $"[Bilibili] 初始房间观众数进房发送失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
                         resultSource.TrySetResult(InitialViewerCountResult.Failed("进房发送失败"));
                     }
                 };
@@ -285,13 +285,13 @@ namespace AllLive.Core
                     }
                     catch (Exception ex)
                     {
-                        CoreDebug.Log($"[Bilibili] 初始房间观众数解析失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
+                        CoreDebug.Log(() => $"[Bilibili] 初始房间观众数解析失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
                     }
                 };
 
                 onError = (sender, args) =>
                 {
-                    CoreDebug.Log($"[Bilibili] 初始房间观众数WS错误 roomId={roomId} err={args.Message}");
+                    CoreDebug.Log(() => $"[Bilibili] 初始房间观众数WS错误 roomId={roomId} err={args.Message}");
                     resultSource.TrySetResult(InitialViewerCountResult.Failed("WS错误"));
                 };
 
@@ -299,7 +299,7 @@ namespace AllLive.Core
                 {
                     if (args.Code != 1000)
                     {
-                        CoreDebug.Log($"[Bilibili] 初始房间观众数WS关闭 roomId={roomId} code={args.Code} reason={args.Reason}");
+                        CoreDebug.Log(() => $"[Bilibili] 初始房间观众数WS关闭 roomId={roomId} code={args.Code} reason={args.Reason}");
                     }
                     resultSource.TrySetResult(InitialViewerCountResult.Failed($"WS关闭:{args.Code}"));
                 };
@@ -319,7 +319,7 @@ namespace AllLive.Core
                         }
                         catch (Exception ex)
                         {
-                            CoreDebug.Log($"[Bilibili] 初始房间观众数WS连接失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
+                            CoreDebug.Log(() => $"[Bilibili] 初始房间观众数WS连接失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
                             resultSource.TrySetResult(InitialViewerCountResult.Failed("WS连接失败"));
                         }
                     });
@@ -330,7 +330,7 @@ namespace AllLive.Core
                         return await resultSource.Task;
                     }
 
-                    CoreDebug.Log($"[Bilibili] 初始房间观众数等待超时 roomId={roomId}");
+                    CoreDebug.Log(() => $"[Bilibili] 初始房间观众数等待超时 roomId={roomId}");
                     return InitialViewerCountResult.Pending("等待超时");
                 }
                 finally
@@ -344,7 +344,7 @@ namespace AllLive.Core
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[Bilibili] 初始房间观众数获取失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
+                CoreDebug.Log(() => $"[Bilibili] 初始房间观众数获取失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
                 return InitialViewerCountResult.Failed("获取失败");
             }
         }
@@ -392,7 +392,7 @@ namespace AllLive.Core
             var obj = JObject.Parse(result);
             if (obj["code"]?.ToInt32() != 0)
             {
-                CoreDebug.Log($"[Bilibili] getDanmuInfo返回异常 roomId={roomId} code={obj["code"]} message={obj["message"] ?? obj["msg"]}");
+                CoreDebug.Log(() => $"[Bilibili] getDanmuInfo返回异常 roomId={roomId} code={obj["code"]} message={obj["message"] ?? obj["msg"]}");
                 return null;
             }
             return obj["data"];
@@ -581,11 +581,11 @@ namespace AllLive.Core
                 {
                     return qualities;
                 }
-                CoreDebug.Log($"[Bilibili] GetPlayQualityNew返回空列表 roomId={roomDetail?.RoomID}，回退旧接口");
+                CoreDebug.Log(() => $"[Bilibili] GetPlayQualityNew返回空列表 roomId={roomDetail?.RoomID}，回退旧接口");
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[Bilibili] GetPlayQualityNew失败 roomId={roomDetail?.RoomID} err={ex.GetType().FullName} {ex.Message}，回退旧接口");
+                CoreDebug.Log(() => $"[Bilibili] GetPlayQualityNew失败 roomId={roomDetail?.RoomID} err={ex.GetType().FullName} {ex.Message}，回退旧接口");
             }
             return await GetPlayQualityOld(roomDetail.RoomID);
         }
@@ -609,7 +609,7 @@ namespace AllLive.Core
                 var acceptQnList = GetBilibiliAcceptQnList(playurl);
                 if (acceptQnList.Count == 0)
                 {
-                    CoreDebug.Log($"[Bilibili] AVC清晰度为空，尝试HEVC兜底 roomId={roomID}");
+                    CoreDebug.Log(() => $"[Bilibili] AVC清晰度为空，尝试HEVC兜底 roomId={roomID}");
                     playurl = (await RequestBilibiliPlayInfoAsync(client, roomID, null, "0,1"))?["data"]?["playurl_info"]?["playurl"];
                     qualitiesMap.Clear();
                     foreach (var item in playurl?["g_qn_desc"] ?? new JArray())
@@ -672,11 +672,11 @@ namespace AllLive.Core
                 {
                     return urls;
                 }
-                CoreDebug.Log($"[Bilibili] GetPlayUrlsNew返回空列表 roomId={roomDetail?.RoomID} qn={qn?.Data}，回退旧接口");
+                CoreDebug.Log(() => $"[Bilibili] GetPlayUrlsNew返回空列表 roomId={roomDetail?.RoomID} qn={qn?.Data}，回退旧接口");
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[Bilibili] GetPlayUrlsNew失败 roomId={roomDetail?.RoomID} qn={qn?.Data} err={ex.GetType().FullName} {ex.Message}，回退旧接口");
+                CoreDebug.Log(() => $"[Bilibili] GetPlayUrlsNew失败 roomId={roomDetail?.RoomID} qn={qn?.Data} err={ex.GetType().FullName} {ex.Message}，回退旧接口");
             }
             return await GetPlayUrlsOld(roomDetail.RoomID, qn.Data);
         }
@@ -693,7 +693,7 @@ namespace AllLive.Core
                 LogBilibiliCandidateSummary(roomID, qnValue, candidates, "AVC");
                 if (candidates.Count == 0)
                 {
-                    CoreDebug.Log($"[Bilibili] AVC播放流为空，尝试HEVC兜底 roomId={roomID} qn={qnValue?.ToString() ?? "null"}");
+                    CoreDebug.Log(() => $"[Bilibili] AVC播放流为空，尝试HEVC兜底 roomId={roomID} qn={qnValue?.ToString() ?? "null"}");
                     obj = await RequestBilibiliPlayInfoAsync(client, roomID, qnValue, "0,1");
                     playurl = obj?["data"]?["playurl_info"]?["playurl"];
                     candidates = ParseBilibiliPlayUrlCandidates(playurl);
@@ -702,7 +702,7 @@ namespace AllLive.Core
 
                 var selectedCandidates = await SelectBilibiliPlayUrlCandidatesAsync(client, roomID, qnValue, candidates);
                 var urls = await BuildBilibiliPlayUrlsWithLocalProxyAsync(roomID, qnValue, selectedCandidates);
-                CoreDebug.Log($"[Bilibili] PlayInfo直出 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={urls.Count} flv={selectedCandidates.Count(x => x.IsFlv)} hls={selectedCandidates.Count(x => x.IsHls)} hevc={selectedCandidates.Count(x => x.IsHevc)}");
+                CoreDebug.Log(() => $"[Bilibili] PlayInfo直出 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={urls.Count} flv={selectedCandidates.Count(x => x.IsFlv)} hls={selectedCandidates.Count(x => x.IsHls)} hevc={selectedCandidates.Count(x => x.IsHevc)}");
                 return urls;
             }
         }
@@ -882,18 +882,18 @@ namespace AllLive.Core
             var flvCandidates = ordered.Where(x => x.IsFlv).ToList();
             if (flvCandidates.Count > 0)
             {
-                CoreDebug.Log($"[Bilibili] 选择FLV优先流 roomId={roomID} qn={qnValue?.ToString() ?? "null"} flv={flvCandidates.Count} first={BuildBilibiliUrlBrief(flvCandidates[0])}");
+                CoreDebug.Log(() => $"[Bilibili] 选择FLV优先流 roomId={roomID} qn={qnValue?.ToString() ?? "null"} flv={flvCandidates.Count} first={BuildBilibiliUrlBrief(flvCandidates[0])}");
                 return ordered;
             }
 
             var hlsCandidates = ordered.Where(x => x.IsHls).ToList();
             if (hlsCandidates.Count == 0)
             {
-                CoreDebug.Log($"[Bilibili] 未获得FLV或HLS候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={ordered.Count}");
+                CoreDebug.Log(() => $"[Bilibili] 未获得FLV或HLS候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={ordered.Count}");
                 return ordered;
             }
 
-            CoreDebug.Log($"[Bilibili] 未获得FLV，使用HLS fallback roomId={roomID} qn={qnValue?.ToString() ?? "null"} hls={hlsCandidates.Count}");
+            CoreDebug.Log(() => $"[Bilibili] 未获得FLV，使用HLS fallback roomId={roomID} qn={qnValue?.ToString() ?? "null"} hls={hlsCandidates.Count}");
             var preferred = hlsCandidates.Where(x => IsPreferredBilibiliHlsHost(x.Url)).ToList();
             var others = hlsCandidates.Where(x => !IsPreferredBilibiliHlsHost(x.Url)).ToList();
             var selected = new List<BilibiliPlayUrlCandidate>();
@@ -907,11 +907,11 @@ namespace AllLive.Core
             if (selected.Count > 0)
             {
                 AppendUniqueCandidates(selected, hlsCandidates);
-                CoreDebug.Log($"[Bilibili] HLS fallback已探测可用 roomId={roomID} qn={qnValue?.ToString() ?? "null"} first={BuildBilibiliUrlBrief(selected[0])}");
+                CoreDebug.Log(() => $"[Bilibili] HLS fallback已探测可用 roomId={roomID} qn={qnValue?.ToString() ?? "null"} first={BuildBilibiliUrlBrief(selected[0])}");
                 return selected;
             }
 
-            CoreDebug.Log($"[Bilibili] HLS fallback探测无成功候选，保留原候选顺序 roomId={roomID} qn={qnValue?.ToString() ?? "null"} hls={hlsCandidates.Count}");
+            CoreDebug.Log(() => $"[Bilibili] HLS fallback探测无成功候选，保留原候选顺序 roomId={roomID} qn={qnValue?.ToString() ?? "null"} hls={hlsCandidates.Count}");
             return hlsCandidates;
         }
 
@@ -931,16 +931,16 @@ namespace AllLive.Core
                     {
                         urls.Add(proxyResult.Url);
                     }
-                    CoreDebug.Log($"[Bilibili] 选择本地FLV代理 roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} proxy={BuildBilibiliLocalProxyBrief(proxyResult.Url)}");
+                    CoreDebug.Log(() => $"[Bilibili] 选择本地FLV代理 roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} proxy={BuildBilibiliLocalProxyBrief(proxyResult.Url)}");
                 }
                 else
                 {
-                    CoreDebug.Log($"[Bilibili] 本地FLV代理不可用，回退上游FLV roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} err={proxyResult.Error}");
+                    CoreDebug.Log(() => $"[Bilibili] 本地FLV代理不可用，回退上游FLV roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} err={proxyResult.Error}");
                 }
             }
             else
             {
-                CoreDebug.Log($"[Bilibili] 未获得FLV，无法使用本地代理 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={selectedCandidates?.Count ?? 0}");
+                CoreDebug.Log(() => $"[Bilibili] 未获得FLV，无法使用本地代理 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={selectedCandidates?.Count ?? 0}");
             }
 
             foreach (var candidate in selectedCandidates ?? new List<BilibiliPlayUrlCandidate>())
@@ -965,7 +965,7 @@ namespace AllLive.Core
             var flv = candidates?.Count(x => x.IsFlv) ?? 0;
             var hls = candidates?.Count(x => x.IsHls) ?? 0;
             var hevc = candidates?.Count(x => x.IsHevc) ?? 0;
-            CoreDebug.Log($"[Bilibili] PlayInfo候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} stage={stage} total={total} flv={flv} hls={hls} hevc={hevc}");
+            CoreDebug.Log(() => $"[Bilibili] PlayInfo候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} stage={stage} total={total} flv={flv} hls={hls} hevc={hevc}");
         }
 
         private static List<int> GetBilibiliAcceptQnList(JToken playurl)
@@ -1032,13 +1032,13 @@ namespace AllLive.Core
                         }
                         else
                         {
-                            CoreDebug.Log($"[Bilibili] HLS探测返回异常 roomId={roomID} status={(int)response.StatusCode} url={BuildBilibiliUrlBrief(candidate)}");
+                            CoreDebug.Log(() => $"[Bilibili] HLS探测返回异常 roomId={roomID} status={(int)response.StatusCode} url={BuildBilibiliUrlBrief(candidate)}");
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    CoreDebug.Log($"[Bilibili] HLS探测失败 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} err={ex.GetType().FullName} {ex.Message}");
+                    CoreDebug.Log(() => $"[Bilibili] HLS探测失败 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} err={ex.GetType().FullName} {ex.Message}");
                 }
             }
             return verified;

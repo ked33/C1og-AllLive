@@ -713,10 +713,13 @@ namespace AllLive.UWP.ViewModels
                     Utils.ShowMessageToast("加载播放地址失败");
                     return;
                 }
-                var debugSnapshot = BuildPlayUrlDebug(data);
-                if (!string.IsNullOrEmpty(debugSnapshot))
+                if (LogHelper.Enabled)
                 {
-                    LogHelper.Log(debugSnapshot, LogType.DEBUG);
+                    var debugSnapshot = BuildPlayUrlDebug(data);
+                    if (!string.IsNullOrEmpty(debugSnapshot))
+                    {
+                        LogHelper.Log(debugSnapshot, LogType.DEBUG);
+                    }
                 }
                 List<PlayurlLine> ls = new List<PlayurlLine>();
                 for (int i = 0; i < data.Count; i++)
@@ -1171,7 +1174,7 @@ namespace AllLive.UWP.ViewModels
                             return;
                         }
 
-                        LogHelper.Log($"弹幕重连: 站点={Site?.Name} 房间={RoomID} 第{danmakuReconnectAttempt}次", LogType.DEBUG);
+                        LogHelper.LogDebug(() => $"弹幕重连: 站点={Site?.Name} 房间={RoomID} 第{danmakuReconnectAttempt}次");
                         var newDanmaku = Site.GetDanmaku();
                         newDanmaku.NewMessage += LiveDanmaku_NewMessage;
                         newDanmaku.OnClose += LiveDanmaku_OnClose;
@@ -1323,6 +1326,11 @@ namespace AllLive.UWP.ViewModels
 
         private void LogRoomDetail(LiveRoomDetail roomDetail)
         {
+            if (!LogHelper.Enabled)
+            {
+                return;
+            }
+
             try
             {
                 if (roomDetail == null)

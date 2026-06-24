@@ -161,6 +161,37 @@ namespace AllLive.UWP.Views
             public string Error { get; set; }
         }
 
+        private static bool IsDebugDiagnosticsEnabled()
+        {
+            return LogHelper.Enabled;
+        }
+
+        private static void LogDebugIfEnabled(string message)
+        {
+            if (!IsDebugDiagnosticsEnabled() || string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            LogHelper.Log(message, LogType.DEBUG);
+        }
+
+        private static void LogDebugIfEnabled(Func<string> messageFactory)
+        {
+            if (!IsDebugDiagnosticsEnabled() || messageFactory == null)
+            {
+                return;
+            }
+
+            var message = messageFactory();
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            LogHelper.Log(message, LogType.DEBUG);
+        }
+
         public LiveRoomPage()
         {
             this.InitializeComponent();
@@ -291,16 +322,19 @@ namespace AllLive.UWP.Views
         {
             await this.Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () =>
             {
-                AddPlaybackEventHistory("MediaEnded", sender?.PlaybackSession);
-                var sessionSnapshot = BuildPlaybackSessionSnapshot(sender?.PlaybackSession);
-                if (!string.IsNullOrEmpty(sessionSnapshot))
+                if (IsDebugDiagnosticsEnabled())
                 {
-                    LogHelper.Log($"媒体播放结束\n{sessionSnapshot}", LogType.DEBUG);
-                }
-                var earlyProbe = BuildEarlyEndProbe(sender?.PlaybackSession, "播放结束");
-                if (!string.IsNullOrEmpty(earlyProbe))
-                {
-                    LogHelper.Log(earlyProbe, LogType.DEBUG);
+                    AddPlaybackEventHistory("MediaEnded", sender?.PlaybackSession);
+                    var sessionSnapshot = BuildPlaybackSessionSnapshot(sender?.PlaybackSession);
+                    if (!string.IsNullOrEmpty(sessionSnapshot))
+                    {
+                        LogHelper.Log($"媒体播放结束\n{sessionSnapshot}", LogType.DEBUG);
+                    }
+                    var earlyProbe = BuildEarlyEndProbe(sender?.PlaybackSession, "播放结束");
+                    if (!string.IsNullOrEmpty(earlyProbe))
+                    {
+                        LogHelper.Log(earlyProbe, LogType.DEBUG);
+                    }
                 }
                 if (TryRefreshHuyaPlayUrls("播放结束"))
                 {
@@ -361,27 +395,33 @@ namespace AllLive.UWP.Views
 
         private async void MediaPlayer_MediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args)
         {
-            await EnsureDiagnosticsSnapshotAsync();
+            if (IsDebugDiagnosticsEnabled())
+            {
+                await EnsureDiagnosticsSnapshotAsync();
+            }
             await this.Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () =>
             {
-                AddPlaybackEventHistory($"MediaFailed/{args.Error}", sender?.PlaybackSession);
-                var extra = new StringBuilder();
-                extra.AppendLine($"MediaPlayerError: {args.Error}");
-                if (args.ExtendedErrorCode != null)
+                if (IsDebugDiagnosticsEnabled())
                 {
-                    extra.AppendLine($"ExtendedErrorCode: 0x{args.ExtendedErrorCode.HResult:X8}");
-                    if (!string.IsNullOrEmpty(args.ExtendedErrorCode.Message))
+                    AddPlaybackEventHistory($"MediaFailed/{args.Error}", sender?.PlaybackSession);
+                    var extra = new StringBuilder();
+                    extra.AppendLine($"MediaPlayerError: {args.Error}");
+                    if (args.ExtendedErrorCode != null)
                     {
-                        extra.AppendLine($"ExtendedMessage: {args.ExtendedErrorCode.Message}");
+                        extra.AppendLine($"ExtendedErrorCode: 0x{args.ExtendedErrorCode.HResult:X8}");
+                        if (!string.IsNullOrEmpty(args.ExtendedErrorCode.Message))
+                        {
+                            extra.AppendLine($"ExtendedMessage: {args.ExtendedErrorCode.Message}");
+                        }
                     }
+                    var sessionSnapshot = BuildPlaybackSessionSnapshot(sender?.PlaybackSession);
+                    if (!string.IsNullOrEmpty(sessionSnapshot))
+                    {
+                        extra.AppendLine(sessionSnapshot);
+                    }
+                    var mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, lastProbeSnapshot, extra.ToString().TrimEnd());
+                    LogPlayError("播放器播放失败", args.ExtendedErrorCode, mergedExtra);
                 }
-                var sessionSnapshot = BuildPlaybackSessionSnapshot(sender?.PlaybackSession);
-                if (!string.IsNullOrEmpty(sessionSnapshot))
-                {
-                    extra.AppendLine(sessionSnapshot);
-                }
-                var mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, lastProbeSnapshot, extra.ToString().TrimEnd());
-                LogPlayError("播放器播放失败", args.ExtendedErrorCode, mergedExtra);
 
                 if (TryScheduleStreamReconnect($"MediaFailed/{args.Error}"))
                 {
@@ -400,7 +440,10 @@ namespace AllLive.UWP.Views
                 dispRequest.RequestActive();
                 PlayerLoading.Visibility = Visibility.Collapsed;
                 lastMediaOpenedUtc = DateTimeOffset.UtcNow;
-                AddPlaybackEventHistory("MediaOpened", sender?.PlaybackSession);
+                if (IsDebugDiagnosticsEnabled())
+                {
+                    AddPlaybackEventHistory("MediaOpened", sender?.PlaybackSession);
+                }
                 SetMediaInfo();
                 LogPlaybackMediaInfo("MediaOpened");
             });
@@ -413,18 +456,24 @@ namespace AllLive.UWP.Views
                 if (sender != null && lastPlaybackState != sender.PlaybackState)
                 {
                     lastPlaybackState = sender.PlaybackState;
-                    AddPlaybackEventHistory($"StateChanged/{sender.PlaybackState}", sender);
-                    var sessionSnapshot = BuildPlaybackSessionSnapshot(sender);
-                    if (!string.IsNullOrEmpty(sessionSnapshot))
+                    if (IsDebugDiagnosticsEnabled())
                     {
-                        LogHelper.Log($"播放状态变更: {sender.PlaybackState}\n{sessionSnapshot}", LogType.DEBUG);
+                        AddPlaybackEventHistory($"StateChanged/{sender.PlaybackState}", sender);
+                        var sessionSnapshot = BuildPlaybackSessionSnapshot(sender);
+                        if (!string.IsNullOrEmpty(sessionSnapshot))
+                        {
+                            LogHelper.Log($"播放状态变更: {sender.PlaybackState}\n{sessionSnapshot}", LogType.DEBUG);
+                        }
                     }
                     if (sender.PlaybackState == MediaPlaybackState.Playing)
                     {
                         lastPlaybackStartUtc = DateTimeOffset.UtcNow;
                         lastPlaybackUrl = liveRoomVM?.CurrentLine?.Url;
-                        LogPlaybackMediaInfo("Playing");
-                        StartPlaybackSampling(System.Threading.Volatile.Read(ref mediaSourceAttemptVersion));
+                        if (IsDebugDiagnosticsEnabled())
+                        {
+                            LogPlaybackMediaInfo("Playing");
+                            StartPlaybackSampling(System.Threading.Volatile.Read(ref mediaSourceAttemptVersion));
+                        }
                     }
                 }
                 switch (sender.PlaybackState)
@@ -485,6 +534,11 @@ namespace AllLive.UWP.Views
 
         private void LogPlaybackMediaInfo(string source)
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return;
+            }
+
             var mediaInfo = BuildPlaybackMediaInfoSnapshot(source);
             if (string.IsNullOrWhiteSpace(mediaInfo))
             {
@@ -561,6 +615,11 @@ namespace AllLive.UWP.Views
 
         private void LogBufferingStarted(MediaPlaybackSession session)
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return;
+            }
+
             currentBufferingStartedUtc = DateTimeOffset.UtcNow;
             var snapshot = BuildPlaybackSessionSnapshot(session);
             LogHelper.Log(JoinNonEmpty(
@@ -571,6 +630,11 @@ namespace AllLive.UWP.Views
 
         private void LogBufferingEnded(MediaPlaybackSession session)
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return;
+            }
+
             TimeSpan? duration = null;
             if (currentBufferingStartedUtc.HasValue)
             {
@@ -590,7 +654,9 @@ namespace AllLive.UWP.Views
 
         private void StartPlaybackSampling(int attemptVersion)
         {
-            if (attemptVersion <= 0 || !IsMediaSourceAttemptCurrent(attemptVersion))
+            if (!IsDebugDiagnosticsEnabled() ||
+                attemptVersion <= 0 ||
+                !IsMediaSourceAttemptCurrent(attemptVersion))
             {
                 return;
             }
@@ -617,11 +683,14 @@ namespace AllLive.UWP.Views
             try
             {
                 while (!token.IsCancellationRequested &&
+                    IsDebugDiagnosticsEnabled() &&
                     IsMediaSourceAttemptCurrent(attemptVersion) &&
                     DateTimeOffset.UtcNow - startedUtc < PlaybackSampleDuration)
                 {
                     await Task.Delay(PlaybackSampleInterval, token);
-                    if (token.IsCancellationRequested || !IsMediaSourceAttemptCurrent(attemptVersion))
+                    if (token.IsCancellationRequested ||
+                        !IsDebugDiagnosticsEnabled() ||
+                        !IsMediaSourceAttemptCurrent(attemptVersion))
                     {
                         return;
                     }
@@ -630,7 +699,9 @@ namespace AllLive.UWP.Views
                     var dispatchQueuedUtc = DateTimeOffset.UtcNow;
                     await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                     {
-                        if (token.IsCancellationRequested || !IsMediaSourceAttemptCurrent(attemptVersion))
+                        if (token.IsCancellationRequested ||
+                            !IsDebugDiagnosticsEnabled() ||
+                            !IsMediaSourceAttemptCurrent(attemptVersion))
                         {
                             return;
                         }
@@ -661,7 +732,7 @@ namespace AllLive.UWP.Views
             }
             catch (Exception ex)
             {
-                LogHelper.Log($"播放采样异常: {BuildExceptionSummary(ex)}", LogType.DEBUG);
+                LogDebugIfEnabled(() => $"播放采样异常: {BuildExceptionSummary(ex)}");
             }
             finally
             {
@@ -760,18 +831,28 @@ namespace AllLive.UWP.Views
 
         private void StartPlaybackStallProbe(string url, string sampleText, string reason, int attemptVersion)
         {
-            if (string.IsNullOrWhiteSpace(url))
+            if (!IsDebugDiagnosticsEnabled() ||
+                string.IsNullOrWhiteSpace(url))
             {
                 return;
             }
 
             _ = Task.Run(async () =>
             {
+                if (!IsDebugDiagnosticsEnabled())
+                {
+                    return;
+                }
+
                 var probe = await ProbeUrlAsync(url);
                 var throughputProbe = await ProbeThroughputAsync(url);
                 var flvProbe = await ProbeFlvAsync(url);
                 var connectivityProbe = await ProbeConnectivityBaselineAsync();
                 var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe);
+                if (!IsDebugDiagnosticsEnabled())
+                {
+                    return;
+                }
                 var merged = JoinNonEmpty(
                     $"播放卡顿诊断 reason={reason} attempt={attemptVersion}",
                     lastMediaInfoSnapshot,
@@ -821,7 +902,8 @@ namespace AllLive.UWP.Views
 
         private void AddPlaybackSampleHistory(string sample)
         {
-            if (string.IsNullOrWhiteSpace(sample))
+            if (!IsDebugDiagnosticsEnabled() ||
+                string.IsNullOrWhiteSpace(sample))
             {
                 return;
             }
@@ -838,6 +920,11 @@ namespace AllLive.UWP.Views
 
         private string BuildRecentPlaybackSamplesSnapshot()
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return null;
+            }
+
             List<string> samples;
             lock (playbackDiagnosticsLock)
             {
@@ -859,7 +946,8 @@ namespace AllLive.UWP.Views
 
         private void AddPlaybackEventHistory(string eventName, MediaPlaybackSession session = null)
         {
-            if (string.IsNullOrWhiteSpace(eventName))
+            if (!IsDebugDiagnosticsEnabled() ||
+                string.IsNullOrWhiteSpace(eventName))
             {
                 return;
             }
@@ -893,6 +981,11 @@ namespace AllLive.UWP.Views
 
         private string BuildRecentPlaybackEventsSnapshot()
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return null;
+            }
+
             List<string> events;
             lock (playbackDiagnosticsLock)
             {
@@ -914,6 +1007,11 @@ namespace AllLive.UWP.Views
 
         private void UpdateUiHeartbeat(string source)
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return;
+            }
+
             var now = DateTimeOffset.UtcNow;
             if (lastUiHeartbeatUtc.HasValue)
             {
@@ -1242,7 +1340,7 @@ namespace AllLive.UWP.Views
         private void LiveRoomVM_ReconnectStatusChanged(object sender, ReconnectStatus status)
         {
             if (status == null) return;
-            LogHelper.Log($"[重连状态] {status.Source} inProgress={status.IsReconnecting} {status.Attempt}/{status.MaxAttempt} {status.Message}", LogType.DEBUG);
+            LogDebugIfEnabled(() => $"[重连状态] {status.Source} inProgress={status.IsReconnecting} {status.Attempt}/{status.MaxAttempt} {status.Message}");
             // 流重连的 UI 文案由 ReconnectStreamAsync 自行更新；此处只处理弹幕提示
             // 弹幕重连不强显 PlayerLoading（已有 Messages 系统消息），以避免遮挡直播画面
         }
@@ -1271,7 +1369,7 @@ namespace AllLive.UWP.Views
                     if (!isNetworkDown)
                     {
                         isNetworkDown = true;
-                        LogHelper.Log("网络已断开", LogType.DEBUG);
+                        LogDebugIfEnabled("网络已断开");
                         PlayerLoading.Visibility = Visibility.Visible;
                         PlayerLoadText.Text = "网络已断开，等待恢复...";
                         StopBufferingTimer();
@@ -1282,7 +1380,7 @@ namespace AllLive.UWP.Views
                     if (isNetworkDown)
                     {
                         isNetworkDown = false;
-                        LogHelper.Log("网络已恢复，触发重连", LogType.DEBUG);
+                        LogDebugIfEnabled("网络已恢复，触发重连");
                         TryScheduleStreamReconnect("NetworkRestored");
                     }
                 }
@@ -1307,12 +1405,15 @@ namespace AllLive.UWP.Views
             var state = mediaPlayer?.PlaybackSession?.PlaybackState;
             if (state == MediaPlaybackState.Buffering || state == MediaPlaybackState.Opening)
             {
-                LogHelper.Log(JoinNonEmpty(
-                    $"Buffering 超过 {BufferingTimeout.TotalSeconds:F0}s，触发流重连。State={state}",
-                    BuildSafePlaybackContext(),
-                    BuildRecentPlaybackEventsSnapshot(),
-                    BuildRuntimeResourceSnapshot(),
-                    BuildNetworkStateSnapshot()), LogType.DEBUG);
+                if (IsDebugDiagnosticsEnabled())
+                {
+                    LogHelper.Log(JoinNonEmpty(
+                        $"Buffering 超过 {BufferingTimeout.TotalSeconds:F0}s，触发流重连。State={state}",
+                        BuildSafePlaybackContext(),
+                        BuildRecentPlaybackEventsSnapshot(),
+                        BuildRuntimeResourceSnapshot(),
+                        BuildNetworkStateSnapshot()), LogType.DEBUG);
+                }
                 TryScheduleStreamReconnect("BufferingTimeout");
             }
         }
@@ -1343,7 +1444,7 @@ namespace AllLive.UWP.Views
             {
                 if (IsDuplicateSetPlayerRequest(url, now, source))
                 {
-                    LogHelper.Log($"忽略重复播放请求 source={source} url={url}", LogType.DEBUG);
+                    LogDebugIfEnabled(() => $"忽略重复播放请求 source={source} urlHash={url.GetHashCode()}");
                     return;
                 }
 
@@ -1522,7 +1623,7 @@ namespace AllLive.UWP.Views
                     var levelText = level == 0 ? "重连当前线路" : level == 1 ? "刷新播放地址" : "重新加载直播间";
                     PlayerLoading.Visibility = Visibility.Visible;
                     PlayerLoadText.Text = $"直播流重连中 ({streamReconnectAttempt}/{MaxStreamReconnectAttempts})：{levelText}";
-                    LogHelper.Log($"流重连调度 reason={reason} attempt={streamReconnectAttempt} level={level} delay={delay.TotalSeconds}s", LogType.DEBUG);
+                    LogDebugIfEnabled(() => $"流重连调度 reason={reason} attempt={streamReconnectAttempt} level={level} delay={delay.TotalSeconds}s");
 
                     try { await Task.Delay(delay, token); }
                     catch (TaskCanceledException) { return; }
@@ -1836,6 +1937,11 @@ namespace AllLive.UWP.Views
         }
         private string BuildEarlyEndProbe(MediaPlaybackSession session, string reason)
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return null;
+            }
+
             var url = liveRoomVM?.CurrentLine?.Url ?? lastPlaybackUrl;
             if (string.IsNullOrEmpty(url))
             {
@@ -1853,11 +1959,20 @@ namespace AllLive.UWP.Views
             var reasonText = duration.HasValue ? $"{reason} duration={duration.Value.TotalSeconds:F2}s" : reason;
             _ = Task.Run(async () =>
             {
+                if (!IsDebugDiagnosticsEnabled())
+                {
+                    return;
+                }
+
                 var probe = await ProbeUrlAsync(url);
                 var throughputProbe = await ProbeThroughputAsync(url);
                 var flvProbe = await ProbeFlvAsync(url);
                 var connectivityProbe = await ProbeConnectivityBaselineAsync();
                 var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe);
+                if (!IsDebugDiagnosticsEnabled())
+                {
+                    return;
+                }
                 var merged = JoinNonEmpty(
                     $"短播放预检: {reasonText}",
                     lastMediaInfoSnapshot,
@@ -1880,7 +1995,8 @@ namespace AllLive.UWP.Views
         }
         private async Task<string> ProbeFlvAsync(string url)
         {
-            if (string.IsNullOrEmpty(url))
+            if (!IsDebugDiagnosticsEnabled() ||
+                string.IsNullOrEmpty(url))
             {
                 return null;
             }
@@ -2388,7 +2504,8 @@ namespace AllLive.UWP.Views
         }
         private async Task<string> ProbeUrlAsync(string url)
         {
-            if (string.IsNullOrEmpty(url))
+            if (!IsDebugDiagnosticsEnabled() ||
+                string.IsNullOrEmpty(url))
             {
                 return null;
             }
@@ -2418,7 +2535,8 @@ namespace AllLive.UWP.Views
         }
         private async Task<string> ProbeThroughputAsync(string url)
         {
-            if (string.IsNullOrEmpty(url))
+            if (!IsDebugDiagnosticsEnabled() ||
+                string.IsNullOrEmpty(url))
             {
                 return null;
             }
@@ -2484,6 +2602,11 @@ namespace AllLive.UWP.Views
         }
         private async Task<string> ProbeConnectivityBaselineAsync()
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return null;
+            }
+
             var probeStarted = Stopwatch.StartNew();
             try
             {
@@ -2722,6 +2845,11 @@ namespace AllLive.UWP.Views
         }
         private string BuildProbeCorrelationSummary(string urlProbe, string throughputProbe, string flvProbe, string connectivityProbe)
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return null;
+            }
+
             var targetText = JoinNonEmpty(urlProbe, throughputProbe, flvProbe) ?? string.Empty;
             var baselineText = connectivityProbe ?? string.Empty;
             var targetDnsFailure = ContainsOrdinalIgnoreCase(targetText, "NetworkFailureCategory: DnsNameResolutionFailure");
@@ -2800,6 +2928,11 @@ namespace AllLive.UWP.Views
         }
         private async Task EnsureDiagnosticsSnapshotAsync()
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return;
+            }
+
             if (!string.IsNullOrEmpty(diagnosticsSnapshot))
             {
                 return;
@@ -2812,6 +2945,11 @@ namespace AllLive.UWP.Views
         }
         private async Task BuildDiagnosticsSnapshotAsync()
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return;
+            }
+
             var sb = new StringBuilder();
             sb.AppendLine("环境信息:");
             try
@@ -2881,6 +3019,11 @@ namespace AllLive.UWP.Views
         }
         private void LogPlayError(string title, Exception ex = null, string extra = null)
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return;
+            }
+
             var sb = new StringBuilder();
             sb.AppendLine(title);
             var context = BuildPlaybackContext();
@@ -3005,18 +3148,24 @@ namespace AllLive.UWP.Views
                 lastMediaOpenedUtc = null;
                 lastPlaybackStartUtc = null;
                 lastPlaybackUrl = url;
-                lastConfigSnapshot = BuildConfigSnapshot(config);
-                lastUrlAnalysis = BuildUrlAnalysis(url);
+                lastConfigSnapshot = IsDebugDiagnosticsEnabled() ? BuildConfigSnapshot(config) : null;
+                lastUrlAnalysis = IsDebugDiagnosticsEnabled() ? BuildUrlAnalysis(url) : null;
                 lastProbeSnapshot = null;
-                await EnsureDiagnosticsSnapshotAsync();
+                if (IsDebugDiagnosticsEnabled())
+                {
+                    await EnsureDiagnosticsSnapshotAsync();
+                }
                 if (!IsMediaSourceAttemptCurrent(attemptVersion))
                 {
                     return;
                 }
-                var attemptLog = JoinNonEmpty("播放尝试", BuildPlaybackContext(), lastConfigSnapshot, lastUrlAnalysis);
-                if (!string.IsNullOrEmpty(attemptLog))
+                if (IsDebugDiagnosticsEnabled())
                 {
-                    LogHelper.Log(attemptLog, LogType.DEBUG);
+                    var attemptLog = JoinNonEmpty("播放尝试", BuildPlaybackContext(), lastConfigSnapshot, lastUrlAnalysis);
+                    if (!string.IsNullOrEmpty(attemptLog))
+                    {
+                        LogHelper.Log(attemptLog, LogType.DEBUG);
+                    }
                 }
                 try
                 {
@@ -3034,19 +3183,26 @@ namespace AllLive.UWP.Views
                         if (completedTask != createTask)
                         {
                             _ = DisposeLateMediaSourceAsync(createTask, url, attemptVersion);
-                            var timeoutProbe = await ProbeUrlAsync(url);
-                            var timeoutConnectivityProbe = await ProbeConnectivityBaselineAsync();
-                            var timeoutCorrelation = BuildProbeCorrelationSummary(timeoutProbe, null, null, timeoutConnectivityProbe);
-                            var timeoutExtra = JoinNonEmpty(
-                                lastConfigSnapshot,
-                                lastUrlAnalysis,
-                                timeoutCorrelation,
-                                timeoutProbe,
-                                timeoutConnectivityProbe,
-                                $"播放器建源超时: {createTimeout.Value.TotalSeconds:F0}s elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0}");
-                            LogPlayError("播放器初始化超时",
-                                new TimeoutException($"FFmpegMediaSource.CreateFromUriAsync 超时 {createTimeout.Value.TotalSeconds:F0}s"),
-                                timeoutExtra);
+                            string timeoutExtra = null;
+                            if (IsDebugDiagnosticsEnabled())
+                            {
+                                var timeoutProbe = await ProbeUrlAsync(url);
+                                var timeoutConnectivityProbe = await ProbeConnectivityBaselineAsync();
+                                var timeoutCorrelation = BuildProbeCorrelationSummary(timeoutProbe, null, null, timeoutConnectivityProbe);
+                                timeoutExtra = JoinNonEmpty(
+                                    lastConfigSnapshot,
+                                    lastUrlAnalysis,
+                                    timeoutCorrelation,
+                                    timeoutProbe,
+                                    timeoutConnectivityProbe,
+                                    $"播放器建源超时: {createTimeout.Value.TotalSeconds:F0}s elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0}");
+                            }
+                            if (IsDebugDiagnosticsEnabled())
+                            {
+                                LogPlayError("播放器初始化超时",
+                                    new TimeoutException($"FFmpegMediaSource.CreateFromUriAsync 超时 {createTimeout.Value.TotalSeconds:F0}s"),
+                                    timeoutExtra);
+                            }
                             PlayError();
                             return;
                         }
@@ -3061,7 +3217,7 @@ namespace AllLive.UWP.Views
                     interopMSS = mediaSource;
                     if (createTimeout.HasValue)
                     {
-                        LogHelper.Log($"播放器建源完成 elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0} 线路: {liveRoomVM?.CurrentLine?.Name}", LogType.DEBUG);
+                        LogDebugIfEnabled(() => $"播放器建源完成 elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0} 线路: {liveRoomVM?.CurrentLine?.Name}");
                     }
                 }
                 catch (Exception ex)
@@ -3070,12 +3226,19 @@ namespace AllLive.UWP.Views
                     {
                         return;
                     }
-                    var probe = await ProbeUrlAsync(url);
-                    var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                    var correlation = BuildProbeCorrelationSummary(probe, null, null, connectivityProbe);
-                    lastProbeSnapshot = probe;
-                    var mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, correlation, probe, connectivityProbe);
-                    LogPlayError("播放器初始化失败", ex, mergedExtra);
+                    string mergedExtra = null;
+                    if (IsDebugDiagnosticsEnabled())
+                    {
+                        var probe = await ProbeUrlAsync(url);
+                        var connectivityProbe = await ProbeConnectivityBaselineAsync();
+                        var correlation = BuildProbeCorrelationSummary(probe, null, null, connectivityProbe);
+                        lastProbeSnapshot = probe;
+                        mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, correlation, probe, connectivityProbe);
+                    }
+                    if (IsDebugDiagnosticsEnabled())
+                    {
+                        LogPlayError("播放器初始化失败", ex, mergedExtra);
+                    }
                     PlayError();
                     return;
                 }
@@ -3091,12 +3254,19 @@ namespace AllLive.UWP.Views
                 {
                     return;
                 }
-                var probe = await ProbeUrlAsync(url);
-                var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                var correlation = BuildProbeCorrelationSummary(probe, null, null, connectivityProbe);
-                lastProbeSnapshot = probe;
-                var mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, correlation, probe, connectivityProbe);
-                LogPlayError("播放失败", ex, mergedExtra);
+                string mergedExtra = null;
+                if (IsDebugDiagnosticsEnabled())
+                {
+                    var probe = await ProbeUrlAsync(url);
+                    var connectivityProbe = await ProbeConnectivityBaselineAsync();
+                    var correlation = BuildProbeCorrelationSummary(probe, null, null, connectivityProbe);
+                    lastProbeSnapshot = probe;
+                    mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, correlation, probe, connectivityProbe);
+                }
+                if (IsDebugDiagnosticsEnabled())
+                {
+                    LogPlayError("播放失败", ex, mergedExtra);
+                }
                 Utils.ShowMessageToast("播放失败" + ex.Message);
             }
 
@@ -3110,11 +3280,11 @@ namespace AllLive.UWP.Views
                 mediaSource?.Dispose();
                 if (isPageClosing)
                 {
-                    LogHelper.Log($"关闭后延迟建源已释放 urlHash={url?.GetHashCode()}", LogType.DEBUG);
+                    LogDebugIfEnabled(() => $"关闭后延迟建源已释放 urlHash={url?.GetHashCode()}");
                 }
                 else if (!IsMediaSourceAttemptCurrent(attemptVersion))
                 {
-                    LogHelper.Log($"过期建源已释放 urlHash={url?.GetHashCode()}", LogType.DEBUG);
+                    LogDebugIfEnabled(() => $"过期建源已释放 urlHash={url?.GetHashCode()}");
                 }
             }
             catch
@@ -3145,7 +3315,10 @@ namespace AllLive.UWP.Views
             if (index == liveRoomVM.Lines.Count - 1)
             {
                 PlayerLoading.Visibility = Visibility.Collapsed;
-                LogPlayError("直播加载失败", null, JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, lastProbeSnapshot));
+                if (IsDebugDiagnosticsEnabled())
+                {
+                    LogPlayError("直播加载失败", null, JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, lastProbeSnapshot));
+                }
                 await new MessageDialog($"啊，播放失败了，请尝试以下操作\r\n1、更换清晰度或线路\r\n2、请尝试在直播设置中打开/关闭硬解试试", "播放失败").ShowAsync();
             }
             else
@@ -3170,7 +3343,7 @@ namespace AllLive.UWP.Views
                 return false;
             }
             lastHuyaRefreshUtc = now;
-            LogHelper.Log($"虎牙播放异常，尝试刷新播放地址。原因: {reason}", LogType.DEBUG);
+            LogDebugIfEnabled(() => $"虎牙播放异常，尝试刷新播放地址。原因: {reason}");
             liveRoomVM.LoadPlayUrl();
             return true;
         }
@@ -3198,7 +3371,7 @@ namespace AllLive.UWP.Views
                 return false;
             }
 
-            LogHelper.Log($"哔哩哔哩直播播放异常，自动从 {currentCodec} 切换到 AVC。原因: {reason}", LogType.DEBUG);
+            LogDebugIfEnabled(() => $"哔哩哔哩直播播放异常，自动从 {currentCodec} 切换到 AVC。原因: {reason}");
             liveRoomVM.SelectedCodec = "AVC";
             return true;
         }
@@ -3240,7 +3413,7 @@ namespace AllLive.UWP.Views
 
             currentLineRetryCount++;
             var delay = currentLineRetryCount > 1 ? CurrentLineRetryDelay : TimeSpan.Zero;
-            LogHelper.Log($"哔哩哔哩直播播放异常，重试当前线路。原因: {reason} 次数: {currentLineRetryCount}/2 线路: {liveRoomVM?.CurrentLine?.Name}", LogType.DEBUG);
+            LogDebugIfEnabled(() => $"哔哩哔哩直播播放异常，重试当前线路。原因: {reason} 次数: {currentLineRetryCount}/2 线路: {liveRoomVM?.CurrentLine?.Name}");
             _ = RetryCurrentLineAsync(url, delay);
             return true;
         }
@@ -3399,6 +3572,11 @@ namespace AllLive.UWP.Views
 
         private void LogLiveRoomMemory(string stage)
         {
+            if (!IsDebugDiagnosticsEnabled())
+            {
+                return;
+            }
+
             LogHelper.Log($"{stage}。AppMemory={Windows.System.MemoryManager.AppMemoryUsage} Managed={GC.GetTotalMemory(false)}", LogType.DEBUG);
         }
 
@@ -3906,7 +4084,7 @@ namespace AllLive.UWP.Views
                 return;
             }
 
-            LogHelper.Log($"直播间解码器切换 roomId={liveRoomVM?.RoomID} decoder={GetDecoderLogText(decoder)}，重载当前线路", LogType.DEBUG);
+            LogDebugIfEnabled(() => $"直播间解码器切换 roomId={liveRoomVM?.RoomID} decoder={GetDecoderLogText(decoder)}，重载当前线路");
             Utils.ShowMessageToast($"已切换{GetShortDecoderText(decoder)}，正在重载当前线路");
             QueueSetPlayer(url, "DecoderChanged");
         }

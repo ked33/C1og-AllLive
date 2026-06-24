@@ -151,7 +151,7 @@ namespace AllLive.Core
 
             var uid = await GetUid();
             var uuid = GetUuid();
-            CoreDebug.Log($"[Huya] GetRoomDetail roomId={roomId} uid={uid} uuid={uuid}");
+            CoreDebug.Log(() => $"[Huya] GetRoomDetail roomId={roomId} uid={uid} uuid={uuid}");
             var huyaLines = new List<HuyaLineModel>();
             var huyaBiterates = new List<HuyaBitRateModel>();
             //读取可用线路
@@ -175,9 +175,9 @@ namespace AllLive.Core
                     if (lineIndex == 0 && item is JObject firstObj)
                     {
                         var keys = string.Join(",", firstObj.Properties().Select(p => p.Name));
-                        CoreDebug.Log($"[Huya] StreamInfo keys: {keys}");
+                        CoreDebug.Log(() => $"[Huya] StreamInfo keys: {keys}");
                     }
-                    CoreDebug.Log($"[Huya] Line[{lineIndex}] url={item["sFlvUrl"]} stream={item["sStreamName"]} cdnType={cdnType}");
+                    CoreDebug.Log(() => $"[Huya] Line[{lineIndex}] url={item["sFlvUrl"]} stream={item["sStreamName"]} cdnType={cdnType}");
                     lineIndex++;
                 }
                 //HLS效果不好，暂不使用
@@ -207,7 +207,7 @@ namespace AllLive.Core
                     Name = item["sDisplayName"].ToString(),
                 });
             }
-            CoreDebug.Log($"[Huya] Lines={huyaLines.Count} BitRates={huyaBiterates.Count}");
+            CoreDebug.Log(() => $"[Huya] Lines={huyaLines.Count} BitRates={huyaBiterates.Count}");
             var realRoomId = jsonObj["roomInfo"]["tLiveInfo"]["lProfileRoom"].ToInt32();
             if (realRoomId == 0)
             {
@@ -257,7 +257,7 @@ namespace AllLive.Core
         {
             if (presenterUid <= 0)
             {
-                CoreDebug.Log("[Huya] UserOnlineRank skipped: presenter uid empty");
+                CoreDebug.Log(() => "[Huya] UserOnlineRank skipped: presenter uid empty");
                 return null;
             }
 
@@ -272,7 +272,7 @@ namespace AllLive.Core
             };
 
             var resp = await wupuiTupHttpHelper.GetAsync(req, "getUserOnlineRank", new GetUserOnlineRankRsp());
-            CoreDebug.Log($"[Huya] UserOnlineRank pid={presenterUid} iTotal={resp?.iTotal} msg={resp?.sMsg}");
+            CoreDebug.Log(() => $"[Huya] UserOnlineRank pid={presenterUid} iTotal={resp?.iTotal} msg={resp?.sMsg}");
             if (resp != null && resp.iTotal > 0)
             {
                 return resp.iTotal;
@@ -285,7 +285,7 @@ namespace AllLive.Core
         {
             if (presenterUid <= 0)
             {
-                CoreDebug.Log("[Huya] VipBarListStat skipped: presenter uid empty");
+                CoreDebug.Log(() => "[Huya] VipBarListStat skipped: presenter uid empty");
                 return null;
             }
 
@@ -317,7 +317,7 @@ namespace AllLive.Core
             {
                 total = resp.iTotal > 0 ? resp.iTotal : resp.iTotalNum;
             }
-            CoreDebug.Log($"[Huya] VipBarListStat pid={presenterUid} ua={huyaUa} respPid={resp?.lPid} iTotal={resp?.iTotal} iTotalNum={resp?.iTotalNum}");
+            CoreDebug.Log(() => $"[Huya] VipBarListStat pid={presenterUid} ua={huyaUa} respPid={resp?.lPid} iTotal={resp?.iTotal} iTotalNum={resp?.iTotalNum}");
             if (resp != null && resp.lPid == presenterUid)
             {
                 return Math.Max(0, total);
@@ -657,13 +657,13 @@ namespace AllLive.Core
                 if (!string.IsNullOrEmpty(wupUrl))
                 {
                     urls.Add(wupUrl);
-                    CoreDebug.Log($"[Huya] Url[wup] {wupUrl}");
+                    CoreDebug.Log(() => $"[Huya] Url[wup] {wupUrl}");
                 }
                 var legacyUrl = BuildLegacyUrl(line, data.BitRate, (roomDetail.Data as HuyaUrlDataModel)?.Uid);
                 if (!string.IsNullOrEmpty(legacyUrl))
                 {
                     urls.Add(legacyUrl);
-                    CoreDebug.Log($"[Huya] Url[legacy] {legacyUrl}");
+                    CoreDebug.Log(() => $"[Huya] Url[legacy] {legacyUrl}");
                 }
             }
 
@@ -692,11 +692,11 @@ namespace AllLive.Core
 
         private async Task<string> GetRealUrl(HuyaLineModel line, int bitrate)
         {
-            CoreDebug.Log($"[Huya] GetRealUrl line={line.Line} stream={line.StreamName} cdnType={line.CdnType} bitrate={bitrate}");
+            CoreDebug.Log(() => $"[Huya] GetRealUrl line={line.Line} stream={line.StreamName} cdnType={line.CdnType} bitrate={bitrate}");
             var token = await GetCdnTokenInfoEx(line);
             if (string.IsNullOrEmpty(token))
             {
-                CoreDebug.Log("[Huya] TokenEx为空，回退到旧token生成");
+                CoreDebug.Log(() => "[Huya] TokenEx为空，回退到旧token生成");
                 return "";
             }
             var antiCode = BuildAntiCodeEx(line.StreamName, line.PresenterUid, token);
@@ -722,7 +722,7 @@ namespace AllLive.Core
             };
             var resp = await tupHttpHelper.GetAsync(req, "getCdnTokenInfoEx", new HYGetCdnTokenExResp());
             var token = resp?.sFlvToken ?? "";
-            CoreDebug.Log($"[Huya] TokenExResp len={token.Length} exp={resp?.iExpireTime}");
+            CoreDebug.Log(() => $"[Huya] TokenExResp len={token.Length} exp={resp?.iExpireTime}");
             if (!string.IsNullOrEmpty(token))
             {
                 var query = HttpUtility.ParseQueryString(token);
@@ -731,14 +731,14 @@ namespace AllLive.Core
                 {
                     var dt = DateTimeOffset.FromUnixTimeSeconds(seconds);
                     var remain = (dt - DateTimeOffset.UtcNow).TotalSeconds;
-                    CoreDebug.Log($"[Huya] TokenEx wsTime={wsTime} exp={dt:O} remain={remain:F0}s");
+                    CoreDebug.Log(() => $"[Huya] TokenEx wsTime={wsTime} exp={dt:O} remain={remain:F0}s");
                 }
                 var wsSecret = query["wsSecret"];
                 if (!string.IsNullOrEmpty(wsSecret))
                 {
-                    CoreDebug.Log($"[Huya] TokenEx wsSecretLen={wsSecret.Length}");
+                    CoreDebug.Log(() => $"[Huya] TokenEx wsSecretLen={wsSecret.Length}");
                 }
-                CoreDebug.Log($"[Huya] TokenEx ctype={query["ctype"]} t={query["t"]} fs={query["fs"]}");
+                CoreDebug.Log(() => $"[Huya] TokenEx ctype={query["ctype"]} t={query["t"]} fs={query["fs"]}");
             }
             return token;
         }

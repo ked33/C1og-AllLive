@@ -95,7 +95,7 @@ namespace AllLive.Core.Danmaku
             query.Add("signature", sign ?? "");
             if (string.IsNullOrWhiteSpace(sign))
             {
-                CoreDebug.Log("[DouyinDanmaku] signature为空，将尝试无签名连接");
+                CoreDebug.Log(() => "[DouyinDanmaku] signature为空，将尝试无签名连接");
             }
 
             // 将参数拼接到url
@@ -109,7 +109,7 @@ namespace AllLive.Core.Danmaku
                 {"Cookie", danmakuArgs.Cookie ?? "" },
                 {"User-Agent",UserAgent }
               };
-            CoreDebug.Log($"[DouyinDanmaku] 连接WS roomId={danmakuArgs.RoomId} userId={danmakuArgs.UserId} signLen={sign?.Length ?? 0} cookieLen={danmakuArgs.Cookie?.Length ?? 0} urlLen={url.Length}");
+            CoreDebug.Log(() => $"[DouyinDanmaku] 连接WS roomId={danmakuArgs.RoomId} userId={danmakuArgs.UserId} signLen={sign?.Length ?? 0} cookieLen={danmakuArgs.Cookie?.Length ?? 0} urlLen={url.Length}");
             // 必须设置ssl协议为Tls12
             ws.SslConfiguration.EnabledSslProtocols = System.Security.Authentication.SslProtocols.Tls12;
 
@@ -134,7 +134,7 @@ namespace AllLive.Core.Danmaku
                 return;
             }
 
-            CoreDebug.Log("[DouyinDanmaku] WebSocket已连接");
+            CoreDebug.Log(() => "[DouyinDanmaku] WebSocket已连接");
             await Task.Run(() =>
             {
                 if (isStopped)
@@ -189,7 +189,7 @@ namespace AllLive.Core.Danmaku
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[DouyinDanmaku] 消息解析异常: {ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[DouyinDanmaku] 消息解析异常: {ex.GetType().FullName}: {ex.Message}");
             }
         }
         private void UnPackWebcastChatMessage(byte[] payload)
@@ -207,7 +207,7 @@ namespace AllLive.Core.Danmaku
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[DouyinDanmaku] 弹幕解包失败: {ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[DouyinDanmaku] 弹幕解包失败: {ex.GetType().FullName}: {ex.Message}");
             }
         }
 
@@ -239,7 +239,7 @@ namespace AllLive.Core.Danmaku
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[DouyinDanmaku] 在线人数解包失败: {ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[DouyinDanmaku] 在线人数解包失败: {ex.GetType().FullName}: {ex.Message}");
             }
 
         }
@@ -250,7 +250,7 @@ namespace AllLive.Core.Danmaku
                 return;
             }
 
-            CoreDebug.Log($"[DouyinDanmaku] WebSocket关闭 code={e.Code} clean={e.WasClean} reason={e.Reason}");
+            CoreDebug.Log(() => $"[DouyinDanmaku] WebSocket关闭 code={e.Code} clean={e.WasClean} reason={e.Reason}");
             OnClose?.Invoke(this, e.Reason);
         }
 
@@ -261,7 +261,7 @@ namespace AllLive.Core.Danmaku
                 return;
             }
 
-            CoreDebug.Log($"[DouyinDanmaku] WebSocket错误: {e.Message}{(e.Exception == null ? "" : $" | {e.Exception.GetType().FullName}: {e.Exception.Message}")}");
+            CoreDebug.Log(() => $"[DouyinDanmaku] WebSocket错误: {e.Message}{(e.Exception == null ? "" : $" | {e.Exception.GetType().FullName}: {e.Exception.Message}")}");
             OnClose?.Invoke(this, e.Message);
         }
 
@@ -420,26 +420,26 @@ namespace AllLive.Core.Danmaku
             var signParam = BuildSignParam(roomId, uniqueId);
             if (string.IsNullOrWhiteSpace(signParam))
             {
-                CoreDebug.Log($"[DouyinDanmaku] signature参数为空 roomId={roomId}");
+                CoreDebug.Log(() => $"[DouyinDanmaku] signature参数为空 roomId={roomId}");
                 return "";
             }
             var md5 = Utils.ToMD5(signParam);
             var quickJsResult = TryGetSignByQuickJs(md5, out var quickJsError);
             if (!string.IsNullOrWhiteSpace(quickJsResult))
             {
-                CoreDebug.Log($"[DouyinDanmaku] QuickJS签名成功 len={quickJsResult.Length}");
+                CoreDebug.Log(() => $"[DouyinDanmaku] QuickJS签名成功 len={quickJsResult.Length}");
                 return quickJsResult;
             }
             if (!string.IsNullOrWhiteSpace(quickJsError))
             {
-                CoreDebug.Log($"[DouyinDanmaku] QuickJS签名失败: {quickJsError}");
+                CoreDebug.Log(() => $"[DouyinDanmaku] QuickJS签名失败: {quickJsError}");
             }
             var serviceResult = await GetSignByService(roomId, uniqueId);
             if (!string.IsNullOrWhiteSpace(serviceResult))
             {
                 return serviceResult;
             }
-            CoreDebug.Log($"[DouyinDanmaku] signature获取失败 roomId={roomId}");
+            CoreDebug.Log(() => $"[DouyinDanmaku] signature获取失败 roomId={roomId}");
             return "";
         }
 
@@ -566,10 +566,10 @@ namespace AllLive.Core.Danmaku
                         {
                             var body = await response.Content.ReadAsStringAsync();
                             var elapsedMs = (DateTimeOffset.UtcNow - start).TotalMilliseconds;
-                            CoreDebug.Log($"[DouyinDanmaku] signature服务 url={url} status={(int)response.StatusCode} {response.ReasonPhrase} elapsedMs={elapsedMs:F0} bodyLen={body?.Length ?? 0}");
+                            CoreDebug.Log(() => $"[DouyinDanmaku] signature服务 url={url} status={(int)response.StatusCode} {response.ReasonPhrase} elapsedMs={elapsedMs:F0} bodyLen={body?.Length ?? 0}");
                             if (!response.IsSuccessStatusCode)
                             {
-                                CoreDebug.Log($"[DouyinDanmaku] signature服务非200 url={url} bodyHead={TrimForLog(body)}");
+                                CoreDebug.Log(() => $"[DouyinDanmaku] signature服务非200 url={url} bodyHead={TrimForLog(body)}");
                                 continue;
                             }
                             var json = JObject.Parse(body);
@@ -585,16 +585,16 @@ namespace AllLive.Core.Danmaku
                             }
                             if (!string.IsNullOrWhiteSpace(sign))
                             {
-                                CoreDebug.Log($"[DouyinDanmaku] signature服务成功 url={url} signLen={sign.Length}");
+                                CoreDebug.Log(() => $"[DouyinDanmaku] signature服务成功 url={url} signLen={sign.Length}");
                                 return sign;
                             }
-                            CoreDebug.Log($"[DouyinDanmaku] signature服务返回空 url={url} code={json["code"]} msg={json["msg"]}");
+                            CoreDebug.Log(() => $"[DouyinDanmaku] signature服务返回空 url={url} code={json["code"]} msg={json["msg"]}");
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    CoreDebug.Log($"[DouyinDanmaku] signature服务异常 url={url} err={ex.GetType().FullName} 0x{ex.HResult:X8} {ex.Message}");
+                    CoreDebug.Log(() => $"[DouyinDanmaku] signature服务异常 url={url} err={ex.GetType().FullName} 0x{ex.HResult:X8} {ex.Message}");
                 }
             }
             return "";
@@ -656,14 +656,14 @@ namespace AllLive.Core.Danmaku
                     .FirstOrDefault(name => name.EndsWith("douyin-webmssdk.js", StringComparison.OrdinalIgnoreCase));
                 if (string.IsNullOrWhiteSpace(resourceName))
                 {
-                    CoreDebug.Log("[DouyinDanmaku] webmssdk脚本资源未找到");
+                    CoreDebug.Log(() => "[DouyinDanmaku] webmssdk脚本资源未找到");
                     return "";
                 }
                 using (var stream = assembly.GetManifestResourceStream(resourceName))
                 {
                     if (stream == null)
                     {
-                        CoreDebug.Log("[DouyinDanmaku] webmssdk脚本资源读取失败");
+                        CoreDebug.Log(() => "[DouyinDanmaku] webmssdk脚本资源读取失败");
                         return "";
                     }
                     using (var reader = new StreamReader(stream, Encoding.UTF8))
@@ -674,7 +674,7 @@ namespace AllLive.Core.Danmaku
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[DouyinDanmaku] webmssdk脚本加载失败: {ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[DouyinDanmaku] webmssdk脚本加载失败: {ex.GetType().FullName}: {ex.Message}");
                 return "";
             }
         }

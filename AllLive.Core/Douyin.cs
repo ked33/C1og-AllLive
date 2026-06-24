@@ -92,7 +92,7 @@ namespace AllLive.Core
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[Douyin] 分类数据解析失败: {ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[Douyin] 分类数据解析失败: {ex.GetType().FullName}: {ex.Message}");
                 throw;
             }
             var categoryData = renderDataJson["categoryData"] as JArray;
@@ -370,7 +370,7 @@ namespace AllLive.Core
                 {
                     if (attempt > 1)
                     {
-                        CoreDebug.Log($"[Douyin] 房间详情重试开始 webRid={webRid} attempt={attempt}/{totalAttempts}");
+                        CoreDebug.Log(() => $"[Douyin] 房间详情重试开始 webRid={webRid} attempt={attempt}/{totalAttempts}");
                     }
                     return await GetRoomDetailByWebRidOnce(webRid);
                 }
@@ -383,7 +383,7 @@ namespace AllLive.Core
                     }
 
                     var delay = RoomDetailRetryDelays[attempt - 1];
-                    CoreDebug.Log($"[Douyin] 房间详情被风控/验证码拦截，准备重试 webRid={webRid} attempt={attempt}/{totalAttempts} delayMs={(int)delay.TotalMilliseconds} err={ex.Message}");
+                    CoreDebug.Log(() => $"[Douyin] 房间详情被风控/验证码拦截，准备重试 webRid={webRid} attempt={attempt}/{totalAttempts} delayMs={(int)delay.TotalMilliseconds} err={ex.Message}");
                     await Task.Delay(delay);
                 }
             }
@@ -400,7 +400,7 @@ namespace AllLive.Core
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[Douyin] GetRoomDetailByWebRidApi失败 webRid={webRid} err={ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[Douyin] GetRoomDetailByWebRidApi失败 webRid={webRid} err={ex.GetType().FullName}: {ex.Message}");
             }
             return await GetRoomDetailByWebRidHtml(webRid);
         }
@@ -551,7 +551,7 @@ namespace AllLive.Core
         private async Task<JToken> GetRoomDataHtml(string webRid)
         {
             var dyCookie = await GetWebCookie(webRid);
-            CoreDebug.Log($"[Douyin] GetRoomDataHtml webRid={webRid} cookieLen={dyCookie?.Length ?? 0}");
+            CoreDebug.Log(() => $"[Douyin] GetRoomDataHtml webRid={webRid} cookieLen={dyCookie?.Length ?? 0}");
             using (var response = await HttpUtil.Get($"https://live.douyin.com/{webRid}",
                 headers: new Dictionary<string, string>
                 {
@@ -567,15 +567,15 @@ namespace AllLive.Core
             {
                 var resp = await response.Content.ReadAsStringAsync();
                 var statusCode = (int)response.StatusCode;
-                CoreDebug.Log($"[Douyin] GetRoomDataHtml status={statusCode} respLen={resp?.Length ?? 0} head={TrimForLog(resp)}");
+                CoreDebug.Log(() => $"[Douyin] GetRoomDataHtml status={statusCode} respLen={resp?.Length ?? 0} head={TrimForLog(resp)}");
                 if (!response.IsSuccessStatusCode && statusCode == 444)
                 {
-                    CoreDebug.Log("[Douyin] GetRoomDataHtml触发风控(444)");
+                    CoreDebug.Log(() => "[Douyin] GetRoomDataHtml触发风控(444)");
                     throw new DouyinRoomDataBlockedException("直播间HTML请求返回444");
                 }
                 if (IsDouyinCaptchaPage(resp))
                 {
-                    CoreDebug.Log("[Douyin] GetRoomDataHtml触发验证码中间页");
+                    CoreDebug.Log(() => "[Douyin] GetRoomDataHtml触发验证码中间页");
                     throw new DouyinRoomDataBlockedException("直播间HTML返回验证码中间页");
                 }
 
@@ -590,7 +590,7 @@ namespace AllLive.Core
                 string json = match.Success ? match.Groups[0].Value : "";
                 if (string.IsNullOrEmpty(json))
                 {
-                    CoreDebug.Log("[Douyin] GetRoomDataHtml解析失败: 未找到RENDER_DATA或state");
+                    CoreDebug.Log(() => "[Douyin] GetRoomDataHtml解析失败: 未找到RENDER_DATA或state");
                     throw new DouyinRoomDataBlockedException("直播间HTML缺少RENDER_DATA或state");
                 }
                 json = json.Trim().Replace("\\\"", "\"").Replace("\\\\", "\\").Replace("]\\n", "");
@@ -633,7 +633,7 @@ namespace AllLive.Core
                 var statusCode = (int)response.StatusCode;
                 if (!response.IsSuccessStatusCode)
                 {
-                    CoreDebug.Log($"[Douyin] GetRoomDataApi status={statusCode} respLen={resp?.Length ?? 0} head={TrimForLog(resp)}");
+                    CoreDebug.Log(() => $"[Douyin] GetRoomDataApi status={statusCode} respLen={resp?.Length ?? 0} head={TrimForLog(resp)}");
                     if (statusCode == 444)
                     {
                         throw new DouyinRoomDataBlockedException("直播间详情API返回444");
@@ -689,8 +689,7 @@ namespace AllLive.Core
             var legacyHlsList = ReadDouyinMapUrls(data["hls_pull_url_map"]);
             var streamKeys = streamQualityData?.Properties().Select(p => p.Name).ToList() ?? new List<string>();
 
-            CoreDebug.Log($"[Douyin] 取流候选 roomId={roomDetail.RoomID} qualities={qulityList?.Count ?? 0} flvKeys={BuildKeyListForLog(flvCandidates)} hlsKeys={BuildKeyListForLog(hlsCandidates)} streamKeys={string.Join(",", streamKeys)}");
-
+            CoreDebug.Log(() => $"[Douyin] 取流候选 roomId={roomDetail.RoomID} qualities={qulityList?.Count ?? 0} flvKeys={BuildKeyListForLog(flvCandidates)} hlsKeys={BuildKeyListForLog(hlsCandidates)} streamKeys={string.Join(",", streamKeys)}");
             if (qulityList == null)
             {
                 return Task.FromResult(qualities);
@@ -710,8 +709,7 @@ namespace AllLive.Core
                     legacyHlsList,
                     level);
 
-                CoreDebug.Log($"[Douyin] 清晰度候选 roomId={roomDetail.RoomID} quality={qualityName} level={level} sdkKey={sdkKey} prefer={string.Join(",", preferredKeys)} urls={BuildUrlListBrief(urls)}");
-
+                CoreDebug.Log(() => $"[Douyin] 清晰度候选 roomId={roomDetail.RoomID} quality={qualityName} level={level} sdkKey={sdkKey} prefer={string.Join(",", preferredKeys)} urls={BuildUrlListBrief(urls)}");
                 if (urls.Count > 0)
                 {
                     qualities.Add(new LivePlayQuality()
@@ -730,7 +728,7 @@ namespace AllLive.Core
         public Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn)
         {
             var urls = qn?.Data as List<string> ?? new List<string>();
-            CoreDebug.Log($"[Douyin] 播放URL选择 roomId={roomDetail?.RoomID} quality={qn?.Quality} total={urls.Count} flv={urls.Count(IsFlvUrl)} hls={urls.Count(IsHlsUrl)} first={BuildDouyinUrlBrief(urls.FirstOrDefault())}");
+            CoreDebug.Log(() => $"[Douyin] 播放URL选择 roomId={roomDetail?.RoomID} quality={qn?.Quality} total={urls.Count} flv={urls.Count(IsFlvUrl)} hls={urls.Count(IsHlsUrl)} first={BuildDouyinUrlBrief(urls.FirstOrDefault())}");
             return Task.FromResult(urls);
         }
 
@@ -748,7 +746,7 @@ namespace AllLive.Core
             var originMain = streamDataRoot?["data"]?["origin"]?["main"];
             if (originMain == null)
             {
-                CoreDebug.Log($"[Douyin] ORIGIN补源跳过 roomId={roomId} reason=origin_missing");
+                CoreDebug.Log(() => $"[Douyin] ORIGIN补源跳过 roomId={roomId} reason=origin_missing");
                 return;
             }
 
@@ -758,7 +756,7 @@ namespace AllLive.Core
             var addedFlv = InsertDouyinOriginUrl(streamUrl, "flv_pull_url", originFlv);
             var addedHls = InsertDouyinOriginUrl(streamUrl, "hls_pull_url_map", originHls);
 
-            CoreDebug.Log($"[Douyin] ORIGIN补源 roomId={roomId} flv={BuildDouyinUrlBrief(originFlv)} hls={BuildDouyinUrlBrief(originHls)} codec={originCodec} addedFlv={addedFlv} addedHls={addedHls}");
+            CoreDebug.Log(() => $"[Douyin] ORIGIN补源 roomId={roomId} flv={BuildDouyinUrlBrief(originFlv)} hls={BuildDouyinUrlBrief(originHls)} codec={originCodec} addedFlv={addedFlv} addedHls={addedHls}");
         }
 
         private static string GetDouyinStreamData(JToken streamUrl)
@@ -792,7 +790,7 @@ namespace AllLive.Core
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[Douyin] stream_data解析失败: {ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[Douyin] stream_data解析失败: {ex.GetType().FullName}: {ex.Message}");
                 return null;
             }
         }
@@ -1208,7 +1206,7 @@ namespace AllLive.Core
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[Douyin] GetLiveStatusByWebRidApi失败 webRid={webRid} err={ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[Douyin] GetLiveStatusByWebRidApi失败 webRid={webRid} err={ex.GetType().FullName}: {ex.Message}");
             }
 
             var roomDataHtml = await GetRoomDataHtml(webRid);
@@ -1249,14 +1247,14 @@ namespace AllLive.Core
                 var signedUrl = DouyinAbogus.BuildSignedUrl(url, USER_AGENT);
                 if (!string.IsNullOrWhiteSpace(signedUrl))
                 {
-                    CoreDebug.Log($"[Douyin] GetABogus local success len={signedUrl.Length}");
+                    CoreDebug.Log(() => $"[Douyin] GetABogus local success len={signedUrl.Length}");
                     return Task.FromResult(signedUrl);
                 }
-                CoreDebug.Log("[Douyin] GetABogus local empty");
+                CoreDebug.Log(() => "[Douyin] GetABogus local empty");
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[Douyin] GetABogus local failed err={ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[Douyin] GetABogus local failed err={ex.GetType().FullName}: {ex.Message}");
             }
             return Task.FromResult(url);
         }
@@ -1297,7 +1295,7 @@ namespace AllLive.Core
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[Douyin] RENDER_DATA解析失败: {ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[Douyin] RENDER_DATA解析失败: {ex.GetType().FullName}: {ex.Message}");
                 return null;
             }
         }

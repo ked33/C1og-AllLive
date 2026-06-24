@@ -174,10 +174,10 @@ namespace AllLive.Core
             //取加密的js
             html = Regex.Match(html, @"(vdwdae325w_64we[\s\S]*function ub98484234[\s\S]*?)function").Groups[1].Value;
             html = Regex.Replace(html, @"eval.*?;}", "strc;}");
-            CoreDebug.Log($"[Douyu] GetPlayArgs rid={rid} rawLen={rawLen} jsLen={html?.Length ?? 0} uwp={IsUwpRuntime()}");
+            CoreDebug.Log(() => $"[Douyu] GetPlayArgs rid={rid} rawLen={rawLen} jsLen={html?.Length ?? 0} uwp={IsUwpRuntime()}");
             if (string.IsNullOrEmpty(html))
             {
-                CoreDebug.Log("[Douyu] GetPlayArgs: 签名JS提取为空");
+                CoreDebug.Log(() => "[Douyu] GetPlayArgs: 签名JS提取为空");
             }
 
             if (IsUwpRuntime())
@@ -188,12 +188,12 @@ namespace AllLive.Core
             var quickJsResult = TryGetPlayArgsByQuickJs(html, rid, out var quickJsError);
             if (!string.IsNullOrEmpty(quickJsResult))
             {
-                CoreDebug.Log($"[Douyu] QuickJS签名成功 len={quickJsResult.Length}");
+                CoreDebug.Log(() => $"[Douyu] QuickJS签名成功 len={quickJsResult.Length}");
                 return quickJsResult;
             }
             if (!string.IsNullOrEmpty(quickJsError))
             {
-                CoreDebug.Log($"[Douyu] QuickJS签名失败: {quickJsError}");
+                CoreDebug.Log(() => $"[Douyu] QuickJS签名失败: {quickJsError}");
             }
             return await GetPlayArgsByService(html, rid, "fallback");
         }
@@ -310,7 +310,7 @@ namespace AllLive.Core
                 rid = rid
             };
             var payload = Newtonsoft.Json.JsonConvert.SerializeObject(jsonObj);
-            CoreDebug.Log($"[Douyu] 调用签名服务 reason={reason} payloadLen={payload.Length}");
+            CoreDebug.Log(() => $"[Douyu] 调用签名服务 reason={reason} payloadLen={payload.Length}");
             foreach (var url in GetSignServiceUrls())
             {
                 try
@@ -326,17 +326,17 @@ namespace AllLive.Core
                         {
                             var body = await response.Content.ReadAsStringAsync();
                             var elapsedMs = (DateTimeOffset.UtcNow - start).TotalMilliseconds;
-                            CoreDebug.Log($"[Douyu] 签名服务 url={url} status={(int)response.StatusCode} {response.ReasonPhrase} elapsedMs={elapsedMs:F0} bodyLen={body?.Length ?? 0}");
+                            CoreDebug.Log(() => $"[Douyu] 签名服务 url={url} status={(int)response.StatusCode} {response.ReasonPhrase} elapsedMs={elapsedMs:F0} bodyLen={body?.Length ?? 0}");
                             if (!response.IsSuccessStatusCode)
                             {
-                                CoreDebug.Log($"[Douyu] 签名服务非200 url={url} bodyHead={TrimForLog(body)}");
+                                CoreDebug.Log(() => $"[Douyu] 签名服务非200 url={url} bodyHead={TrimForLog(body)}");
                                 continue;
                             }
                             var obj = JObject.Parse(body);
                             var code = obj["code"].ToInt32();
                             var data = obj["data"]?.ToString();
                             var msg = obj["msg"]?.ToString();
-                            CoreDebug.Log($"[Douyu] 签名服务 url={url} code={code} msg={msg} dataLen={data?.Length ?? 0}");
+                            CoreDebug.Log(() => $"[Douyu] 签名服务 url={url} code={code} msg={msg} dataLen={data?.Length ?? 0}");
                             if (code == 0)
                             {
                                 return data;
@@ -346,7 +346,7 @@ namespace AllLive.Core
                 }
                 catch (Exception ex)
                 {
-                    CoreDebug.Log($"[Douyu] 签名服务异常 url={url} rid={rid} err={ex.GetType().FullName} 0x{ex.HResult:X8} {ex.Message}");
+                    CoreDebug.Log(() => $"[Douyu] 签名服务异常 url={url} rid={rid} err={ex.GetType().FullName} 0x{ex.HResult:X8} {ex.Message}");
                 }
             }
             return "";
@@ -452,15 +452,15 @@ namespace AllLive.Core
             var data = roomDetail.Data?.ToString();
             if (string.IsNullOrWhiteSpace(data))
             {
-                CoreDebug.Log($"[Douyu] GetPlayQuality中止: 播放参数为空 rid={roomDetail.RoomID}");
+                CoreDebug.Log(() => $"[Douyu] GetPlayQuality中止: 播放参数为空 rid={roomDetail.RoomID}");
                 return new List<LivePlayQuality>();
             }
             data += $"&cdn=&rate=0";
-            CoreDebug.Log($"[Douyu] GetPlayQuality rid={roomDetail.RoomID} dataLen={data.Length}");
+            CoreDebug.Log(() => $"[Douyu] GetPlayQuality rid={roomDetail.RoomID} dataLen={data.Length}");
             List<LivePlayQuality> qualities = new List<LivePlayQuality>();
             var result = await HttpUtil.PostString($"https://www.douyu.com/lapi/live/getH5Play/{ roomDetail.RoomID}", data);
             var obj = JObject.Parse(result);
-            CoreDebug.Log($"[Douyu] GetPlayQuality resp error={obj["error"]} msg={obj["msg"]} cdnCount={(obj["data"]?["cdnsWithName"] as JArray)?.Count ?? 0} rateCount={(obj["data"]?["multirates"] as JArray)?.Count ?? 0}");
+            CoreDebug.Log(() => $"[Douyu] GetPlayQuality resp error={obj["error"]} msg={obj["msg"]} cdnCount={(obj["data"]?["cdnsWithName"] as JArray)?.Count ?? 0} rateCount={(obj["data"]?["multirates"] as JArray)?.Count ?? 0}");
             var cdns = new List<string>();
             foreach (var item in obj["data"]["cdnsWithName"])
             {
@@ -511,12 +511,12 @@ namespace AllLive.Core
                 args += $"&cdn={cdn}&rate={rate}";
                 var result = await HttpUtil.PostString($"https://www.douyu.com/lapi/live/getH5Play/{rid}", args);
                 var obj = JObject.Parse(result);
-                CoreDebug.Log($"[Douyu] GetUrl rid={rid} cdn={cdn} rate={rate} error={obj["error"]} msg={obj["msg"]}");
+                CoreDebug.Log(() => $"[Douyu] GetUrl rid={rid} cdn={cdn} rate={rate} error={obj["error"]} msg={obj["msg"]}");
                 return obj["data"]["rtmp_url"].ToString() + "/" + System.Net.WebUtility.HtmlDecode(obj["data"]["rtmp_live"].ToString());
             }
             catch (Exception ex)
             {
-                CoreDebug.Log($"[Douyu] GetUrl失败 rid={rid} cdn={cdn} rate={rate} err={ex.GetType().FullName}: {ex.Message}");
+                CoreDebug.Log(() => $"[Douyu] GetUrl失败 rid={rid} cdn={cdn} rate={rate} err={ex.GetType().FullName}: {ex.Message}");
                 return "";
             }
 

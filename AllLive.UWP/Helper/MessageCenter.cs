@@ -332,6 +332,11 @@ namespace AllLive.UWP.Helper
 
         private static void LogMemorySnapshot(string stage)
         {
+            if (!LogHelper.Enabled)
+            {
+                return;
+            }
+
             LogHelper.Log($"{stage}。AppMemory={MemoryManager.AppMemoryUsage} Managed={GC.GetTotalMemory(false)} ActiveLiveRoomWindows={Volatile.Read(ref ActiveLiveRoomWindowCount)}", LogType.DEBUG);
         }
 
