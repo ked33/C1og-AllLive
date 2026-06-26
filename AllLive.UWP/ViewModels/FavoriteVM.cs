@@ -113,7 +113,7 @@ namespace AllLive.UWP.ViewModels
                     ApplySortAndFilter(list);
                 }
                 LoaddingLiveStatus = true;
-                await UpdateLiveStatusAsync(list, version, loadRoomDetail);
+                var failedCount = await UpdateLiveStatusAsync(list, version, loadRoomDetail);
                 if (version != _refreshVersion)
                 {
                     return;
@@ -123,6 +123,12 @@ namespace AllLive.UWP.ViewModels
                     ApplyStatusRefreshTitles(list, previousTitleStates);
                 }
                 ApplySortAndFilter(list);
+                if (failedCount > 0)
+                {
+                    Utils.ShowMessageToast(failedCount >= list.Count
+                        ? "开播状态获取失败，请检查网络连接"
+                        : $"{failedCount} 个直播间的开播状态获取失败");
+                }
             }
             catch (Exception ex)
             {
@@ -281,52 +287,70 @@ namespace AllLive.UWP.ViewModels
                 && string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
         }
 
-        private async Task UpdateLiveStatusAsync(IList<FavoriteItem> items, int refreshVersion, bool loadRoomDetail)
+        // 返回开播状态获取失败的关注项数量。
+        private async Task<int> UpdateLiveStatusAsync(IList<FavoriteItem> items, int refreshVersion, bool loadRoomDetail)
         {
-            var tasks = new List<Task>(items.Count);
+            var tasks = new List<Task<bool>>(items.Count);
             foreach (var item in items)
             {
                 tasks.Add(UpdateLiveStatusAsync(item, refreshVersion, loadRoomDetail));
             }
-            await Task.WhenAll(tasks);
+            var results = await Task.WhenAll(tasks);
+            return results.Count(failed => failed);
         }
 
-        private async Task UpdateLiveStatusAsync(FavoriteItem item, int refreshVersion, bool loadRoomDetail)
+        // 返回 true 表示该关注项的开播状态获取失败（用于在刷新结束后统一提示）。
+        // 仅 GetLiveStatus 失败才算开播状态获取失败；已拿到开播状态、仅房间详情失败不计入。
+        private async Task<bool> UpdateLiveStatusAsync(FavoriteItem item, int refreshVersion, bool loadRoomDetail)
         {
             if (refreshVersion != _refreshVersion)
             {
-                return;
+                return false;
             }
             await _liveStatusSemaphore.WaitAsync();
             try
             {
                 if (refreshVersion != _refreshVersion)
                 {
-                    return;
+                    return false;
                 }
                 var site = MainVM.Sites.FirstOrDefault(x => x.Name == item.SiteName);
-                if (site != null)
+                if (site == null)
                 {
-                    var status = await site.LiveSite.GetLiveStatus(item.RoomID);
-                    if (refreshVersion != _refreshVersion)
-                    {
-                        return;
-                    }
-                    item.LiveStatus = status;
-                    if (!status)
-                    {
-                        item.LiveTitle = string.Empty;
-                        return;
-                    }
-                    if (!loadRoomDetail)
-                    {
-                        return;
-                    }
+                    return false;
+                }
 
+                bool status;
+                try
+                {
+                    status = await site.LiveSite.GetLiveStatus(item.RoomID);
+                }
+                catch (Exception ex)
+                {
+                    LogHelper.Log($"获取直播状态失败:{item.SiteName}-{item.RoomID}", LogType.ERROR, ex);
+                    return refreshVersion == _refreshVersion;
+                }
+                if (refreshVersion != _refreshVersion)
+                {
+                    return false;
+                }
+                item.LiveStatus = status;
+                if (!status)
+                {
+                    item.LiveTitle = string.Empty;
+                    return false;
+                }
+                if (!loadRoomDetail)
+                {
+                    return false;
+                }
+
+                try
+                {
                     var detail = await site.LiveSite.GetRoomDetail(item.RoomID);
                     if (refreshVersion != _refreshVersion)
                     {
-                        return;
+                        return false;
                     }
                     if (detail != null)
                     {
@@ -338,10 +362,13 @@ namespace AllLive.UWP.ViewModels
                         item.LiveTitle = string.Empty;
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                LogHelper.Log($"获取直播状态失败:{item.SiteName}-{item.RoomID}", LogType.ERROR, ex);
+                catch (Exception ex)
+                {
+                    // 开播状态已获取成功，仅房间详情失败，标题留空，不计入失败提示。
+                    LogHelper.Log($"获取直播间详情失败:{item.SiteName}-{item.RoomID}", LogType.ERROR, ex);
+                    item.LiveTitle = string.Empty;
+                }
+                return false;
             }
             finally
             {
