@@ -901,6 +901,19 @@ namespace AllLive.UWP.ViewModels
 
         private string GetDefaultCodecSelection(IEnumerable<string> codecList)
         {
+            // Bilibili：Core 已按“探测可用性 + 编码偏好”排好序，默认编码应跟随首条线路，
+            // 避免 UI 用固定 AVC 偏好把选路拉回一条未探测/探测失败的线路（选路脱节 bug）。
+            if (string.Equals(Site?.Name, "哔哩哔哩直播", StringComparison.OrdinalIgnoreCase))
+            {
+                var firstCodec = allLines?.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x?.Codec))?.Codec;
+                if (!string.IsNullOrWhiteSpace(firstCodec)
+                    && codecList != null
+                    && codecList.Any(x => string.Equals(x, firstCodec, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return firstCodec;
+                }
+            }
+
             if (codecList != null)
             {
                 foreach (var codec in GetPreferredCodecOrder())

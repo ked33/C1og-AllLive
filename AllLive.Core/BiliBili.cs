@@ -2,6 +2,7 @@
 using AllLive.Core.Models;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using AllLive.Core.Danmaku;
 using AllLive.Core.Helper;
@@ -741,6 +742,10 @@ namespace AllLive.Core
             public bool IsMcdn { get; set; }
             public int Order { get; set; }
             public int Score { get; set; }
+            /// <summary>探测已确认可连通（HTTP 2xx）</summary>
+            public bool Verified { get; set; }
+            /// <summary>探测已确认不可用（异常或非 2xx）</summary>
+            public bool VerifyFailed { get; set; }
         }
 
         private async Task<HttpClient> CreateBilibiliPlayInfoHttpClientAsync()
@@ -878,41 +883,32 @@ namespace AllLive.Core
 
         private async Task<List<BilibiliPlayUrlCandidate>> SelectBilibiliPlayUrlCandidatesAsync(HttpClient client, string roomID, int? qnValue, List<BilibiliPlayUrlCandidate> candidates)
         {
-            var ordered = OrderBilibiliPlayUrlCandidates(candidates);
-            var flvCandidates = ordered.Where(x => x.IsFlv).ToList();
+            var all = candidates ?? new List<BilibiliPlayUrlCandidate>();
+            var flvCandidates = all.Where(x => x != null && x.IsFlv).ToList();
             if (flvCandidates.Count > 0)
             {
-                CoreDebug.Log(() => $"[Bilibili] 选择FLV优先流 roomId={roomID} qn={qnValue?.ToString() ?? "null"} flv={flvCandidates.Count} first={BuildBilibiliUrlBrief(flvCandidates[0])}");
-                return ordered;
+                // FLV 走本地代理，最稳，无需探测。
+                var orderedFlv = OrderBilibiliPlayUrlCandidates(all);
+                CoreDebug.Log(() => $"[Bilibili] 选择FLV优先流 roomId={roomID} qn={qnValue?.ToString() ?? "null"} flv={flvCandidates.Count} first={BuildBilibiliUrlBrief(orderedFlv[0])}");
+                return orderedFlv;
             }
 
-            var hlsCandidates = ordered.Where(x => x.IsHls).ToList();
+            var hlsCandidates = all.Where(x => x != null && x.IsHls).ToList();
             if (hlsCandidates.Count == 0)
             {
-                CoreDebug.Log(() => $"[Bilibili] 未获得FLV或HLS候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={ordered.Count}");
-                return ordered;
+                CoreDebug.Log(() => $"[Bilibili] 未获得FLV或HLS候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={all.Count}");
+                return OrderBilibiliPlayUrlCandidates(all);
             }
 
-            CoreDebug.Log(() => $"[Bilibili] 未获得FLV，使用HLS fallback roomId={roomID} qn={qnValue?.ToString() ?? "null"} hls={hlsCandidates.Count}");
-            var preferred = hlsCandidates.Where(x => IsPreferredBilibiliHlsHost(x.Url)).ToList();
-            var others = hlsCandidates.Where(x => !IsPreferredBilibiliHlsHost(x.Url)).ToList();
-            var selected = new List<BilibiliPlayUrlCandidate>();
-
-            AppendUniqueCandidates(selected, await VerifyBilibiliHlsCandidatesAsync(client, roomID, preferred));
-            if (selected.Count == 0)
-            {
-                AppendUniqueCandidates(selected, await VerifyBilibiliHlsCandidatesAsync(client, roomID, others));
-            }
-
-            if (selected.Count > 0)
-            {
-                AppendUniqueCandidates(selected, hlsCandidates);
-                CoreDebug.Log(() => $"[Bilibili] HLS fallback已探测可用 roomId={roomID} qn={qnValue?.ToString() ?? "null"} first={BuildBilibiliUrlBrief(selected[0])}");
-                return selected;
-            }
-
-            CoreDebug.Log(() => $"[Bilibili] HLS fallback探测无成功候选，保留原候选顺序 roomId={roomID} qn={qnValue?.ToString() ?? "null"} hls={hlsCandidates.Count}");
-            return hlsCandidates;
+            // 对全部 HLS 候选（含非 d1--cn 线路）并发探测可连通性，把结果写回候选，
+            // 再由统一排序键（探测失败垫底 → 编码偏好 → 探测成功优先）决定最终顺序，
+            // 避免出现“探测认可 A、实际却播未探测的 B”的选路脱节。
+            CoreDebug.Log(() => $"[Bilibili] 未获得FLV，探测全部HLS候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} hls={hlsCandidates.Count}");
+            var verified = await VerifyBilibiliHlsCandidatesAsync(client, roomID, hlsCandidates);
+            var ordered = OrderBilibiliPlayUrlCandidates(all);
+            var first = ordered.FirstOrDefault();
+            CoreDebug.Log(() => $"[Bilibili] HLS探测完成 roomId={roomID} qn={qnValue?.ToString() ?? "null"} verified={verified.Count}/{hlsCandidates.Count} first={(first != null ? BuildBilibiliUrlBrief(first) : "无")}");
+            return ordered;
         }
 
         private async Task<List<string>> BuildBilibiliPlayUrlsWithLocalProxyAsync(string roomID, int? qnValue, List<BilibiliPlayUrlCandidate> selectedCandidates)
@@ -1019,47 +1015,44 @@ namespace AllLive.Core
 
         private async Task<List<BilibiliPlayUrlCandidate>> VerifyBilibiliHlsCandidatesAsync(HttpClient client, string roomID, IEnumerable<BilibiliPlayUrlCandidate> candidates)
         {
-            var verified = new List<BilibiliPlayUrlCandidate>();
-            foreach (var candidate in candidates.Where(x => !string.IsNullOrWhiteSpace(x?.Url)).Take(4))
+            var targets = (candidates ?? Enumerable.Empty<BilibiliPlayUrlCandidate>())
+                .Where(x => !string.IsNullOrWhiteSpace(x?.Url))
+                .ToList();
+            if (targets.Count == 0)
             {
-                try
+                return new List<BilibiliPlayUrlCandidate>();
+            }
+
+            // 并发探测，每条独立 2.5s 超时，避免串行长超时（此前每条卡满 5s、总耗时可达十几秒）。
+            var tasks = targets.Select(async candidate =>
+            {
+                using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2500)))
                 {
-                    using (var response = await client.GetAsync(candidate.Url, HttpCompletionOption.ResponseHeadersRead))
+                    try
                     {
-                        if (response.IsSuccessStatusCode)
+                        using (var response = await client.GetAsync(candidate.Url, HttpCompletionOption.ResponseHeadersRead, cts.Token))
                         {
-                            verified.Add(candidate);
-                        }
-                        else
-                        {
-                            CoreDebug.Log(() => $"[Bilibili] HLS探测返回异常 roomId={roomID} status={(int)response.StatusCode} url={BuildBilibiliUrlBrief(candidate)}");
+                            if (response.IsSuccessStatusCode)
+                            {
+                                candidate.Verified = true;
+                            }
+                            else
+                            {
+                                candidate.VerifyFailed = true;
+                                CoreDebug.Log(() => $"[Bilibili] HLS探测返回异常 roomId={roomID} status={(int)response.StatusCode} url={BuildBilibiliUrlBrief(candidate)}");
+                            }
                         }
                     }
+                    catch (Exception ex)
+                    {
+                        candidate.VerifyFailed = true;
+                        CoreDebug.Log(() => $"[Bilibili] HLS探测失败 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} err={ex.GetType().FullName} {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    CoreDebug.Log(() => $"[Bilibili] HLS探测失败 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} err={ex.GetType().FullName} {ex.Message}");
-                }
-            }
-            return verified;
-        }
+            });
 
-        private static void AppendUniqueCandidates(List<BilibiliPlayUrlCandidate> target, IEnumerable<BilibiliPlayUrlCandidate> candidates)
-        {
-            if (target == null || candidates == null)
-            {
-                return;
-            }
-
-            var seen = new HashSet<string>(target.Where(x => x != null).Select(x => x.Url), StringComparer.OrdinalIgnoreCase);
-            foreach (var candidate in candidates)
-            {
-                if (string.IsNullOrWhiteSpace(candidate?.Url) || !seen.Add(candidate.Url))
-                {
-                    continue;
-                }
-                target.Add(candidate);
-            }
+            await Task.WhenAll(tasks);
+            return targets.Where(x => x.Verified).ToList();
         }
 
         private static bool IsPreferredBilibiliHlsHost(string url)
@@ -1135,14 +1128,20 @@ namespace AllLive.Core
                 {
                     candidate,
                     index,
-                    codecPenalty = candidate.IsHevc ? 1 : 0,
                     flvPenalty = candidate.IsFlv ? 0 : 1,
+                    verifyFailedPenalty = candidate.VerifyFailed ? 1 : 0,
+                    codecPenalty = candidate.IsHevc ? 1 : 0,
+                    unverifiedPenalty = candidate.Verified ? 0 : 1,
+                    preferredPenalty = IsPreferredBilibiliHlsHost(candidate.Url) ? 0 : 1,
                     mcdnPenalty = candidate.IsMcdn ? 1 : 0,
                     order = candidate.Order,
                     score = candidate.Score
                 })
-                .OrderBy(x => x.codecPenalty)
-                .ThenBy(x => x.flvPenalty)
+                .OrderBy(x => x.flvPenalty)
+                .ThenBy(x => x.verifyFailedPenalty)
+                .ThenBy(x => x.codecPenalty)
+                .ThenBy(x => x.unverifiedPenalty)
+                .ThenBy(x => x.preferredPenalty)
                 .ThenBy(x => x.mcdnPenalty)
                 .ThenBy(x => x.order)
                 .ThenByDescending(x => x.score)
