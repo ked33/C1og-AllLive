@@ -497,6 +497,7 @@ namespace AllLive.UWP.Views
                         SetMediaInfo();
                         ResetStreamReconnectState();
                         StopBufferingTimer();
+                        liveRoomVM?.StartDeferredBilibiliDanmaku();
                         break;
                     case MediaPlaybackState.Paused:
                         PlayerLoading.Visibility = Visibility.Collapsed;

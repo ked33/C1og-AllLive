@@ -169,22 +169,10 @@ namespace AllLive.Core
             var allowPopularityFallback = false;
             if (isLive)
             {
-                var viewerCountResult = await GetInitialViewerCount(actualRoomId);
-                viewerCount = viewerCountResult.Count;
-                // 暂时完全禁用 B 站热度 fallback，只保留真实在线人数显示。
-                // allowPopularityFallback = viewerCountResult.AllowPopularityFallback;
-                if (viewerCount.HasValue)
-                {
-                    CoreDebug.Log(() => $"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT={viewerCount.Value}; 跳过热度回退");
-                }
-                else
-                {
-                    // 暂时注释 B 站热度接口读取。后续如果真实在线人数接口确认失败，再单独设计回退策略。
-                    // popularity = roomInfo["online"].ParseCountTextToLong();
-                    // popularitySource = "getInfoByRoom.room_info.online";
-                    // CoreDebug.Log($"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT失败; fallback {popularitySource}={(popularity.HasValue ? popularity.Value.ToString() : "null")}; reason={viewerCountResult.FailureReason ?? "null"}");
-                    CoreDebug.Log(() => $"[Bilibili] 房间详情人数 roomId={roomId} initial ONLINE_RANK_COUNT未获取到; 已禁用热度读取; reason={viewerCountResult.FailureReason ?? "null"}");
-                }
+                // 严格首帧优先：房间详情不再创建临时 WebSocket 等待真实人数。
+                // 首次进入 Playing 后启动正式弹幕连接，由其 ONLINE_RANK_COUNT
+                // 消息更新 ViewerCount，同时继续保持 B 站热度显示禁用。
+                CoreDebug.Log(() => $"[Bilibili] 严格首帧优先 roomId={actualRoomId} 跳过首播前真实人数等待，Playing后由正式弹幕更新");
             }
             else
             {
