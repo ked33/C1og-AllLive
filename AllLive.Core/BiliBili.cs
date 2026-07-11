@@ -744,7 +744,7 @@ namespace AllLive.Core
             public int Score { get; set; }
             /// <summary>探测已确认可连通（HTTP 2xx）</summary>
             public bool Verified { get; set; }
-            /// <summary>探测已确认不可用（异常或非 2xx）</summary>
+            /// <summary>探测已确认不可用（HTTP 非成功状态）</summary>
             public bool VerifyFailed { get; set; }
         }
 
@@ -901,7 +901,7 @@ namespace AllLive.Core
             }
 
             // 对全部 HLS 候选（含非 d1--cn 线路）并发探测可连通性，把结果写回候选，
-            // 再由统一排序键（探测失败垫底 → 编码偏好 → 探测成功优先）决定最终顺序，
+            // 再由统一排序键（明确 HTTP 失败垫底 → 编码偏好 → 探测成功优先）决定最终顺序，
             // 避免出现“探测认可 A、实际却播未探测的 B”的选路脱节。
             CoreDebug.Log(() => $"[Bilibili] 未获得FLV，探测全部HLS候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} hls={hlsCandidates.Count}");
             var verified = await VerifyBilibiliHlsCandidatesAsync(client, roomID, hlsCandidates);
@@ -1043,10 +1043,18 @@ namespace AllLive.Core
                             }
                         }
                     }
+                    catch (OperationCanceledException ex) when (cts.IsCancellationRequested)
+                    {
+                        // 2.5 秒只能作为首选线路的快速提示，超时不等于不可播放。
+                        // FFmpeg 完整建源还会继续读取子播放列表、初始化分片和媒体分片，
+                        // 某些线路可能在探测窗口后才响应，但仍能正常播放。
+                        CoreDebug.Log(() => $"[Bilibili] HLS探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=timeout err={ex.GetType().FullName} {ex.Message}");
+                    }
                     catch (Exception ex)
                     {
-                        candidate.VerifyFailed = true;
-                        CoreDebug.Log(() => $"[Bilibili] HLS探测失败 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} err={ex.GetType().FullName} {ex.Message}");
+                        // 网络异常可能是瞬时状态，也不能据此永久压低该候选；保持未确认，
+                        // 只有明确的 HTTP 非成功状态才标记 VerifyFailed。
+                        CoreDebug.Log(() => $"[Bilibili] HLS探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=exception err={ex.GetType().FullName} {ex.Message}");
                     }
                 }
             });
@@ -1130,7 +1138,7 @@ namespace AllLive.Core
                     index,
                     flvPenalty = candidate.IsFlv ? 0 : 1,
                     verifyFailedPenalty = candidate.VerifyFailed ? 1 : 0,
-                    codecPenalty = candidate.IsHevc ? 1 : 0,
+                    codecPenalty = GetBilibiliCodecPenalty(candidate.CodecName),
                     unverifiedPenalty = candidate.Verified ? 0 : 1,
                     preferredPenalty = IsPreferredBilibiliHlsHost(candidate.Url) ? 0 : 1,
                     mcdnPenalty = candidate.IsMcdn ? 1 : 0,
@@ -1153,6 +1161,28 @@ namespace AllLive.Core
         private static bool IsBilibiliFlvUrl(string url)
         {
             return !string.IsNullOrWhiteSpace(url) && url.IndexOf(".flv", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static int GetBilibiliCodecPenalty(string codecName)
+        {
+            if (string.IsNullOrWhiteSpace(codecName))
+            {
+                return 3;
+            }
+
+            if (codecName.IndexOf("avc", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return 0;
+            }
+            if (codecName.IndexOf("hevc", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return 1;
+            }
+            if (codecName.IndexOf("av1", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return 2;
+            }
+            return 3;
         }
 
         private static bool IsBilibiliMcdn(string url)

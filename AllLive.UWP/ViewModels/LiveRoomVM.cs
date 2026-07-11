@@ -505,6 +505,12 @@ namespace AllLive.UWP.ViewModels
                 {
                     return;
                 }
+                // Bilibili 的播放清晰度和弹幕连接互不依赖。提前启动清晰度请求，
+                // 与弹幕 GetDanmuInfo/WebSocket 建连并行，避免串行网络等待拖慢首播。
+                // 其他平台保持既有顺序，避免扩大本次修复范围。
+                Task<List<LivePlayQuality>> playQualityTask = detail.Status && Site.Name == "哔哩哔哩直播"
+                    ? Site.GetPlayQuality(result)
+                    : null;
                 LiveDanmaku = Site.GetDanmaku();
                 Messages.Add(new LiveMessage()
                 {
@@ -531,13 +537,34 @@ namespace AllLive.UWP.ViewModels
                     });
                     StartDanmakuReconnect(useInitialFailureMessage: true);
                 }
-                if (!isActive)
-                {
-                    return;
-                }
                 if (detail.Status)
                 {
-                    var qualities = await Site.GetPlayQuality(result);
+                    List<LivePlayQuality> qualities;
+                    if (playQualityTask != null)
+                    {
+                        try
+                        {
+                            // 即使房间在弹幕连接期间关闭，也观察已经启动的并行任务，
+                            // 避免留下未观察异常；关闭后不会再更新任何 UI 状态。
+                            qualities = await playQualityTask;
+                        }
+                        catch
+                        {
+                            if (!isActive)
+                            {
+                                return;
+                            }
+                            throw;
+                        }
+                    }
+                    else
+                    {
+                        if (!isActive)
+                        {
+                            return;
+                        }
+                        qualities = await Site.GetPlayQuality(result);
+                    }
                     if (!isActive)
                     {
                         return;
@@ -567,6 +594,10 @@ namespace AllLive.UWP.ViewModels
                     }
                     // var u = await Site.GetPlayUrls(result, q[0]);
                     //ChangedPlayUrl?.Invoke(this, u[0]);
+                }
+                else if (!isActive)
+                {
+                    return;
                 }
                 DatabaseHelper.AddHistory(new Models.HistoryItem()
                 {

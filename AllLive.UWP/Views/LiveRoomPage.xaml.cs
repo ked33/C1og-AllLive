@@ -3432,7 +3432,10 @@ namespace AllLive.UWP.Views
 
             if (!lastPlaybackStartUtc.HasValue)
             {
-                return true;
+                // 首次建源从未进入 Playing，说明当前 CDN/编码不能及时完成初始化。
+                // 重试同一个签名 URL 通常只会再次等满建源超时；直接切换下一线路。
+                LogDebugIfEnabled(() => $"哔哩哔哩直播首次建源未进入Playing，跳过同线路重试。线路: {liveRoomVM?.CurrentLine?.Name}");
+                return false;
             }
 
             return (DateTimeOffset.UtcNow - lastPlaybackStartUtc.Value) <= BilibiliRetryWindow;
