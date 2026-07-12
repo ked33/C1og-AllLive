@@ -757,6 +757,10 @@ namespace AllLive.Core
             public bool Verified { get; set; }
             /// <summary>探测已确认不可用（HTTP 非成功状态）</summary>
             public bool VerifyFailed { get; set; }
+            /// <summary>入口本身就是媒体列表，不需要再跳转到二级 CDN 播放列表</summary>
+            public bool IsDirectHlsMediaPlaylist { get; set; }
+            /// <summary>从入口到媒体列表经历的 master playlist 跳转层数</summary>
+            public int HlsMasterDepth { get; set; }
         }
 
         private async Task<HttpClient> CreateBilibiliPlayInfoHttpClientAsync()
@@ -1097,11 +1101,12 @@ namespace AllLive.Core
                 return new List<BilibiliPlayUrlCandidate>();
             }
 
-            // AVC 候选并发端到端探测，每条独立 4.5s 总预算。该预算覆盖一级/二级播放列表、
-            // EXT-X-MAP 初始化分片和首个媒体分片；任一步失败都不能标记为真正可播放。
-            var tasks = targets.Select(async candidate =>
+            // AVC 候选并发端到端探测，共享 4.5s 总预算。任一“直达媒体列表”候选完成
+            // init/media 分片验证后立即取消剩余慢探测，避免 Task.WhenAll 等最慢线路阻塞首帧。
+            var directWinnerSelected = 0;
+            using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(4500)))
             {
-                using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(4500)))
+                var tasks = targets.Select(async candidate =>
                 {
                     try
                     {
@@ -1109,7 +1114,14 @@ namespace AllLive.Core
                         if (result.Success)
                         {
                             candidate.Verified = true;
-                            CoreDebug.Log(() => $"[Bilibili] HLS端到端探测成功 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} path={result.Path}");
+                            candidate.HlsMasterDepth = result.MasterDepth;
+                            candidate.IsDirectHlsMediaPlaylist = result.MasterDepth == 0;
+                            CoreDebug.Log(() => $"[Bilibili] HLS端到端探测成功 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} direct={candidate.IsDirectHlsMediaPlaylist} depth={candidate.HlsMasterDepth} path={result.Path}");
+                            if (candidate.IsDirectHlsMediaPlaylist
+                                && Interlocked.CompareExchange(ref directWinnerSelected, 1, 0) == 0)
+                            {
+                                cts.Cancel();
+                            }
                         }
                         else
                         {
@@ -1119,17 +1131,21 @@ namespace AllLive.Core
                     }
                     catch (OperationCanceledException ex) when (cts.IsCancellationRequested)
                     {
-                        // 超时仍保留为“未确认”，不永久判死；刷新 PlayInfo 后可能得到另一组 CDN。
-                        CoreDebug.Log(() => $"[Bilibili] HLS端到端探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=timeout err={ex.GetType().FullName} {ex.Message}");
+                        if (Volatile.Read(ref directWinnerSelected) == 0)
+                        {
+                            // 总预算耗尽仍保留为“未确认”，不永久判死。
+                            CoreDebug.Log(() => $"[Bilibili] HLS端到端探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=timeout err={ex.GetType().FullName} {ex.Message}");
+                        }
                     }
                     catch (Exception ex)
                     {
                         CoreDebug.Log(() => $"[Bilibili] HLS端到端探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=exception err={ex.GetType().FullName} {ex.Message}");
                     }
-                }
-            });
+                    return candidate;
+                }).ToList();
 
-            await Task.WhenAll(tasks);
+                await Task.WhenAll(tasks);
+            }
             return targets.Where(x => x.Verified).ToList();
         }
 
@@ -1138,6 +1154,7 @@ namespace AllLive.Core
             public bool Success { get; set; }
             public string Reason { get; set; }
             public string Path { get; set; }
+            public int MasterDepth { get; set; }
         }
 
         private async Task<BilibiliHlsProbeResult> ProbeBilibiliHlsEndToEndAsync(HttpClient client, string url, CancellationToken cancellationToken)
@@ -1148,6 +1165,7 @@ namespace AllLive.Core
             }
 
             var path = new List<string>();
+            var masterDepth = 0;
             string playlist = null;
             for (var depth = 0; depth < 2; depth++)
             {
@@ -1165,6 +1183,7 @@ namespace AllLive.Core
                     break;
                 }
                 playlistUri = child;
+                masterDepth++;
                 playlist = null;
             }
 
@@ -1194,7 +1213,7 @@ namespace AllLive.Core
                 return new BilibiliHlsProbeResult() { Reason = $"media-{mediaResult.Reason}", Path = string.Join("->", path) };
             }
 
-            return new BilibiliHlsProbeResult() { Success = true, Path = string.Join("->", path) };
+            return new BilibiliHlsProbeResult() { Success = true, Path = string.Join("->", path), MasterDepth = masterDepth };
         }
 
         private sealed class BilibiliHlsDownloadResult
@@ -1316,10 +1335,13 @@ namespace AllLive.Core
 
             if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
             {
-                return url.IndexOf("d1--cn", StringComparison.OrdinalIgnoreCase) >= 0;
+                return url.IndexOf("bilivideo.com", StringComparison.OrdinalIgnoreCase) >= 0
+                    && url.IndexOf("d1--", StringComparison.OrdinalIgnoreCase) < 0;
             }
 
-            return uri.Host.IndexOf("d1--cn", StringComparison.OrdinalIgnoreCase) >= 0;
+            var host = uri.Host ?? string.Empty;
+            return host.EndsWith(".bilivideo.com", StringComparison.OrdinalIgnoreCase)
+                && !host.StartsWith("d1--", StringComparison.OrdinalIgnoreCase);
         }
 
         private static int? TryConvertToInt(object value)
@@ -1384,6 +1406,7 @@ namespace AllLive.Core
                     verifyFailedPenalty = candidate.VerifyFailed ? 1 : 0,
                     codecPenalty = GetBilibiliCodecPenalty(candidate.CodecName),
                     unverifiedPenalty = candidate.Verified ? 0 : 1,
+                    directMediaPenalty = candidate.IsHls && candidate.Verified && !candidate.IsDirectHlsMediaPlaylist ? 1 : 0,
                     preferredPenalty = IsPreferredBilibiliHlsHost(candidate.Url) ? 0 : 1,
                     mcdnPenalty = candidate.IsMcdn ? 1 : 0,
                     order = candidate.Order,
@@ -1393,6 +1416,7 @@ namespace AllLive.Core
                 .ThenBy(x => x.verifyFailedPenalty)
                 .ThenBy(x => x.codecPenalty)
                 .ThenBy(x => x.unverifiedPenalty)
+                .ThenBy(x => x.directMediaPenalty)
                 .ThenBy(x => x.preferredPenalty)
                 .ThenBy(x => x.mcdnPenalty)
                 .ThenBy(x => x.order)
