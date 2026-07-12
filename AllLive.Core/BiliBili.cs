@@ -690,7 +690,7 @@ namespace AllLive.Core
                 }
 
                 var selectedCandidates = await SelectBilibiliPlayUrlCandidatesAsync(client, roomID, qnValue, candidates);
-                var urls = await BuildBilibiliPlayUrlsWithLocalProxyAsync(roomID, qnValue, selectedCandidates);
+                var urls = await BuildBilibiliPlayUrlsWithLocalProxyFallbackAsync(roomID, qnValue, selectedCandidates);
                 CoreDebug.Log(() => $"[Bilibili] PlayInfo直出 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={urls.Count} flv={selectedCandidates.Count(x => x.IsFlv)} hls={selectedCandidates.Count(x => x.IsHls)} hevc={selectedCandidates.Count(x => x.IsHevc)}");
                 return urls;
             }
@@ -875,9 +875,9 @@ namespace AllLive.Core
             var flvCandidates = all.Where(x => x != null && x.IsFlv).ToList();
             if (flvCandidates.Count > 0)
             {
-                // FLV 走本地代理，最稳，无需探测。
+                // 官方 FLV 直连优先；本地代理仅作为需要 Cookie/桌面网络栈时的兼容回退。
                 var orderedFlv = OrderBilibiliPlayUrlCandidates(all);
-                CoreDebug.Log(() => $"[Bilibili] 选择FLV优先流 roomId={roomID} qn={qnValue?.ToString() ?? "null"} flv={flvCandidates.Count} first={BuildBilibiliUrlBrief(orderedFlv[0])}");
+                CoreDebug.Log(() => $"[Bilibili] 选择官方FLV直连优先 roomId={roomID} qn={qnValue?.ToString() ?? "null"} flv={flvCandidates.Count} first={BuildBilibiliUrlBrief(orderedFlv[0])}");
                 return orderedFlv;
             }
 
@@ -899,11 +899,21 @@ namespace AllLive.Core
             return ordered;
         }
 
-        private async Task<List<string>> BuildBilibiliPlayUrlsWithLocalProxyAsync(string roomID, int? qnValue, List<BilibiliPlayUrlCandidate> selectedCandidates)
+        private async Task<List<string>> BuildBilibiliPlayUrlsWithLocalProxyFallbackAsync(string roomID, int? qnValue, List<BilibiliPlayUrlCandidate> selectedCandidates)
         {
             var urls = new List<string>();
             var dedupe = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var firstFlv = selectedCandidates?.FirstOrDefault(x => x != null && x.IsFlv && !string.IsNullOrWhiteSpace(x.Url));
+
+            // 先返回全部官方 FLV 直连候选，避免本地代理故障阻塞首帧。
+            foreach (var candidate in selectedCandidates?.Where(x => x != null && x.IsFlv)
+                ?? Enumerable.Empty<BilibiliPlayUrlCandidate>())
+            {
+                if (!string.IsNullOrWhiteSpace(candidate.Url) && dedupe.Add(candidate.Url))
+                {
+                    urls.Add(candidate.Url);
+                }
+            }
 
             if (firstFlv != null)
             {
@@ -915,11 +925,11 @@ namespace AllLive.Core
                     {
                         urls.Add(proxyResult.Url);
                     }
-                    CoreDebug.Log(() => $"[Bilibili] 选择本地FLV代理 roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} proxy={BuildBilibiliLocalProxyBrief(proxyResult.Url)}");
+                    CoreDebug.Log(() => $"[Bilibili] 注册本地FLV代理回退 roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} proxy={BuildBilibiliLocalProxyBrief(proxyResult.Url)}");
                 }
                 else
                 {
-                    CoreDebug.Log(() => $"[Bilibili] 本地FLV代理不可用，回退上游FLV roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} err={proxyResult.Error}");
+                    CoreDebug.Log(() => $"[Bilibili] 本地FLV代理回退不可用，继续使用官方直连 roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} err={proxyResult.Error}");
                 }
             }
             else
@@ -927,7 +937,9 @@ namespace AllLive.Core
                 CoreDebug.Log(() => $"[Bilibili] 未获得FLV，无法使用本地代理 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={selectedCandidates?.Count ?? 0}");
             }
 
-            foreach (var candidate in selectedCandidates ?? new List<BilibiliPlayUrlCandidate>())
+            // 代理回退之后再追加 HLS/其他协议候选。
+            foreach (var candidate in selectedCandidates?.Where(x => x != null && !x.IsFlv)
+                ?? Enumerable.Empty<BilibiliPlayUrlCandidate>())
             {
                 if (string.IsNullOrWhiteSpace(candidate?.Url))
                 {

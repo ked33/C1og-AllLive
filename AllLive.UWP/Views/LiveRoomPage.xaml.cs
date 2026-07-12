@@ -80,6 +80,8 @@ namespace AllLive.UWP.Views
         private static readonly TimeSpan EarlyEndThreshold = TimeSpan.FromSeconds(8);
         private static readonly TimeSpan CurrentLineRetryDelay = TimeSpan.FromSeconds(1);
         private static readonly TimeSpan BilibiliRetryWindow = TimeSpan.FromSeconds(45);
+        private static readonly TimeSpan BilibiliDirectFlvCreateSourceTimeout = TimeSpan.FromSeconds(6);
+        private static readonly TimeSpan BilibiliLocalProxyCreateSourceTimeout = TimeSpan.FromSeconds(3);
         private static readonly TimeSpan BilibiliCreateSourceTimeout = TimeSpan.FromSeconds(12);
         private const string BilibiliPlaybackUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
 
@@ -3077,6 +3079,49 @@ namespace AllLive.UWP.Views
             var message = sb.ToString().TrimEnd();
             LogHelper.Log(message, LogType.ERROR, ex);
         }
+
+        private void StartMediaSourceFailureDiagnostics(string title, Exception ex, string url, string playbackContext, string configSnapshot, string urlAnalysis, string failureSummary)
+        {
+            if (!IsDebugDiagnosticsEnabled() || string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+
+            _ = LogMediaSourceFailureDiagnosticsAsync(title, ex, url, playbackContext, configSnapshot, urlAnalysis, failureSummary);
+        }
+
+        private async Task LogMediaSourceFailureDiagnosticsAsync(string title, Exception ex, string url, string playbackContext, string configSnapshot, string urlAnalysis, string failureSummary)
+        {
+            try
+            {
+                var probe = await ProbeUrlAsync(url);
+                var connectivityProbe = await ProbeConnectivityBaselineAsync();
+                var correlation = BuildProbeCorrelationSummary(probe, null, null, connectivityProbe);
+                if (!IsDebugDiagnosticsEnabled())
+                {
+                    return;
+                }
+
+                var merged = JoinNonEmpty(
+                    $"{title}后台网络诊断（不阻塞切换线路）",
+                    playbackContext,
+                    configSnapshot,
+                    urlAnalysis,
+                    failureSummary,
+                    BuildExceptionDetail(ex),
+                    correlation,
+                    probe,
+                    connectivityProbe);
+                if (!string.IsNullOrEmpty(merged))
+                {
+                    LogHelper.Log(merged, LogType.DEBUG);
+                }
+            }
+            catch (Exception diagnosticEx)
+            {
+                LogDebugIfEnabled(() => $"播放器失败后台诊断异常: {diagnosticEx.GetType().FullName} 0x{diagnosticEx.HResult:X8} {diagnosticEx.Message}");
+            }
+        }
         private async Task SetPlayer(string url)
         {
             var attemptVersion = 0;
@@ -3184,25 +3229,15 @@ namespace AllLive.UWP.Views
                         if (completedTask != createTask)
                         {
                             _ = DisposeLateMediaSourceAsync(createTask, url, attemptVersion);
-                            string timeoutExtra = null;
+                            var timeoutException = new TimeoutException($"FFmpegMediaSource.CreateFromUriAsync 超时 {createTimeout.Value.TotalSeconds:F0}s");
+                            var playbackContext = IsDebugDiagnosticsEnabled() ? BuildPlaybackContext() : null;
+                            var timeoutSummary = $"播放器建源超时: {createTimeout.Value.TotalSeconds:F0}s elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0}";
                             if (IsDebugDiagnosticsEnabled())
                             {
-                                var timeoutProbe = await ProbeUrlAsync(url);
-                                var timeoutConnectivityProbe = await ProbeConnectivityBaselineAsync();
-                                var timeoutCorrelation = BuildProbeCorrelationSummary(timeoutProbe, null, null, timeoutConnectivityProbe);
-                                timeoutExtra = JoinNonEmpty(
-                                    lastConfigSnapshot,
-                                    lastUrlAnalysis,
-                                    timeoutCorrelation,
-                                    timeoutProbe,
-                                    timeoutConnectivityProbe,
-                                    $"播放器建源超时: {createTimeout.Value.TotalSeconds:F0}s elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0}");
-                            }
-                            if (IsDebugDiagnosticsEnabled())
-                            {
-                                LogPlayError("播放器初始化超时",
-                                    new TimeoutException($"FFmpegMediaSource.CreateFromUriAsync 超时 {createTimeout.Value.TotalSeconds:F0}s"),
-                                    timeoutExtra);
+                                LogPlayError("播放器初始化超时，立即切换下一线路", timeoutException,
+                                    JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, timeoutSummary, "详细网络诊断已转入后台"));
+                                StartMediaSourceFailureDiagnostics("播放器初始化超时", timeoutException, url,
+                                    playbackContext, lastConfigSnapshot, lastUrlAnalysis, timeoutSummary);
                             }
                             PlayError();
                             return;
@@ -3227,18 +3262,13 @@ namespace AllLive.UWP.Views
                     {
                         return;
                     }
-                    string mergedExtra = null;
                     if (IsDebugDiagnosticsEnabled())
                     {
-                        var probe = await ProbeUrlAsync(url);
-                        var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                        var correlation = BuildProbeCorrelationSummary(probe, null, null, connectivityProbe);
-                        lastProbeSnapshot = probe;
-                        mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, correlation, probe, connectivityProbe);
-                    }
-                    if (IsDebugDiagnosticsEnabled())
-                    {
-                        LogPlayError("播放器初始化失败", ex, mergedExtra);
+                        var playbackContext = BuildPlaybackContext();
+                        LogPlayError("播放器初始化失败，立即切换下一线路", ex,
+                            JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, "详细网络诊断已转入后台"));
+                        StartMediaSourceFailureDiagnostics("播放器初始化失败", ex, url,
+                            playbackContext, lastConfigSnapshot, lastUrlAnalysis, null);
                     }
                     PlayError();
                     return;
@@ -3384,8 +3414,22 @@ namespace AllLive.UWP.Views
                 return null;
             }
 
-            if (liveRoomVM?.SiteName == "哔哩哔哩直播" &&
-                url.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (liveRoomVM?.SiteName != "哔哩哔哩直播")
+            {
+                return null;
+            }
+
+            if (url.IndexOf("127.0.0.1:8789/api/bilibili/live.flv", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return BilibiliLocalProxyCreateSourceTimeout;
+            }
+
+            if (url.IndexOf(".flv", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return BilibiliDirectFlvCreateSourceTimeout;
+            }
+
+            if (url.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return BilibiliCreateSourceTimeout;
             }

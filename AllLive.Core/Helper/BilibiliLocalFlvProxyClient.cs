@@ -37,7 +37,8 @@ namespace AllLive.Core.Helper
                 })
                 using (var client = new HttpClient(handler))
                 {
-                    client.Timeout = TimeSpan.FromSeconds(2);
+                    // 这里只连接本机 SignService。代理是兼容回退，注册不可阻塞首帧主链路。
+                    client.Timeout = TimeSpan.FromMilliseconds(750);
                     var json = JsonConvert.SerializeObject(payload);
                     using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
                     using (var response = await client.PostAsync($"{DefaultBaseUrl}/api/bilibili/stream", content))
