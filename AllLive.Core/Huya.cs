@@ -20,7 +20,7 @@ using AllLive.Core.Models.Tars;
 
 namespace AllLive.Core
 {
-    public class Huya : ILiveSite
+    public class Huya : ILiveSite, IDeferredAudienceMetricSite
     {
         public string Name => "虎牙直播";
         public ILiveDanmaku GetDanmaku() => new HuyaDanmaku();
@@ -216,19 +216,20 @@ namespace AllLive.Core
             var isLive = jsonObj["roomInfo"]["eLiveStatus"].ToInt32() == 2;
             var popularity = jsonObj["roomInfo"]["tLiveInfo"]["lTotalCount"].ParseCountTextToLong() ?? 0;
             var presenterUid = TryGetPresenterUid(jsonObj["roomInfo"]);
-            var viewerCount = isLive ? await GetViewerCount(presenterUid, uid) : null;
-            var vipCount = isLive && !viewerCount.HasValue ? await GetVipCount(presenterUid, uid) : null;
 
             return new LiveRoomDetail()
             {
                 Cover = jsonObj["roomInfo"]["tLiveInfo"]["sScreenshot"].ToString(),
-                Online = ToCompatibleOnline(viewerCount ?? vipCount ?? popularity),
-                ViewerCount = viewerCount,
-                ViewerCountSource = viewerCount.HasValue ? "wupui.getUserOnlineRank.iTotal" : null,
-                VipCount = vipCount,
-                VipCountSource = vipCount.HasValue ? "liveui.getVipBarListStat.iTotal/iTotalNum" : null,
+                // 严格首帧优先：播放前不等待真实人数或贵宾人数，也不显示热度/0占位。
+                // 首次 Playing 后由 GetDeferredAudienceMetrics 请求；全部失败后才允许回退热度。
+                Online = 0,
+                ViewerCount = null,
+                ViewerCountSource = null,
+                VipCount = null,
+                VipCountSource = null,
                 Popularity = popularity,
                 PopularitySource = "m.huya.tLiveInfo.lTotalCount",
+                AllowPopularityFallback = !isLive,
                 RoomID = realRoomId.ToString(),
                 Title = title,
                 UserName = jsonObj["roomInfo"]["tProfileInfo"]["sNick"].ToString(),
@@ -243,6 +244,7 @@ namespace AllLive.Core
                     BitRates = huyaBiterates,
                     Uid = uid,
                     UUid = uuid,
+                    PresenterUid = presenterUid,
                 },
                 DanmakuData = new HuyaDanmakuArgs(
                     jsonObj["roomInfo"]["tLiveInfo"]["lYyid"].ToInt64(),
@@ -250,6 +252,38 @@ namespace AllLive.Core
                     subSid
                 ),
                 Url = "https://www.huya.com/" + roomId
+            };
+        }
+
+        public async Task<LiveAudienceMetrics> GetDeferredAudienceMetrics(LiveRoomDetail roomDetail)
+        {
+            var urlData = roomDetail?.Data as HuyaUrlDataModel;
+            if (roomDetail == null || !roomDetail.Status || urlData == null)
+            {
+                return new LiveAudienceMetrics()
+                {
+                    AllowPopularityFallback = true,
+                };
+            }
+
+            CoreDebug.Log(() => $"[Huya] 首次Playing后开始请求真实人数 roomId={roomDetail.RoomID} pid={urlData.PresenterUid}");
+            var viewerCount = await GetViewerCount(urlData.PresenterUid, urlData.Uid);
+            if (viewerCount.HasValue)
+            {
+                return new LiveAudienceMetrics()
+                {
+                    ViewerCount = viewerCount,
+                    ViewerCountSource = "wupui.getUserOnlineRank.iTotal",
+                    AllowPopularityFallback = false,
+                };
+            }
+
+            var vipCount = await GetVipCount(urlData.PresenterUid, urlData.Uid);
+            return new LiveAudienceMetrics()
+            {
+                VipCount = vipCount,
+                VipCountSource = vipCount.HasValue ? "liveui.getVipBarListStat.iTotal/iTotalNum" : null,
+                AllowPopularityFallback = !vipCount.HasValue,
             };
         }
 
@@ -356,19 +390,6 @@ namespace AllLive.Core
             }
 
             return 0;
-        }
-
-        private static int ToCompatibleOnline(long value)
-        {
-            if (value <= 0)
-            {
-                return 0;
-            }
-            if (value > int.MaxValue)
-            {
-                return int.MaxValue;
-            }
-            return (int)value;
         }
 
         private async Task<JToken> GetRoomInfo(object roomId)
@@ -758,6 +779,7 @@ namespace AllLive.Core
         public string Url { get; set; }
         public string Uid { get; set; }
         public long UUid { get; set; }
+        public long PresenterUid { get; set; }
         public List<HuyaLineModel> Lines { get; set; }
         public List<HuyaBitRateModel> BitRates { get; set; }
     }

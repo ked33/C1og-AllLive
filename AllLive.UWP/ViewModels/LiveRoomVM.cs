@@ -32,7 +32,7 @@ namespace AllLive.UWP.ViewModels
         private int danmakuReconnectAttempt;
         private int reconnectInProgress;
         private object danmakuArgs;
-        private int deferredBilibiliDanmakuStartState;
+        private int deferredLiveExtrasStartState;
         private static readonly TimeSpan[] DanmakuReconnectDelays = new[]
         {
             TimeSpan.FromSeconds(2),
@@ -102,8 +102,8 @@ namespace AllLive.UWP.ViewModels
         public LiveRoomDetail detail { get; set; }
         private bool allowPopularityFallback = true;
 
-        private long _Online = 0;
-        public long Online
+        private long? _Online;
+        public long? Online
         {
             get { return _Online; }
             set { _Online = value; DoPropertyChanged("Online"); }
@@ -177,13 +177,18 @@ namespace AllLive.UWP.ViewModels
                     }
                     return "当前显示: 人气/热度；该平台暂未接入或尚未确认真实在线人数接口";
                 }
+                if (!allowPopularityFallback && Living
+                    && (SiteName == "哔哩哔哩直播" || SiteName == "虎牙直播"))
+                {
+                    return "当前显示: 在线人数获取中";
+                }
                 return "当前显示: 未知";
             }
         }
 
         private void RefreshAudienceDisplay()
         {
-            var display = ViewerCount ?? VipCount ?? Popularity ?? 0;
+            long? display = ViewerCount ?? VipCount ?? Popularity;
             if (_Online != display)
             {
                 _Online = display;
@@ -220,12 +225,7 @@ namespace AllLive.UWP.ViewModels
 
         private bool ShouldSuppressPopularityMetric()
         {
-            if (!IsBilibiliLiveRoom())
-            {
-                return false;
-            }
-
-            return ViewerCount.HasValue || !allowPopularityFallback;
+            return !allowPopularityFallback;
         }
 
         private void ApplyAudienceMetricUpdate(LiveMessage message)
@@ -466,7 +466,7 @@ namespace AllLive.UWP.ViewModels
                 isActive = true;
                 danmakuReconnectAttempt = 0;
                 System.Threading.Interlocked.Exchange(ref reconnectInProgress, 0);
-                System.Threading.Interlocked.Exchange(ref deferredBilibiliDanmakuStartState, 0);
+                System.Threading.Interlocked.Exchange(ref deferredLiveExtrasStartState, 0);
                 CancelDanmakuReconnect();
                 Site = site;
 
@@ -492,10 +492,10 @@ namespace AllLive.UWP.ViewModels
                     Photo = result.UserAvatar;
                 }
                 Living = result.Status;
-                var deferBilibiliExtrasUntilPlaying = result.Status && IsBilibiliLiveRoom();
-                if (!deferBilibiliExtrasUntilPlaying)
+                var deferLiveExtrasUntilPlaying = result.Status;
+                if (!deferLiveExtrasUntilPlaying)
                 {
-                    // 其他平台和未开播房间保持既有加载时机。
+                    // 未开播房间保持既有加载时机。
                     LoadSuperChat();
                 }
                 //检查收藏情况
@@ -516,13 +516,12 @@ namespace AllLive.UWP.ViewModels
                 {
                     return;
                 }
-                // Bilibili 严格首帧优先：先请求建源必需的清晰度/播放信息，
-                // 弹幕、真实人数和 SuperChat 延迟到首次 Playing 后启动。
-                // 其他平台保持既有加载顺序。
+                // 严格首帧优先：所有平台先请求建源必需的清晰度/播放信息，
+                // 弹幕和平台附加统计延迟到首次 Playing 后启动。
                 danmakuArgs = result.DanmakuData;
-                if (deferBilibiliExtrasUntilPlaying)
+                if (deferLiveExtrasUntilPlaying)
                 {
-                    LogHelper.LogDebug(() => $"[Bilibili] 严格首帧优先，等待Playing后启动弹幕和真实人数。房间={RoomID}");
+                    LogHelper.LogDebug(() => $"[{Site?.Name}] 严格首帧优先，等待Playing后启动弹幕和附加统计。房间={RoomID}");
                 }
                 else
                 {
@@ -1104,24 +1103,25 @@ namespace AllLive.UWP.ViewModels
             }
 
         }
-        public void StartDeferredBilibiliDanmaku()
+        public void StartDeferredLiveExtras()
         {
-            if (!isActive || !IsBilibiliLiveRoom() || danmakuArgs == null || LiveDanmaku != null)
+            if (!isActive || Site == null || detail == null || !detail.Status || danmakuArgs == null || LiveDanmaku != null)
             {
                 return;
             }
 
-            if (System.Threading.Interlocked.CompareExchange(ref deferredBilibiliDanmakuStartState, 1, 0) != 0)
+            if (System.Threading.Interlocked.CompareExchange(ref deferredLiveExtrasStartState, 1, 0) != 0)
             {
                 return;
             }
 
-            LogHelper.LogDebug(() => $"[Bilibili] 首次Playing，开始启动正式弹幕和真实人数。房间={RoomID}");
+            LogHelper.LogDebug(() => $"[{Site.Name}] 首次Playing，开始启动弹幕和附加统计。房间={RoomID}");
             LoadSuperChat();
-            _ = StartDeferredBilibiliDanmakuAsync();
+            _ = StartDeferredDanmakuAsync();
+            _ = LoadDeferredAudienceMetricsAsync();
         }
 
-        private async Task StartDeferredBilibiliDanmakuAsync()
+        private async Task StartDeferredDanmakuAsync()
         {
             try
             {
@@ -1150,7 +1150,7 @@ namespace AllLive.UWP.ViewModels
                     return;
                 }
 
-                LogHelper.Log($"Bilibili Playing后弹幕启动失败，播放不受影响。房间ID:{RoomID}", LogType.ERROR, ex);
+                LogHelper.Log($"Playing后弹幕启动失败，播放不受影响。站点:{Site?.Name} 房间ID:{RoomID}", LogType.ERROR, ex);
                 Messages.Add(new LiveMessage()
                 {
                     Type = LiveMessageType.Chat,
@@ -1158,6 +1158,50 @@ namespace AllLive.UWP.ViewModels
                     Message = "弹幕启动失败，播放不受影响"
                 });
                 StartDanmakuReconnect(useInitialFailureMessage: true);
+            }
+        }
+
+        private async Task LoadDeferredAudienceMetricsAsync()
+        {
+            var metricSite = Site as IDeferredAudienceMetricSite;
+            var roomDetail = detail;
+            var site = Site;
+            var roomId = RoomID;
+            if (metricSite == null || roomDetail == null || site == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var metrics = await metricSite.GetDeferredAudienceMetrics(roomDetail);
+                if (!isActive || metrics == null || !ReferenceEquals(Site, site)
+                    || !ReferenceEquals(detail, roomDetail)
+                    || !string.Equals(RoomID, roomId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                roomDetail.ViewerCount = metrics.ViewerCount;
+                roomDetail.ViewerCountSource = metrics.ViewerCountSource;
+                roomDetail.VipCount = metrics.VipCount;
+                roomDetail.VipCountSource = metrics.VipCountSource;
+                roomDetail.AllowPopularityFallback = metrics.AllowPopularityFallback;
+                ApplyAudienceMetrics(roomDetail);
+                LogHelper.LogDebug(() => $"[{site.Name}] Playing后观众统计完成。房间={roomId} ViewerCount={(metrics.ViewerCount.HasValue ? metrics.ViewerCount.Value.ToString() : "null")} VipCount={(metrics.VipCount.HasValue ? metrics.VipCount.Value.ToString() : "null")} PopularityFallback={metrics.AllowPopularityFallback}");
+            }
+            catch (Exception ex)
+            {
+                if (!isActive || !ReferenceEquals(Site, site) || !ReferenceEquals(detail, roomDetail)
+                    || !string.Equals(RoomID, roomId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                // 延迟统计失败不影响已开始的播放；允许虎牙回退到房间详情中的热度。
+                roomDetail.AllowPopularityFallback = true;
+                ApplyAudienceMetrics(roomDetail);
+                LogHelper.Log($"Playing后观众统计加载失败，播放不受影响。站点:{site.Name} 房间ID:{roomId}", LogType.ERROR, ex);
             }
         }
 
@@ -1629,7 +1673,7 @@ namespace AllLive.UWP.ViewModels
             isActive = false;
             CancelDanmakuReconnect();
             System.Threading.Interlocked.Exchange(ref reconnectInProgress, 0);
-            System.Threading.Interlocked.Exchange(ref deferredBilibiliDanmakuStartState, 0);
+            System.Threading.Interlocked.Exchange(ref deferredLiveExtrasStartState, 0);
             danmakuReconnectAttempt = 0;
             StopSCTimer();
             Messages.Clear();
