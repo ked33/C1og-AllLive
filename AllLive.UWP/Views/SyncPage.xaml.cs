@@ -107,9 +107,17 @@ namespace AllLive.UWP.Views
             base.OnNavigatedFrom(e);
         }
 
-        private void btnSendFollow_Click(object sender, RoutedEventArgs e)
+        private async void btnSendFollow_Click(object sender, RoutedEventArgs e)
         {
-            syncVM.SendFollow();
+            btnSendFollow.IsEnabled = false;
+            try
+            {
+                await syncVM.SendFollowAsync();
+            }
+            finally
+            {
+                btnSendFollow.IsEnabled = true;
+            }
         }
 
         private void btnSendHistory_Click(object sender, RoutedEventArgs e)
