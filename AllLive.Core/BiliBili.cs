@@ -300,7 +300,8 @@ namespace AllLive.Core
 
                 try
                 {
-                    Task.Run(() =>
+                    // Connect 是同步阻塞调用；后台执行以保留下方 2 秒等待上限，异常在任务内部处理。
+                    _ = Task.Run(() =>
                     {
                         try
                         {
