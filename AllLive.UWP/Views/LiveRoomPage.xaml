@@ -618,11 +618,20 @@
                                         Height="48"
                                         Background="Transparent"
                                         BorderThickness="0"
+                                        Click="PlayBtnVolume_Click"
+                                        PointerEntered="PlayBtnVolume_PointerEntered"
+                                        PointerExited="PlayBtnVolume_PointerExited"
                                         ToolTipService.ToolTip="音量">
                                         <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE15D;" />
-                                        <Button.Flyout>
-                                            <Flyout>
-                                                <StackPanel>
+                                        <FlyoutBase.AttachedFlyout>
+                                            <Flyout
+                                                x:Name="VolumeFlyout"
+                                                Closed="VolumeFlyout_Closed"
+                                                Placement="Top">
+                                                <StackPanel
+                                                    Background="Transparent"
+                                                    PointerEntered="VolumeFlyoutContent_PointerEntered"
+                                                    PointerExited="VolumeFlyoutContent_PointerExited">
                                                     <TextBlock>音量</TextBlock>
                                                     <Slider
                                                         x:Name="SliderVolume"
@@ -633,7 +642,7 @@
                                                         Value="1" />
                                                 </StackPanel>
                                             </Flyout>
-                                        </Button.Flyout>
+                                        </FlyoutBase.AttachedFlyout>
                                     </Button>
 
                                     <ComboBox

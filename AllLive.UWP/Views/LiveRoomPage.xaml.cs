@@ -142,7 +142,13 @@ namespace AllLive.UWP.Views
         private const uint ThroughputProbeBytes = 1048576;
         private const uint ConnectivityProbeBytes = 4096;
         private const string ConnectivityProbeUrl = "http://www.msftconnecttest.com/connecttest.txt";
+        private const int VolumeFlyoutHideDelayMilliseconds = 200;
         private bool updatingDecoderSelection;
+        private bool updatingVolume;
+        private bool pointerOverVolumeButton;
+        private bool pointerOverVolumeFlyout;
+        private bool volumeFlyoutOpen;
+        private int volumeFlyoutHideRequest;
 
         private sealed class PlaybackSampleResult
         {
@@ -1203,14 +1209,7 @@ namespace AllLive.UWP.Views
                 //    break;
 
                 case Windows.System.VirtualKey.Up:
-                    if (mediaPlayer.Volume + 0.1 > 1)
-                    {
-                        mediaPlayer.Volume = 1;
-                    }
-                    else
-                    {
-                        mediaPlayer.Volume += 0.1;
-                    }
+                    SetPlayerVolume(mediaPlayer.Volume + 0.1);
 
 
                     TxtToolTip.Text = "音量:" + mediaPlayer.Volume.ToString("P");
@@ -1220,14 +1219,7 @@ namespace AllLive.UWP.Views
                     break;
 
                 case Windows.System.VirtualKey.Down:
-                    if (mediaPlayer.Volume - 0.1 < 0)
-                    {
-                        mediaPlayer.Volume = 0;
-                    }
-                    else
-                    {
-                        mediaPlayer.Volume -= 0.1;
-                    }
+                    SetPlayerVolume(mediaPlayer.Volume - 0.1);
 
 
                     if (mediaPlayer.Volume == 0)
@@ -3636,6 +3628,8 @@ namespace AllLive.UWP.Views
             }
             liveRoomCleaned = true;
             isPageClosing = true;
+            volumeFlyoutHideRequest++;
+            try { VolumeFlyout.Hide(); } catch { }
             LogLiveRoomMemory("直播间页面开始清理");
 
             liveRoomVM.ChangedPlayUrl -= LiveRoomVM_ChangedPlayUrl;
@@ -4182,8 +4176,102 @@ namespace AllLive.UWP.Views
 
         private void SliderVolume_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
         {
-            mediaPlayer.Volume = SliderVolume.Value;
-            SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, SliderVolume.Value);
+            SetPlayerVolume(e.NewValue);
+        }
+
+        private void SetPlayerVolume(double volume)
+        {
+            if (updatingVolume)
+            {
+                return;
+            }
+
+            updatingVolume = true;
+            try
+            {
+                var clampedVolume = Math.Max(0, Math.Min(1, volume));
+                mediaPlayer.Volume = clampedVolume;
+                SliderVolume.Value = clampedVolume;
+                SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, clampedVolume);
+            }
+            finally
+            {
+                updatingVolume = false;
+            }
+        }
+
+        private void PlayBtnVolume_Click(object sender, RoutedEventArgs e)
+        {
+            SetPlayerVolume(mediaPlayer.Volume > 0 ? 0 : 1);
+        }
+
+        private void PlayBtnVolume_PointerEntered(object sender, PointerRoutedEventArgs e)
+        {
+            if (!IsVolumeHoverPointer(e))
+            {
+                return;
+            }
+
+            pointerOverVolumeButton = true;
+            volumeFlyoutHideRequest++;
+            if (volumeFlyoutOpen)
+            {
+                return;
+            }
+
+            volumeFlyoutOpen = true;
+            FlyoutBase.ShowAttachedFlyout(PlayBtnVolume);
+        }
+
+        private void PlayBtnVolume_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            if (!IsVolumeHoverPointer(e))
+            {
+                return;
+            }
+
+            pointerOverVolumeButton = false;
+            ScheduleVolumeFlyoutHide();
+        }
+
+        private static bool IsVolumeHoverPointer(PointerRoutedEventArgs e)
+        {
+            var pointerType = e?.Pointer?.PointerDeviceType;
+            return pointerType == Windows.Devices.Input.PointerDeviceType.Mouse ||
+                pointerType == Windows.Devices.Input.PointerDeviceType.Pen;
+        }
+
+        private void VolumeFlyoutContent_PointerEntered(object sender, PointerRoutedEventArgs e)
+        {
+            pointerOverVolumeFlyout = true;
+            volumeFlyoutHideRequest++;
+        }
+
+        private void VolumeFlyoutContent_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            pointerOverVolumeFlyout = false;
+            ScheduleVolumeFlyoutHide();
+        }
+
+        private async void ScheduleVolumeFlyoutHide()
+        {
+            var request = ++volumeFlyoutHideRequest;
+            await Task.Delay(VolumeFlyoutHideDelayMilliseconds);
+            if (request != volumeFlyoutHideRequest ||
+                pointerOverVolumeButton ||
+                pointerOverVolumeFlyout ||
+                isPageClosing)
+            {
+                return;
+            }
+
+            VolumeFlyout.Hide();
+        }
+
+        private void VolumeFlyout_Closed(object sender, object e)
+        {
+            volumeFlyoutOpen = false;
+            pointerOverVolumeFlyout = false;
         }
 
         private void NumCleanCount_Loaded(object sender, RoutedEventArgs e)
