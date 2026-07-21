@@ -421,7 +421,7 @@
                 </SplitView.Pane>
                 <Grid
                     ui:UIElementExtensions.ClipToBounds="True"
-                    Background="Black"
+                    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
                     DoubleTapped="Grid_DoubleTapped"
                     ManipulationCompleted="Grid_ManipulationCompleted"
                     ManipulationDelta="Grid_ManipulationDelta"
