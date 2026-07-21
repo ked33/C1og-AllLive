@@ -183,27 +183,36 @@ namespace AllLive.UWP
         public static void SetTitleBar()
         {
             UISettings uISettings = new UISettings();
-            var color = TitltBarButtonColor(uISettings);
-            ApplicationViewTitleBar titleBar = ApplicationView.GetForCurrentView().TitleBar;
-
-            titleBar.ButtonBackgroundColor = Colors.Transparent;
-            titleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
-            titleBar.ButtonForegroundColor = color;
-            titleBar.ButtonBackgroundColor = Colors.Transparent;
-            titleBar.BackgroundColor = Colors.Transparent;
-            uISettings.ColorValuesChanged += new TypedEventHandler<UISettings, object>((setting, args) =>
-            {
-
-                titleBar.ButtonForegroundColor = TitltBarButtonColor(uISettings);
-                titleBar.ButtonBackgroundColor = Colors.Transparent;
-                titleBar.BackgroundColor = Colors.Transparent;
-            });
+            ApplyTitleBarColors(uISettings);
+            // 避免重复订阅
+            uISettings.ColorValuesChanged -= TitleBarColorValuesChanged;
+            uISettings.ColorValuesChanged += TitleBarColorValuesChanged;
         }
 
-        private static Color TitltBarButtonColor(UISettings uISettings)
+        private static void TitleBarColorValuesChanged(UISettings sender, object args)
         {
-            var systemForeground = uISettings.GetColorValue(UIColorType.Foreground);
-            return ThemeHelper.GetTitleBarButtonForeground(systemForeground);
+            try
+            {
+                ApplyTitleBarColors(sender);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void ApplyTitleBarColors(UISettings uISettings)
+        {
+            ApplicationViewTitleBar titleBar = ApplicationView.GetForCurrentView().TitleBar;
+            var foreground = ThemeHelper.GetTitleBarButtonForeground(uISettings.GetColorValue(UIColorType.Foreground));
+            var background = ThemeHelper.GetTitleBarBackgroundColor();
+
+            // 扩展到标题栏时，按钮区/标题区背景与主题主色对齐，去掉系统默认 #202020
+            titleBar.ButtonForegroundColor = foreground;
+            titleBar.ButtonInactiveForegroundColor = foreground;
+            titleBar.ButtonBackgroundColor = background ?? Colors.Transparent;
+            titleBar.ButtonInactiveBackgroundColor = background ?? Colors.Transparent;
+            titleBar.BackgroundColor = background ?? Colors.Transparent;
+            titleBar.InactiveBackgroundColor = background ?? Colors.Transparent;
         }
 
 

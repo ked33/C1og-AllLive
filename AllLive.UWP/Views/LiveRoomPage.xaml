@@ -13,17 +13,22 @@
     xmlns:my="using:Microsoft.UI.Xaml.Controls"
     xmlns:ui="using:Microsoft.Toolkit.Uwp.UI"
     xmlns:winui="using:Microsoft.UI.Xaml.Controls"
-    winui:BackdropMaterial.ApplyToRootOrPageBackground="True"
+    winui:BackdropMaterial.ApplyToRootOrPageBackground="False"
+    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
     mc:Ignorable="d">
     <Page.Resources>
         <convert:DanmakuStyleConvert x:Key="styleConvert" />
     </Page.Resources>
-    <Grid x:Name="PageRoot">
+    <Grid
+        x:Name="PageRoot"
+        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition />
         </Grid.RowDefinitions>
-        <Grid x:Name="TitleBarGrid">
+        <Grid
+            x:Name="TitleBarGrid"
+            Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition />
@@ -33,7 +38,7 @@
                 x:Name="TitleBar"
                 Grid.Column="1"
                 Height="32"
-                Background="#00FFFFFF"
+                Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
                 Visibility="Collapsed">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />

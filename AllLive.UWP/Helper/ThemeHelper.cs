@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Windows.ApplicationModel.Core;
 using Windows.UI;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Media;
@@ -26,6 +27,7 @@ namespace AllLive.UWP.Helper
         private static readonly Dictionary<string, object> OriginalAppValues = new Dictionary<string, object>(StringComparer.Ordinal);
         private static readonly Dictionary<string, object> OriginalDarkThemeValues = new Dictionary<string, object>(StringComparer.Ordinal);
         private static int _lastAppliedTheme = int.MinValue;
+        private static Color? _lastChromeBackground;
 
         public static int NormalizeTheme(int theme)
         {
@@ -72,6 +74,31 @@ namespace AllLive.UWP.Helper
             return theme == ThemeLight ? Colors.Black : Colors.White;
         }
 
+        /// <summary>
+        /// 标题栏/窗口 chrome 背景。自定义主题用调色板主背景；浅/深色用固定色；跟随系统返回 null（保持透明）。
+        /// </summary>
+        public static Color? GetTitleBarBackgroundColor()
+        {
+            var theme = GetSavedTheme();
+            if (theme == ThemeSystem)
+            {
+                return null;
+            }
+            if (theme == ThemeLight)
+            {
+                return Color.FromArgb(0xFF, 0xF3, 0xF3, 0xF3);
+            }
+            if (theme == ThemeDark)
+            {
+                return Color.FromArgb(0xFF, 0x20, 0x20, 0x20);
+            }
+            if (_lastChromeBackground.HasValue)
+            {
+                return _lastChromeBackground.Value;
+            }
+            return GetPalette(theme).Background;
+        }
+
         public static bool IsCustomPaletteTheme(int theme)
         {
             theme = NormalizeTheme(theme);
@@ -79,7 +106,23 @@ namespace AllLive.UWP.Helper
         }
 
         /// <summary>
+        /// Application.Current.Resources 只能在主视图 UI 线程写入；副窗口（直播间新窗口）会 RPC_E_WRONG_THREAD。
+        /// </summary>
+        private static bool CanMutateAppResources()
+        {
+            try
+            {
+                return CoreApplication.MainView.Dispatcher.HasThreadAccess;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// 将当前设置中的主题应用到指定根元素（主 Frame / 新窗口 Frame）。
+        /// 副窗口仅设置 RequestedTheme，不改写应用级资源字典。
         /// </summary>
         public static void Apply(FrameworkElement root = null)
         {
@@ -100,16 +143,27 @@ namespace AllLive.UWP.Helper
                 frame.RequestedTheme = elementTheme;
             }
 
-            if (IsCustomPaletteTheme(theme))
+            // 仅主线程写入 Application.Resources，避免新窗口 0x8001010E
+            if (CanMutateAppResources())
             {
-                ApplyPalette(GetPalette(theme));
-            }
-            else if (_lastAppliedTheme != theme || AppliedKeys.Count > 0)
-            {
-                ClearCustomPalette();
-            }
+                if (IsCustomPaletteTheme(theme))
+                {
+                    ApplyPalette(GetPalette(theme));
+                }
+                else if (_lastAppliedTheme != theme || AppliedKeys.Count > 0)
+                {
+                    ClearCustomPalette();
+                    _lastChromeBackground = null;
+                    // 系统浅/深色也去掉边框，保持观感一致
+                    ApplyBorderlessChrome();
+                }
+                else if (theme == ThemeLight || theme == ThemeDark)
+                {
+                    ApplyBorderlessChrome();
+                }
 
-            _lastAppliedTheme = theme;
+                _lastAppliedTheme = theme;
+            }
 
             try
             {
@@ -119,6 +173,49 @@ namespace AllLive.UWP.Helper
             {
                 // 标题栏在部分窗口上下文中可能不可用
             }
+        }
+
+        /// <summary>
+        /// 仅去掉边框（用于跟随系统/浅色/深色），不替换整套调色板。
+        /// </summary>
+        private static void ApplyBorderlessChrome()
+        {
+            var transparent = Colors.Transparent;
+            void Brush(string key) => SetBrushOnly(key, transparent);
+
+            Brush("CardStrokeColorDefaultBrush");
+            Brush("CardStrokeColorDefaultSolidBrush");
+            Brush("DividerStrokeColorDefaultBrush");
+            Brush("ControlStrokeColorDefaultBrush");
+            Brush("ControlStrokeColorSecondaryBrush");
+            Brush("ControlStrongStrokeColorDefaultBrush");
+            Brush("SurfaceStrokeColorDefaultBrush");
+            Brush("SurfaceStrokeColorFlyoutBrush");
+            Brush("NavigationViewContentGridBorderBrush");
+            Brush("FlyoutBorderThemeBrush");
+            Brush("MenuFlyoutPresenterBorderBrush");
+            Brush("ContentDialogBorderBrush");
+            Brush("ButtonBorderBrush");
+            Brush("ButtonBorderBrushPointerOver");
+            Brush("ButtonBorderBrushPressed");
+            Brush("ButtonBorderBrushDisabled");
+            Brush("TextControlBorderBrush");
+            Brush("TextControlBorderBrushPointerOver");
+            Brush("TextControlBorderBrushDisabled");
+            Brush("ComboBoxBorderBrush");
+            Brush("ComboBoxBorderBrushPointerOver");
+            Brush("ComboBoxBorderBrushPressed");
+            Brush("ComboBoxBorderBrushDisabled");
+            Brush("ComboBoxDropDownBorderBrush");
+        }
+
+        private static void SetBrushOnly(string key, Color color)
+        {
+            var appResources = GetAppResources();
+            var darkDict = GetOrCreateDarkThemeDictionary();
+            WriteResource(appResources, OriginalAppValues, key, new SolidColorBrush(color));
+            WriteResource(darkDict, OriginalDarkThemeValues, key, new SolidColorBrush(color));
+            AppliedKeys.Add(key);
         }
 
         private static ThemePalette GetPalette(int theme)
@@ -246,6 +343,7 @@ namespace AllLive.UWP.Helper
             ClearCustomPalette();
 
             var darkDict = GetOrCreateDarkThemeDictionary();
+            _lastChromeBackground = palette.Background;
 
             void SetColor(string key, Color color)
             {
@@ -262,6 +360,9 @@ namespace AllLive.UWP.Helper
                 AppliedKeys.Add(key);
             }
 
+            // 边框统一透明（含控件描边）
+            var noBorder = Colors.Transparent;
+
             // —— 系统强调色 ——
             SetColor("SystemAccentColor", palette.Accent);
             SetColor("SystemAccentColorLight1", palette.AccentLight);
@@ -271,21 +372,21 @@ namespace AllLive.UWP.Helper
             SetColor("SystemAccentColorDark2", palette.AccentDark);
             SetColor("SystemAccentColorDark3", palette.AccentDark);
 
-            // —— 页面 / 表面 ——
+            // —— 页面 / 表面（侧栏与主背景同色） ——
             SetBrush("ApplicationPageBackgroundThemeBrush", palette.Background);
-            SetBrush("LayerFillColorDefaultBrush", palette.Surface);
+            SetBrush("LayerFillColorDefaultBrush", palette.Background);
             SetBrush("LayerFillColorAltBrush", palette.SurfaceAlt);
-            SetBrush("LayerOnAcrylicFillColorDefaultBrush", palette.Surface);
+            SetBrush("LayerOnAcrylicFillColorDefaultBrush", palette.Background);
             SetBrush("SolidBackgroundFillColorBaseBrush", palette.Background);
-            SetBrush("SolidBackgroundFillColorSecondaryBrush", palette.Surface);
+            SetBrush("SolidBackgroundFillColorSecondaryBrush", palette.Background);
             SetBrush("SolidBackgroundFillColorTertiaryBrush", palette.SurfaceAlt);
             SetBrush("SolidBackgroundFillColorQuarternaryBrush", palette.SurfaceAlt);
             SetBrush("CardBackgroundFillColorDefaultBrush", palette.Surface);
             SetBrush("CardBackgroundFillColorSecondaryBrush", palette.SurfaceAlt);
             SetBrush("SmokeFillColorDefaultBrush", Color.FromArgb(0x66, 0, 0, 0));
 
-            // 应用内自定义键
-            SetColor("TopPaneBackground", palette.Surface);
+            // 应用内自定义键：顶栏/侧栏与主背景一致
+            SetColor("TopPaneBackground", palette.Background);
 
             // —— 文字 ——
             SetBrush("SystemControlForegroundBaseHighBrush", palette.Foreground);
@@ -307,16 +408,16 @@ namespace AllLive.UWP.Helper
             SetBrush("TextFillColorDisabledBrush", palette.ForegroundTertiary);
             SetBrush("TextFillColorInverseBrush", palette.Background);
 
-            // —— 边框 / 分割 ——
-            SetBrush("CardStrokeColorDefaultBrush", palette.Border);
-            SetBrush("CardStrokeColorDefaultSolidBrush", palette.Border);
-            SetBrush("DividerStrokeColorDefaultBrush", palette.Border);
-            SetBrush("ControlStrokeColorDefaultBrush", palette.Border);
-            SetBrush("ControlStrokeColorSecondaryBrush", palette.BorderStrong);
-            SetBrush("ControlStrokeColorOnAccentDefaultBrush", palette.Accent);
-            SetBrush("ControlStrongStrokeColorDefaultBrush", palette.BorderStrong);
-            SetBrush("SurfaceStrokeColorDefaultBrush", palette.Border);
-            SetBrush("SurfaceStrokeColorFlyoutBrush", palette.Border);
+            // —— 边框 / 分割（全部透明） ——
+            SetBrush("CardStrokeColorDefaultBrush", noBorder);
+            SetBrush("CardStrokeColorDefaultSolidBrush", noBorder);
+            SetBrush("DividerStrokeColorDefaultBrush", noBorder);
+            SetBrush("ControlStrokeColorDefaultBrush", noBorder);
+            SetBrush("ControlStrokeColorSecondaryBrush", noBorder);
+            SetBrush("ControlStrokeColorOnAccentDefaultBrush", noBorder);
+            SetBrush("ControlStrongStrokeColorDefaultBrush", noBorder);
+            SetBrush("SurfaceStrokeColorDefaultBrush", noBorder);
+            SetBrush("SurfaceStrokeColorFlyoutBrush", noBorder);
             SetBrush("FocusStrokeColorOuterBrush", palette.Accent);
             SetBrush("FocusStrokeColorInnerBrush", palette.Background);
 
@@ -370,10 +471,10 @@ namespace AllLive.UWP.Helper
             SetBrush("ButtonForegroundPointerOver", palette.Foreground);
             SetBrush("ButtonForegroundPressed", palette.ForegroundSecondary);
             SetBrush("ButtonForegroundDisabled", palette.ForegroundTertiary);
-            SetBrush("ButtonBorderBrush", palette.Border);
-            SetBrush("ButtonBorderBrushPointerOver", palette.BorderStrong);
-            SetBrush("ButtonBorderBrushPressed", palette.BorderStrong);
-            SetBrush("ButtonBorderBrushDisabled", palette.Border);
+            SetBrush("ButtonBorderBrush", noBorder);
+            SetBrush("ButtonBorderBrushPointerOver", noBorder);
+            SetBrush("ButtonBorderBrushPressed", noBorder);
+            SetBrush("ButtonBorderBrushDisabled", noBorder);
 
             SetBrush("AccentButtonBackground", palette.Accent);
             SetBrush("AccentButtonBackgroundPointerOver", palette.AccentLight);
@@ -383,10 +484,10 @@ namespace AllLive.UWP.Helper
             SetBrush("AccentButtonForegroundPointerOver", palette.OnAccent);
             SetBrush("AccentButtonForegroundPressed", palette.OnAccent);
             SetBrush("AccentButtonForegroundDisabled", palette.ForegroundTertiary);
-            SetBrush("AccentButtonBorderBrush", palette.Accent);
-            SetBrush("AccentButtonBorderBrushPointerOver", palette.AccentLight);
-            SetBrush("AccentButtonBorderBrushPressed", palette.AccentDark);
-            SetBrush("AccentButtonBorderBrushDisabled", palette.Border);
+            SetBrush("AccentButtonBorderBrush", noBorder);
+            SetBrush("AccentButtonBorderBrushPointerOver", noBorder);
+            SetBrush("AccentButtonBorderBrushPressed", noBorder);
+            SetBrush("AccentButtonBorderBrushDisabled", noBorder);
 
             // —— 文本框 / 密码框 ——
             SetBrush("TextControlBackground", palette.Control);
@@ -401,10 +502,10 @@ namespace AllLive.UWP.Helper
             SetBrush("TextControlPlaceholderForegroundPointerOver", palette.ForegroundSecondary);
             SetBrush("TextControlPlaceholderForegroundFocused", palette.ForegroundSecondary);
             SetBrush("TextControlPlaceholderForegroundDisabled", palette.ForegroundTertiary);
-            SetBrush("TextControlBorderBrush", palette.Border);
-            SetBrush("TextControlBorderBrushPointerOver", palette.BorderStrong);
+            SetBrush("TextControlBorderBrush", noBorder);
+            SetBrush("TextControlBorderBrushPointerOver", noBorder);
             SetBrush("TextControlBorderBrushFocused", palette.Accent);
-            SetBrush("TextControlBorderBrushDisabled", palette.Border);
+            SetBrush("TextControlBorderBrushDisabled", noBorder);
             SetBrush("TextControlButtonBackground", Colors.Transparent);
             SetBrush("TextControlButtonBackgroundPointerOver", palette.Hover);
             SetBrush("TextControlButtonBackgroundPressed", palette.Pressed);
@@ -426,13 +527,13 @@ namespace AllLive.UWP.Helper
             SetBrush("ComboBoxForegroundPressed", palette.Foreground);
             SetBrush("ComboBoxPlaceHolderForeground", palette.ForegroundTertiary);
             SetBrush("ComboBoxPlaceHolderForegroundFocused", palette.ForegroundSecondary);
-            SetBrush("ComboBoxBorderBrush", palette.Border);
-            SetBrush("ComboBoxBorderBrushPointerOver", palette.BorderStrong);
-            SetBrush("ComboBoxBorderBrushPressed", palette.BorderStrong);
+            SetBrush("ComboBoxBorderBrush", noBorder);
+            SetBrush("ComboBoxBorderBrushPointerOver", noBorder);
+            SetBrush("ComboBoxBorderBrushPressed", noBorder);
             SetBrush("ComboBoxBorderBrushFocused", palette.Accent);
-            SetBrush("ComboBoxBorderBrushDisabled", palette.Border);
+            SetBrush("ComboBoxBorderBrushDisabled", noBorder);
             SetBrush("ComboBoxDropDownBackground", palette.Surface);
-            SetBrush("ComboBoxDropDownBorderBrush", palette.Border);
+            SetBrush("ComboBoxDropDownBorderBrush", noBorder);
             SetBrush("ComboBoxItemForeground", palette.Foreground);
             SetBrush("ComboBoxItemForegroundSelected", palette.Foreground);
             SetBrush("ComboBoxItemForegroundPointerOver", palette.Foreground);
@@ -454,10 +555,10 @@ namespace AllLive.UWP.Helper
             SetBrush("ToggleSwitchStrokeOnPointerOver", palette.AccentLight);
             SetBrush("ToggleSwitchStrokeOnPressed", palette.AccentDark);
             SetBrush("ToggleSwitchStrokeOnDisabled", palette.Border);
-            SetBrush("ToggleSwitchStrokeOff", palette.Border);
-            SetBrush("ToggleSwitchStrokeOffPointerOver", palette.BorderStrong);
-            SetBrush("ToggleSwitchStrokeOffPressed", palette.BorderStrong);
-            SetBrush("ToggleSwitchStrokeOffDisabled", palette.Border);
+            SetBrush("ToggleSwitchStrokeOff", noBorder);
+            SetBrush("ToggleSwitchStrokeOffPointerOver", noBorder);
+            SetBrush("ToggleSwitchStrokeOffPressed", noBorder);
+            SetBrush("ToggleSwitchStrokeOffDisabled", noBorder);
             SetBrush("ToggleSwitchKnobFillOn", palette.OnAccent);
             SetBrush("ToggleSwitchKnobFillOnPointerOver", palette.OnAccent);
             SetBrush("ToggleSwitchKnobFillOnPressed", palette.OnAccent);
@@ -476,7 +577,7 @@ namespace AllLive.UWP.Helper
             SetBrush("CheckBoxCheckBackgroundFillUnchecked", palette.Control);
             SetBrush("CheckBoxCheckBackgroundFillChecked", palette.Accent);
             SetBrush("CheckBoxCheckBackgroundFillIndeterminate", palette.Accent);
-            SetBrush("CheckBoxCheckBackgroundStrokeUnchecked", palette.Border);
+            SetBrush("CheckBoxCheckBackgroundStrokeUnchecked", noBorder);
             SetBrush("CheckBoxCheckBackgroundStrokeChecked", palette.Accent);
             SetBrush("CheckBoxCheckGlyphForegroundChecked", palette.OnAccent);
             SetBrush("CheckBoxCheckGlyphForegroundIndeterminate", palette.OnAccent);
@@ -498,10 +599,10 @@ namespace AllLive.UWP.Helper
             SetBrush("ListViewItemPlaceholderBackgroundThemeBrush", palette.SurfaceAlt);
             SetBrush("ListViewItemPlaceholderBackground", palette.SurfaceAlt);
 
-            // —— NavigationView ——
-            SetBrush("NavigationViewDefaultPaneBackground", palette.Surface);
-            SetBrush("NavigationViewExpandedPaneBackground", palette.Surface);
-            SetBrush("NavigationViewTopPaneBackground", palette.Surface);
+            // —— NavigationView（侧栏与主背景同色） ——
+            SetBrush("NavigationViewDefaultPaneBackground", palette.Background);
+            SetBrush("NavigationViewExpandedPaneBackground", palette.Background);
+            SetBrush("NavigationViewTopPaneBackground", palette.Background);
             SetBrush("NavigationViewContentBackground", palette.Background);
             SetBrush("NavigationViewItemBackground", Colors.Transparent);
             SetBrush("NavigationViewItemBackgroundPointerOver", palette.Hover);
@@ -519,7 +620,7 @@ namespace AllLive.UWP.Helper
             SetBrush("NavigationViewSelectionIndicatorForeground", palette.Accent);
             SetBrush("NavigationViewButtonBackgroundPointerOver", palette.Hover);
             SetBrush("NavigationViewButtonBackgroundPressed", palette.Pressed);
-            SetBrush("NavigationViewContentGridBorderBrush", palette.Border);
+            SetBrush("NavigationViewContentGridBorderBrush", noBorder);
             SetBrush("TopNavigationViewItemForeground", palette.Foreground);
             SetBrush("TopNavigationViewItemForegroundPointerOver", palette.Foreground);
             SetBrush("TopNavigationViewItemForegroundPressed", palette.Foreground);
@@ -530,9 +631,9 @@ namespace AllLive.UWP.Helper
 
             // —— Flyout / Menu / ContentDialog ——
             SetBrush("FlyoutPresenterBackground", palette.Surface);
-            SetBrush("FlyoutBorderThemeBrush", palette.Border);
+            SetBrush("FlyoutBorderThemeBrush", noBorder);
             SetBrush("MenuFlyoutPresenterBackground", palette.Surface);
-            SetBrush("MenuFlyoutPresenterBorderBrush", palette.Border);
+            SetBrush("MenuFlyoutPresenterBorderBrush", noBorder);
             SetBrush("MenuFlyoutItemBackground", Colors.Transparent);
             SetBrush("MenuFlyoutItemBackgroundPointerOver", palette.Hover);
             SetBrush("MenuFlyoutItemBackgroundPressed", palette.Pressed);
@@ -542,7 +643,7 @@ namespace AllLive.UWP.Helper
             SetBrush("MenuFlyoutItemForegroundDisabled", palette.ForegroundTertiary);
             SetBrush("ContentDialogBackground", palette.Surface);
             SetBrush("ContentDialogForeground", palette.Foreground);
-            SetBrush("ContentDialogBorderBrush", palette.Border);
+            SetBrush("ContentDialogBorderBrush", noBorder);
             SetBrush("ContentDialogTopOverlay", palette.SurfaceAlt);
             SetBrush("ContentDialogSmokeFill", Color.FromArgb(0x99, 0, 0, 0));
 

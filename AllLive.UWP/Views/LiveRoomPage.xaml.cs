@@ -272,15 +272,8 @@ namespace AllLive.UWP.Views
      
         private void SetTitleBarColor()
         {
-            UISettings uiSettings = new UISettings();
-            var color = ThemeHelper.GetTitleBarButtonForeground(uiSettings.GetColorValue(UIColorType.Foreground));
-            ApplicationViewTitleBar titleBar = ApplicationView.GetForCurrentView().TitleBar;
-
-            titleBar.ButtonBackgroundColor = Colors.Transparent;
-            titleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
-            titleBar.ButtonForegroundColor = color;
-            titleBar.ButtonBackgroundColor = Colors.Transparent;
-            titleBar.BackgroundColor = Colors.Transparent;
+            // 与主窗口一致，使用 ThemeHelper 计算的前景/背景（含自定义主题）
+            App.SetTitleBar();
         }
         private void HideTitleBar(bool hide)
         {
