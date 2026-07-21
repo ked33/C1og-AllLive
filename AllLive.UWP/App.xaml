@@ -13,8 +13,6 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
                 <ResourceDictionary Source="ms-appx:///ValueDictionary.xaml" />
             </ResourceDictionary.MergedDictionaries>
-            <!--  全局图片降亮度状态（默认 70%），设置页可切换  -->
-            <helper:ImageDimHelper x:Key="ImageDimState" />
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
                     <Color x:Key="TopPaneBackground">#FFF7F7F7</Color>
@@ -25,6 +23,8 @@
                     <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#FF0078D7" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
+            <!--  全局图片降亮度状态（默认 70%），设置页可切换；须放在 ThemeDictionaries 之后  -->
+            <helper:ImageDimHelper x:Key="ImageDimState" />
             <!--  转换器  -->
             <convert:NumberToStringConvert x:Key="numberToStringConvert" />
             <convert:DisplayConvert x:Key="displayConvert" />
