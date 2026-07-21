@@ -558,7 +558,7 @@ namespace AllLive.UWP.Helper
             SetBrush("SystemControlBackgroundChromeMediumLowBrush", palette.SurfaceAlt);
             SetBrush("SystemControlBackgroundChromeLowBrush", palette.Background);
             SetBrush("SystemControlBackgroundChromeHighBrush", palette.SurfaceAlt);
-            SetBrush("SystemControlBackgroundChromeWhiteBrush", palette.Foreground);
+            SetBrush("SystemControlBackgroundChromeWhiteBrush", palette.Control);
             SetBrush("SystemControlBackgroundChromeBlackLowBrush", palette.Background);
             SetBrush("SystemControlBackgroundChromeBlackMediumLowBrush", palette.Surface);
             SetBrush("SystemControlBackgroundTransparentBrush", Colors.Transparent);
