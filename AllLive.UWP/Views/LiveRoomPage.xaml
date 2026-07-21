@@ -432,8 +432,7 @@
                     PointerEntered="Grid_PointerEntered"
                     PointerExited="Grid_PointerExited"
                     PointerMoved="Grid_PointerMoved"
-                    RequestedTheme="Dark"
-                    Foreground="{ThemeResource TextFillColorPrimaryBrush}">
+                    RequestedTheme="Dark">
                     <Grid.ContextFlyout>
                         <Flyout>
                             <TextBlock
@@ -495,8 +494,7 @@
                     </Border>
                     <Grid x:Name="control">
 
-                        <Grid x:Name="StandardControl"
-                            Foreground="{ThemeResource TextFillColorPrimaryBrush}">
+                        <Grid x:Name="StandardControl">
                             <Grid Height="48" VerticalAlignment="Bottom">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
@@ -773,8 +771,7 @@
                         <Grid
                             x:Name="MiniControl"
                             VerticalAlignment="Bottom"
-                            Visibility="Collapsed"
-                            Foreground="{ThemeResource TextFillColorPrimaryBrush}">
+                            Visibility="Collapsed">
                             <Grid.Background>
                                 <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
                                     <GradientStop Color="#00000000" />
@@ -833,8 +830,7 @@
                                     Data="{StaticResource ResourceKey=IconFullWindow}" />
                             </HyperlinkButton>
                         </Grid>
-                        <Grid x:Name="XBoxControl"
-                            Foreground="{ThemeResource TextFillColorPrimaryBrush}">
+                        <Grid x:Name="XBoxControl">
                             <Grid
                                 Padding="12"
                                 HorizontalAlignment="Stretch"
