@@ -1,6 +1,6 @@
 {
-	"version": "2.3.45",
-	"versionCode": 20345,
-	"message": "1. 修复 LiveRoomPage Grid.Foreground 导致 XAML 编译失败\r\n2. 纯黑主题播放器文字仍用主题色（控件自身 Foreground）",
+	"version": "2.3.46",
+	"versionCode": 20346,
+	"message": "1. 纯黑主题：右侧聊天正文与默认弹幕使用 #C2C2C2\r\n2. 彩色弹幕保留彩色，近白默认弹幕改为主题主文字色",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }

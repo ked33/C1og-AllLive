@@ -87,6 +87,41 @@ namespace AllLive.UWP.Helper
         }
 
         /// <summary>
+        /// 主文字色（聊天正文、默认弹幕等）：自定义主题用调色板 Foreground（纯黑为 #C2C2C2）。
+        /// </summary>
+        public static Color GetPrimaryTextColor()
+        {
+            var theme = GetSavedTheme();
+            if (IsCustomPaletteTheme(theme))
+            {
+                return GetPalette(theme).Foreground;
+            }
+            if (theme == ThemeLight)
+            {
+                return Colors.Black;
+            }
+            return Colors.White;
+        }
+
+        /// <summary>
+        /// 弹幕颜色：关闭彩色时用主文字色；彩色开启时平台白/近白改为主文字色，其它彩色保留。
+        /// </summary>
+        public static Color ResolveDanmakuColor(byte a, byte r, byte g, byte b, bool colourful)
+        {
+            if (!colourful)
+            {
+                return GetPrimaryTextColor();
+            }
+            // 平台默认白弹幕 → 主题主文字，避免纯黑主题仍是 #FFFFFF
+            if (r >= 245 && g >= 245 && b >= 245)
+            {
+                var primary = GetPrimaryTextColor();
+                return Color.FromArgb(a == 0 ? (byte)255 : a, primary.R, primary.G, primary.B);
+            }
+            return Color.FromArgb(a == 0 ? (byte)255 : a, r, g, b);
+        }
+
+        /// <summary>
         /// 标题栏/窗口 chrome 背景。自定义主题用调色板主背景；浅/深色用固定色；跟随系统返回 null（保持透明）。
         /// </summary>
         public static Color? GetTitleBarBackgroundColor()

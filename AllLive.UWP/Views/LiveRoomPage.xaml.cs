@@ -1147,9 +1147,10 @@ namespace AllLive.UWP.Views
 
             if (DanmuControl.Visibility == Visibility.Visible)
             {
-                var color = DanmuSettingColourful.IsOn ?
-                    Color.FromArgb(e.Color.A, e.Color.R, e.Color.G, e.Color.B) :
-                    Colors.White;
+                var src = e.Color ?? AllLive.Core.Helper.DanmakuColor.White;
+                var color = ThemeHelper.ResolveDanmakuColor(
+                    src.A, src.R, src.G, src.B,
+                    DanmuSettingColourful.IsOn);
                 DanmuControl.AddLiveDanmu(e.Message, false, color);
             }
 

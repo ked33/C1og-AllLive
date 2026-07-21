@@ -1088,7 +1088,8 @@
                                             FontSize="{Binding ElementName=numFontsize, Path=Value, Mode=OneWay}"
                                             IsTextSelectionEnabled="True"
                                             LineHeight="24"
-                                            TextWrapping="Wrap"><Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding UserName}" /><Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="：" /><Run Text="{Binding Message}" /></TextBlock>
+                                            TextWrapping="Wrap"
+                                            Foreground="{ThemeResource TextFillColorPrimaryBrush}"><Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding UserName}" /><Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="：" /><Run Foreground="{ThemeResource TextFillColorPrimaryBrush}" Text="{Binding Message}" /></TextBlock>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                                 <ListView.ItemsPanel>
