@@ -1,6 +1,6 @@
 {
-	"version": "2.3.42",
-	"versionCode": 20342,
-	"message": "1. 纯黑主题：直播间控件栏去掉写死纯白字\r\n2. 系统 ChromeWhite 前景改为主题主文字色",
+	"version": "2.3.44",
+	"versionCode": 20344,
+	"message": "1. 纯黑主题：直播间控件栏去掉写死纯白字\r\n2. 系统 ChromeWhite 前景改为主题主文字色 #C2C2C2",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }
