@@ -58,6 +58,11 @@ namespace AllLive.UWP.Helper
         public const string FAVORITE_HIDE_OFFLINE = "FavoriteHideOffline";
 
         /// <summary>
+        /// 图片降低亮度（默认开启，约 70% 不透明度，深色主题护眼）
+        /// </summary>
+        public const string IMAGE_DIM_ENABLED = "ImageDimEnabled";
+
+        /// <summary>
         /// 视频解码
         /// </summary>
         public const string VIDEO_DECODER = "VideoDecoder";

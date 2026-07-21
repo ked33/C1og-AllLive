@@ -52,6 +52,7 @@
                     Margin="12,0,0,0"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Center"
+                    Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                     Source="Assets/Square44x44Logo.png" />
                 <Grid
                     Grid.Column="2"

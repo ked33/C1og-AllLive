@@ -51,6 +51,7 @@
                             Height="48"
                             Background="Blue"
                             BorderThickness="0"
+                            Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                             ProfilePicture="{x:Bind Path=Photo}" />
                         <StackPanel
                             Grid.Column="1"

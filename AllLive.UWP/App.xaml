@@ -4,6 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:Windows10version1903="http://schemas.microsoft.com/winfx/2006/xaml/presentation?IsApiContractPresent(Windows.Foundation.UniversalApiContract, 8)"
     xmlns:convert="using:AllLive.UWP.Converters"
+    xmlns:helper="using:AllLive.UWP.Helper"
     xmlns:local="using:AllLive.UWP"
     xmlns:toolkit="using:Microsoft.Toolkit.Uwp.UI.Controls">
     <Application.Resources>
@@ -12,6 +13,8 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
                 <ResourceDictionary Source="ms-appx:///ValueDictionary.xaml" />
             </ResourceDictionary.MergedDictionaries>
+            <!--  全局图片降亮度状态（默认 70%），设置页可切换  -->
+            <helper:ImageDimHelper x:Key="ImageDimState" />
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
                     <Color x:Key="TopPaneBackground">#FFF7F7F7</Color>
@@ -61,6 +64,7 @@
                         <Grid>
                             <toolkit:ImageEx
                                 IsCacheEnabled="True"
+                                Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                                 PlaceholderSource="ms-appx:///Assets/Placeholder/Placeholder.png"
                                 PlaceholderStretch="Uniform"
                                 Source="{Binding Path=Cover}"

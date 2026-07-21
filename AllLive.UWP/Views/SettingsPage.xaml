@@ -142,6 +142,24 @@
                             PlaceholderText="分钟"
                             SpinButtonPlacementMode="Compact" />
                     </Grid>
+                    <Grid
+                        x:Name="SettingsImageDim"
+                        Margin="0,8,0,0"
+                        Padding="8,12"
+                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,88,0">
+                            <TextBlock>图片降低亮度</TextBlock>
+                            <TextBlock FontSize="12" Foreground="Gray" TextWrapping="Wrap">将封面、头像等图片亮度降至 70%，深色主题下更护眼（默认开启）</TextBlock>
+                        </StackPanel>
+                        <ToggleSwitch
+                            x:Name="swImageDim"
+                            MinWidth="72"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center" />
+                    </Grid>
 
                     <TextBlock Margin="4,12" FontSize="18">播放</TextBlock>
                     <Grid
@@ -326,6 +344,7 @@
                                 Width="36"
                                 Height="36"
                                 Margin="0,0,12,0"
+                                Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                                 Source="/Assets/Logo/bilibili.png" />
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock>哔哩哔哩</TextBlock>

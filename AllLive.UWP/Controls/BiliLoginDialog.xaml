@@ -18,6 +18,7 @@
                 x:Name="imgQR"
                 Width="260"
                 Height="260"
+                Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                 Stretch="UniformToFill"
                 Tapped="imgQR_Tapped" />
             <ProgressRing

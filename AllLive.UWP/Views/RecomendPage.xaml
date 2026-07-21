@@ -31,6 +31,7 @@
                             Width="20"
                             Height="20"
                             Margin="0,0,8,0"
+                            Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                             Source="{x:Bind Path=site.Logo}" />
                         <TextBlock
                             VerticalAlignment="Center"

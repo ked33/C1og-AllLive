@@ -54,6 +54,7 @@
                     Margin="12,0,0,0"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Center"
+                    Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                     Source="{x:Bind Path=liveRoomVM.SiteLogo, Mode=OneWay}" />
                 <Grid
                     Grid.Column="2"
@@ -125,6 +126,7 @@
                                                     Width="32"
                                                     Height="32"
                                                     Background="Gray"
+                                                    Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                                                     ProfilePicture="{x:Bind Path=Face}" />
 
                                                 <StackPanel Grid.Column="1" Margin="12,0,0,0">
@@ -1019,6 +1021,7 @@
                         Width="48"
                         Height="48"
                         Background="Blue"
+                        Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                         ProfilePicture="{x:Bind Path=liveRoomVM.Photo, Mode=OneWay}" />
                     <StackPanel
                         Grid.Column="1"
@@ -1034,6 +1037,7 @@
                                 Width="18"
                                 Height="18"
                                 Margin="0,0,4,0"
+                                Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                                 Source="{x:Bind Path=liveRoomVM.SiteLogo, Mode=OneWay}" />
                             <TextBlock
                                 VerticalAlignment="Center"
@@ -1132,6 +1136,7 @@
                                                         Width="32"
                                                         Height="32"
                                                         Background="Gray"
+                                                        Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                                                         ProfilePicture="{x:Bind Path=Face}" />
 
                                                     <StackPanel Grid.Column="1" Margin="12,0,0,0">

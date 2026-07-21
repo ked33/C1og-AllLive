@@ -155,6 +155,23 @@ namespace AllLive.UWP.Views
                 });
             });
 
+            //图片降低亮度（默认开启，约 70%）
+            swImageDim.IsOn = SettingHelper.GetValue<bool>(SettingHelper.IMAGE_DIM_ENABLED, true);
+            swImageDim.Loaded += new RoutedEventHandler((sender, e) =>
+            {
+                swImageDim.Toggled += new RoutedEventHandler((obj, args) =>
+                {
+                    if (ImageDimHelper.Current != null)
+                    {
+                        ImageDimHelper.Current.SetEnabled(swImageDim.IsOn);
+                    }
+                    else
+                    {
+                        SettingHelper.SetValue(SettingHelper.IMAGE_DIM_ENABLED, swImageDim.IsOn);
+                    }
+                });
+            });
+
             //日志开关
             swLogEnabled.IsOn = SettingHelper.GetValue<bool>(SettingHelper.LOG_ENABLED, false);
             LogHelper.SetEnabled(swLogEnabled.IsOn);
@@ -331,6 +348,7 @@ namespace AllLive.UWP.Views
             public bool? MouseBack { get; set; }
             public int? FavoriteAutoRefreshMinutes { get; set; }
             public bool? FavoriteHideOffline { get; set; }
+            public bool? ImageDimEnabled { get; set; }
             public bool? NewWindowLiveRoom { get; set; }
             public int? VideoDecoder { get; set; }
             public bool? DouyuSignEnabled { get; set; }
@@ -511,6 +529,7 @@ namespace AllLive.UWP.Views
                 MouseBack = SettingHelper.GetValue<bool>(SettingHelper.MOUSE_BACK, true),
                 FavoriteAutoRefreshMinutes = NormalizeFavoriteRefreshMinutes(null),
                 FavoriteHideOffline = SettingHelper.GetValue<bool>(SettingHelper.FAVORITE_HIDE_OFFLINE, false),
+                ImageDimEnabled = SettingHelper.GetValue<bool>(SettingHelper.IMAGE_DIM_ENABLED, true),
                 NewWindowLiveRoom = SettingHelper.GetValue<bool>(SettingHelper.NEW_WINDOW_LIVEROOM, true),
                 VideoDecoder = SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1),
                 DouyuSignEnabled = SettingHelper.GetValue<bool>(SettingHelper.DOUYU_SIGN_ENABLED, true),
@@ -575,6 +594,7 @@ namespace AllLive.UWP.Views
             var mouseBack = data.MouseBack ?? SettingHelper.GetValue<bool>(SettingHelper.MOUSE_BACK, true);
             var favoriteRefreshMinutes = NormalizeFavoriteRefreshMinutes(data.FavoriteAutoRefreshMinutes);
             var favoriteHideOffline = data.FavoriteHideOffline ?? SettingHelper.GetValue<bool>(SettingHelper.FAVORITE_HIDE_OFFLINE, false);
+            var imageDimEnabled = data.ImageDimEnabled ?? SettingHelper.GetValue<bool>(SettingHelper.IMAGE_DIM_ENABLED, true);
             var newWindowLiveRoom = data.NewWindowLiveRoom ?? SettingHelper.GetValue<bool>(SettingHelper.NEW_WINDOW_LIVEROOM, true);
             var videoDecoder = ClampInt(data.VideoDecoder ?? SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1), 0, 3);
             var douyuSignEnabled = data.DouyuSignEnabled ?? SettingHelper.GetValue<bool>(SettingHelper.DOUYU_SIGN_ENABLED, true);
@@ -605,6 +625,7 @@ namespace AllLive.UWP.Views
             SettingHelper.SetValue(SettingHelper.MOUSE_BACK, mouseBack);
             SettingHelper.SetValue(SettingHelper.FAVORITE_AUTO_REFRESH_MINUTES, favoriteRefreshMinutes);
             SettingHelper.SetValue(SettingHelper.FAVORITE_HIDE_OFFLINE, favoriteHideOffline);
+            SettingHelper.SetValue(SettingHelper.IMAGE_DIM_ENABLED, imageDimEnabled);
             SettingHelper.SetValue(SettingHelper.NEW_WINDOW_LIVEROOM, newWindowLiveRoom);
             SettingHelper.SetValue(SettingHelper.VIDEO_DECODER, videoDecoder);
             SettingHelper.SetValue(SettingHelper.DOUYU_SIGN_ENABLED, douyuSignEnabled);
@@ -658,6 +679,11 @@ namespace AllLive.UWP.Views
             cbPaneDisplayMode.SelectedIndex = paneDisplayMode;
             swMouseClosePage.IsOn = mouseBack;
             numFavoriteRefreshInterval.Value = favoriteRefreshMinutes;
+            swImageDim.IsOn = imageDimEnabled;
+            if (ImageDimHelper.Current != null)
+            {
+                ImageDimHelper.Current.SetEnabled(imageDimEnabled, save: false);
+            }
             swNewWindow.IsOn = newWindowLiveRoom;
             cbDecoder.SelectedIndex = videoDecoder;
             swDouyuSignService.IsOn = douyuSignEnabled;

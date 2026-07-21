@@ -98,6 +98,7 @@
                                 Height="48"
                                 Background="Blue"
                                 BorderThickness="0"
+                                Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
                                 ProfilePicture="{x:Bind Path=Photo}" />
                             <Grid
                                 Grid.Column="1"

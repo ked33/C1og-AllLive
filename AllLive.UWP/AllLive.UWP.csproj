@@ -152,6 +152,7 @@
     <Compile Include="Helper\ExceptionHandler.cs" />
     <Compile Include="Helper\DatabaseHelper.cs" />
     <Compile Include="Helper\DouyinCookieStore.cs" />
+    <Compile Include="Helper\ImageDimHelper.cs" />
     <Compile Include="Helper\LogHelper.cs" />
     <Compile Include="Helper\MessageCenter.cs" />
     <Compile Include="Helper\SettingHelper.cs" />
