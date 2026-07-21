@@ -147,16 +147,23 @@ namespace AllLive.UWP
 
                 if (updates.Count > 0)
                 {
-                    MessageDialog dialog = new MessageDialog("发现新版本，是否前往应用商店更新？", "发现新版本");
-                    dialog.Commands.Add(new UICommand("确定", async (cmd) =>
+                    var dialog = ThemeHelper.CreateContentDialog();
+                    dialog.Title = "发现新版本";
+                    dialog.Content = new TextBlock
+                    {
+                        Text = "发现新版本，是否前往应用商店更新？",
+                        TextWrapping = TextWrapping.Wrap
+                    };
+                    dialog.PrimaryButtonText = "确定";
+                    dialog.SecondaryButtonText = "取消";
+                    dialog.DefaultButton = ContentDialogButton.Primary;
+                    var result = await dialog.ShowAsync();
+                    if (result == ContentDialogResult.Primary)
                     {
                         var product = await context.GetStoreProductForCurrentAppAsync();
-                        // 打开应用商店
                         var uri = new Uri($"ms-windows-store://pdp?productid={product.Product.StoreId}");
                         await Windows.System.Launcher.LaunchUriAsync(uri);
-                    }));
-                    dialog.Commands.Add(new UICommand("取消"));
-                    await dialog.ShowAsync();
+                    }
 
                 }
 

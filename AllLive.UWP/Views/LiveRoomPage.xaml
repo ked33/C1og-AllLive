@@ -55,12 +55,15 @@
                     HorizontalAlignment="Left"
                     VerticalAlignment="Center"
                     Source="{x:Bind Path=liveRoomVM.SiteLogo, Mode=OneWay}" />
-                <Grid Grid.Column="2" Background="#00FFFFFF">
+                <Grid
+                    Grid.Column="2"
+                    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
                     <TextBlock
                         x:Name="Title"
                         Margin="12,0"
                         VerticalAlignment="Center"
-                        FontSize="12">
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorPrimaryBrush}">
                         <Run Text="{x:Bind Path=liveRoomVM.Title, Mode=OneWay}" />
                         <Run Text=" - " />
                         <Run Text="{x:Bind Path=liveRoomVM.Name, Mode=OneWay}" />

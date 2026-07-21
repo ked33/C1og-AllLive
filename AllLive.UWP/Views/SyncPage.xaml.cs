@@ -41,7 +41,7 @@ namespace AllLive.UWP.Views
 
         private async void btnJoinRoom_Click(object sender, RoutedEventArgs e)
         {
-            ContentDialog dialog= new ContentDialog();
+            ContentDialog dialog = ThemeHelper.CreateContentDialog();
             dialog.Title = "加入房间";
             TextBox textBox = new TextBox();
             textBox.PlaceholderText = "请输入房间号";
@@ -64,12 +64,10 @@ namespace AllLive.UWP.Views
 
         private void btnQR_Click(object sender, RoutedEventArgs e)
         {
-            ContentDialog dialog = new ContentDialog()
-            {
-                Title = "二维码",
-                IsSecondaryButtonEnabled=false,
-                PrimaryButtonText = "关闭"
-            };
+            ContentDialog dialog = ThemeHelper.CreateContentDialog();
+            dialog.Title = "二维码";
+            dialog.IsSecondaryButtonEnabled = false;
+            dialog.PrimaryButtonText = "关闭";
           
             Image image = new Image() { 
                 Width=260,

@@ -148,7 +148,7 @@ namespace AllLive.UWP.Views
             {
                 return;
             }
-            ContentDialog dialog = new ContentDialog();
+            ContentDialog dialog = ThemeHelper.CreateContentDialog();
             dialog.Title = "排序";
             TextBox textBox = new TextBox();
             textBox.PlaceholderText = "请输入排序数字";

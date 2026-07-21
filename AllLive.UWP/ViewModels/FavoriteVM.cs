@@ -11,7 +11,8 @@ using System.Windows.Input;
 using Windows.Storage.Pickers;
 using Windows.Storage;
 using Newtonsoft.Json;
-using Windows.UI.Popups;
+using Windows.UI.Xaml;
+using Windows.UI.Xaml.Controls;
 
 namespace AllLive.UWP.ViewModels
 {
@@ -535,10 +536,25 @@ namespace AllLive.UWP.ViewModels
 
         }
 
-        public void Tip()
+        public async void Tip()
         {
-            MessageDialog dialog = new MessageDialog(@"该程序兼容Simple Live，您可以导入Simple Live的关注数据，导出的数据也可以在Simple Live中导入。", "导入导出说明");
-           _= dialog.ShowAsync();
+            var dialog = ThemeHelper.CreateContentDialog();
+            dialog.Title = "导入导出说明";
+            dialog.Content = new TextBlock
+            {
+                Text = "该程序兼容Simple Live，您可以导入Simple Live的关注数据，导出的数据也可以在Simple Live中导入。",
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true
+            };
+            dialog.PrimaryButtonText = "知道了";
+            dialog.DefaultButton = ContentDialogButton.Primary;
+            try
+            {
+                await dialog.ShowAsync();
+            }
+            catch
+            {
+            }
         }
 
         public void UpdateSort(FavoriteItem item, int sortOrder)

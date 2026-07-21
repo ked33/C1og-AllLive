@@ -1,4 +1,5 @@
-﻿using Microsoft.Toolkit.Uwp.UI.Animations;
+﻿using AllLive.UWP.Helper;
+using Microsoft.Toolkit.Uwp.UI.Animations;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -28,7 +29,10 @@ namespace AllLive.UWP.Controls
         public MessageToast()
         {
             this.InitializeComponent();
+            // Popup 默认易落在浅色；Apply 会设 RequestedTheme，副线程场景还会写入本地调色板
+            ThemeHelper.Apply(this);
             m_Popup = new Popup();
+            ThemeHelper.ApplyElementTheme(m_Popup);
             this.Width = Window.Current.Bounds.Width;
             this.Height = Window.Current.Bounds.Height;
             m_Popup.Child = this;

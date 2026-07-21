@@ -203,6 +203,8 @@ namespace AllLive.UWP.Views
         public LiveRoomPage()
         {
             this.InitializeComponent();
+            // 新窗口 / 当前页跟随显示模式（含自定义调色板）
+            ThemeHelper.Apply(this);
 
             settingVM = new SettingVM();
             liveRoomVM = new LiveRoomVM(settingVM);
@@ -3329,7 +3331,15 @@ namespace AllLive.UWP.Views
                 {
                     LogPlayError("直播加载失败", null, JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, lastProbeSnapshot));
                 }
-                await new MessageDialog($"啊，播放失败了，请尝试以下操作\r\n1、更换清晰度或线路\r\n2、请尝试在直播设置中打开/关闭硬解试试", "播放失败").ShowAsync();
+                var failDialog = ThemeHelper.CreateContentDialog();
+                failDialog.Title = "播放失败";
+                failDialog.Content = new TextBlock
+                {
+                    Text = "啊，播放失败了，请尝试以下操作\r\n1、更换清晰度或线路\r\n2、请尝试在直播设置中打开/关闭硬解试试",
+                    TextWrapping = TextWrapping.Wrap
+                };
+                failDialog.PrimaryButtonText = "确定";
+                await failDialog.ShowAsync();
             }
             else
             {
@@ -4847,19 +4857,17 @@ namespace AllLive.UWP.Views
         private void XboxSuperChat_ItemClick(object sender, ItemClickEventArgs e)
         {
             var item = e.ClickedItem as SuperChatItem;
-            ContentDialog dialog = new ContentDialog
+            ContentDialog dialog = ThemeHelper.CreateContentDialog();
+            dialog.Title = item.UserName;
+            dialog.Content = new TextBlock
             {
-                Title = item.UserName,
-                Content = new TextBlock
-                {
-                    Text = item.Message,
-                    TextWrapping = TextWrapping.Wrap,
-                    FontSize = 20
-                },
-                IsPrimaryButtonEnabled = true,
-                IsSecondaryButtonEnabled = false,
-                PrimaryButtonText = "确定"
+                Text = item.Message,
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 20
             };
+            dialog.IsPrimaryButtonEnabled = true;
+            dialog.IsSecondaryButtonEnabled = false;
+            dialog.PrimaryButtonText = "确定";
             _ = dialog.ShowAsync();
         }
     }

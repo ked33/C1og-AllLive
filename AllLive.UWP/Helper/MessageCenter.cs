@@ -49,15 +49,24 @@ namespace AllLive.UWP.Helper
             // 如果是哔哩哔哩
             if (liveSite.Name == "哔哩哔哩直播" && !BiliAccount.Instance.Logined&&!SettingHelper.GetValue(SettingHelper.IGNORE_BILI_LOGIN_TIP,false))
             {
-                // 弹窗询问是否登录
-                MessageDialog dialog = new MessageDialog("您尚未登录哔哩哔哩账号，部分直播可能无法观看，是否前往登录账号？", "未登录");
-                dialog.Commands.Add(new UICommand("登录", async (cmd) =>
+                // 弹窗询问是否登录（ContentDialog 跟随主题）
+                var dialog = ThemeHelper.CreateContentDialog();
+                dialog.Title = "未登录";
+                dialog.Content = new TextBlock
                 {
-                    // 调用登录方法
+                    Text = "您尚未登录哔哩哔哩账号，部分直播可能无法观看，是否前往登录账号？",
+                    TextWrapping = TextWrapping.Wrap
+                };
+                dialog.PrimaryButtonText = "登录";
+                dialog.SecondaryButtonText = "取消";
+                dialog.CloseButtonText = "不再提示";
+                dialog.DefaultButton = ContentDialogButton.Primary;
+                var result = await dialog.ShowAsync();
+                if (result == ContentDialogResult.Primary)
+                {
                     var login = await BiliBiliLogin();
                     if (login)
                     {
-                        // 登录成功后打开直播间
                         NavigatePage(typeof(LiveRoomPage), arg);
                     }
                     else
@@ -65,17 +74,17 @@ namespace AllLive.UWP.Helper
                         Utils.ShowMessageToast("未登录成功");
                         NavigatePage(typeof(LiveRoomPage), arg);
                     }
-                }));
-                dialog.Commands.Add(new UICommand("取消", (cmd) =>
-                 {
-                   NavigatePage(typeof(LiveRoomPage), arg);
-                }));
-                dialog.Commands.Add(new UICommand("不再提示", (cmd) =>
+                }
+                else if (result == ContentDialogResult.None)
                 {
+                    // CloseButton = 不再提示
                     SettingHelper.SetValue(SettingHelper.IGNORE_BILI_LOGIN_TIP, true);
                     NavigatePage(typeof(LiveRoomPage), arg);
-                }));
-                await dialog.ShowAsync();
+                }
+                else
+                {
+                    NavigatePage(typeof(LiveRoomPage), arg);
+                }
                 return;
             }
 
@@ -147,6 +156,8 @@ namespace AllLive.UWP.Helper
                         frame.Navigate(typeof(LiveRoomPage), data);
                         Window.Current.Content = frame;
                         Window.Current.Activate();
+                        // 新窗口标题栏再应用一次（ExtendViewIntoTitleBar 之后）
+                        ThemeHelper.Apply(frame);
                         newViewId = ApplicationView.GetForCurrentView().Id;
                         if (!string.IsNullOrWhiteSpace(liveRoomKey))
                         {

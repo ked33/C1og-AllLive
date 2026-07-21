@@ -32,6 +32,7 @@ namespace AllLive.UWP.Controls
         public BiliLoginDialog()
         {
             this.InitializeComponent();
+            ThemeHelper.ApplyElementTheme(this);
             this.Loaded += BiliLoginDialog_Loaded;
             this.Unloaded += BiliLoginDialog_Unloaded; ;
         }

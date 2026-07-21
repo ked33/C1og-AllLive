@@ -31,11 +31,19 @@ namespace AllLive.UWP.Helper
         }
         public async static Task<bool> ShowDialog(string title, string content)
         {
-            MessageDialog messageDialog = new MessageDialog(content, title);
-            messageDialog.Commands.Add(new UICommand() { Label = "确定", Id = true });
-            messageDialog.Commands.Add(new UICommand() { Label = "取消", Id = false });
-            var result = await messageDialog.ShowAsync();
-            return (bool)result.Id;
+            var dialog = ThemeHelper.CreateContentDialog();
+            dialog.Title = title;
+            dialog.Content = new TextBlock
+            {
+                Text = content,
+                TextWrapping = Windows.UI.Xaml.TextWrapping.Wrap,
+                IsTextSelectionEnabled = true
+            };
+            dialog.PrimaryButtonText = "确定";
+            dialog.SecondaryButtonText = "取消";
+            dialog.DefaultButton = ContentDialogButton.Primary;
+            var result = await dialog.ShowAsync();
+            return result == ContentDialogResult.Primary;
         }
         public static bool SetClipboard(string content)
         {
@@ -113,7 +121,7 @@ namespace AllLive.UWP.Helper
                 var v = int.Parse(num);
                 if (ver.versionCode > v)
                 {
-                    var dialog = new ContentDialog();
+                    var dialog = ThemeHelper.CreateContentDialog();
                     dialog.Title = $"发现新版本 Ver {ver.version}";
                     TextBlock markdownText = new TextBlock()
                     {

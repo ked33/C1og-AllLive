@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Windows.ApplicationModel.Core;
 using Windows.UI;
 using Windows.UI.Xaml;
+using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Media;
 
 namespace AllLive.UWP.Helper
@@ -164,6 +165,11 @@ namespace AllLive.UWP.Helper
 
                 _lastAppliedTheme = theme;
             }
+            else if (root != null && IsCustomPaletteTheme(theme))
+            {
+                // 副窗口：把核心调色板写到本地 Resources，避免只吃系统 Dark 默认色
+                ApplyChromePaletteToDictionary(root.Resources, GetPalette(theme));
+            }
 
             try
             {
@@ -173,6 +179,101 @@ namespace AllLive.UWP.Helper
             {
                 // 标题栏在部分窗口上下文中可能不可用
             }
+        }
+
+        /// <summary>
+        /// 给任意 FrameworkElement（弹窗、Toast、Page）同步 RequestedTheme。
+        /// </summary>
+        public static void ApplyElementTheme(FrameworkElement element)
+        {
+            if (element == null)
+            {
+                return;
+            }
+            element.RequestedTheme = GetElementTheme(GetSavedTheme());
+        }
+
+        /// <summary>
+        /// 创建并套用当前主题的 ContentDialog（替代系统 MessageDialog，便于跟主题色）。
+        /// </summary>
+        public static ContentDialog CreateContentDialog()
+        {
+            var dialog = new ContentDialog();
+            ApplyElementTheme(dialog);
+            return dialog;
+        }
+
+        /// <summary>
+        /// 副窗口 / Popup 本地资源：写入页面背景、表面、文字、强调色等核心键。
+        /// </summary>
+        private static void ApplyChromePaletteToDictionary(ResourceDictionary dict, ThemePalette palette)
+        {
+            if (dict == null || palette == null)
+            {
+                return;
+            }
+
+            void SetBrush(string key, Color color)
+            {
+                var brush = new SolidColorBrush(color);
+                if (dict.ContainsKey(key))
+                {
+                    dict[key] = brush;
+                }
+                else
+                {
+                    dict.Add(key, brush);
+                }
+            }
+
+            void SetColor(string key, Color color)
+            {
+                if (dict.ContainsKey(key))
+                {
+                    dict[key] = color;
+                }
+                else
+                {
+                    dict.Add(key, color);
+                }
+            }
+
+            var noBorder = Colors.Transparent;
+            SetColor("SystemAccentColor", palette.Accent);
+            SetColor("TopPaneBackground", palette.Background);
+            SetBrush("ApplicationPageBackgroundThemeBrush", palette.Background);
+            SetBrush("LayerFillColorDefaultBrush", palette.Background);
+            SetBrush("LayerFillColorAltBrush", palette.SurfaceAlt);
+            SetBrush("SolidBackgroundFillColorBaseBrush", palette.Background);
+            SetBrush("SolidBackgroundFillColorSecondaryBrush", palette.Background);
+            SetBrush("CardBackgroundFillColorDefaultBrush", palette.Surface);
+            SetBrush("CardStrokeColorDefaultBrush", noBorder);
+            SetBrush("CardStrokeColorDefaultSolidBrush", noBorder);
+            SetBrush("DividerStrokeColorDefaultBrush", noBorder);
+            SetBrush("ControlStrokeColorDefaultBrush", noBorder);
+            SetBrush("TextFillColorPrimaryBrush", palette.Foreground);
+            SetBrush("TextFillColorSecondaryBrush", palette.ForegroundSecondary);
+            SetBrush("TextFillColorTertiaryBrush", palette.ForegroundTertiary);
+            SetBrush("SystemControlForegroundBaseHighBrush", palette.Foreground);
+            SetBrush("SystemControlForegroundBaseMediumBrush", palette.ForegroundSecondary);
+            SetBrush("SystemControlForegroundBaseMediumHighBrush", palette.Foreground);
+            SetBrush("SystemControlHighlightAccentBrush", palette.Accent);
+            SetBrush("SystemControlBackgroundAccentBrush", palette.Accent);
+            SetBrush("ButtonBackground", palette.Control);
+            SetBrush("ButtonForeground", palette.Foreground);
+            SetBrush("ButtonBorderBrush", noBorder);
+            SetBrush("TextControlBackground", palette.Control);
+            SetBrush("TextControlForeground", palette.Foreground);
+            SetBrush("TextControlBorderBrush", noBorder);
+            SetBrush("ContentDialogBackground", palette.Surface);
+            SetBrush("ContentDialogForeground", palette.Foreground);
+            SetBrush("ContentDialogBorderBrush", noBorder);
+            SetBrush("ContentDialogSmokeFill", Color.FromArgb(0x99, 0, 0, 0));
+            SetBrush("FlyoutPresenterBackground", palette.Surface);
+            SetBrush("MenuFlyoutPresenterBackground", palette.Surface);
+            SetBrush("PivotHeaderForegroundSelectedBrush", palette.Foreground);
+            SetBrush("PivotHeaderForegroundUnselectedBrush", palette.ForegroundSecondary);
+            SetBrush("DefaultTextForegroundThemeBrush", palette.Foreground);
         }
 
         /// <summary>
