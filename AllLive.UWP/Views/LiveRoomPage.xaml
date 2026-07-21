@@ -134,21 +134,21 @@
                                                         FontSize="14"
                                                         Foreground="Black"
                                                         Text="{x:Bind Path=UserName}" />
-                                                    <TextBlock FontSize="12" Foreground="Gray">
+                                                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
                                                         ￥<Run Text="{x:Bind Path=Price}" /></TextBlock>
                                                 </StackPanel>
                                                 <TextBlock
                                                     Grid.Column="2"
                                                     VerticalAlignment="Center"
                                                     FontSize="12"
-                                                    Foreground="Gray"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                     Text="{x:Bind Path=StartTimeStr}"
                                                     Visibility="{x:Bind Path=ShowCountdown, Mode=OneWay, Converter={StaticResource displayConvert}}" />
                                                 <TextBlock
                                                     Grid.Column="2"
                                                     VerticalAlignment="Center"
                                                     FontSize="12"
-                                                    Foreground="Gray"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                     Text="{x:Bind Path=CountdownTime, Mode=OneWay}"
                                                     Visibility="{x:Bind Path=ShowCountdown, Mode=OneWay}" />
                                             </Grid>
@@ -432,7 +432,8 @@
                     PointerEntered="Grid_PointerEntered"
                     PointerExited="Grid_PointerExited"
                     PointerMoved="Grid_PointerMoved"
-                    RequestedTheme="Dark">
+                    RequestedTheme="Dark"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}">
                     <Grid.ContextFlyout>
                         <Flyout>
                             <TextBlock
@@ -457,7 +458,7 @@
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
                         FontSize="24"
-                        Foreground="Gray"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Visibility="{x:Bind Path=liveRoomVM.Living, Mode=OneWay, Converter={StaticResource displayConvert}}">
                         暂未开播
                     </TextBlock>
@@ -473,7 +474,7 @@
                         <TextBlock
                             x:Name="PlayerLoadText"
                             Margin="0,8"
-                            Foreground="Gray"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             TextAlignment="Center">
                             加载中
                         </TextBlock>
@@ -494,7 +495,8 @@
                     </Border>
                     <Grid x:Name="control">
 
-                        <Grid x:Name="StandardControl">
+                        <Grid x:Name="StandardControl"
+                            Foreground="{ThemeResource TextFillColorPrimaryBrush}">
                             <Grid Height="48" VerticalAlignment="Bottom">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
@@ -664,7 +666,7 @@
                                         BorderThickness="0"
                                         DisplayMemberPath="Quality"
                                         FontSize="16"
-                                        Foreground="White"
+                                        Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                         ItemsSource="{x:Bind Path=liveRoomVM.Qualities, Mode=OneWay}"
                                         SelectedItem="{x:Bind Path=liveRoomVM.CurrentQuality, Mode=TwoWay}"
                                         ToolTipService.ToolTip="清晰度" />
@@ -678,7 +680,7 @@
                                         BorderThickness="0"
                                         DisplayMemberPath="Name"
                                         FontSize="16"
-                                        Foreground="White"
+                                        Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                         ItemsSource="{x:Bind Path=liveRoomVM.Lines, Mode=OneWay}"
                                         SelectedItem="{x:Bind Path=liveRoomVM.CurrentLine, Mode=TwoWay}"
                                         ToolTipService.ToolTip="线路" />
@@ -691,7 +693,7 @@
                                         Background="Transparent"
                                         BorderThickness="0"
                                         FontSize="16"
-                                        Foreground="White"
+                                        Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                         ItemsSource="{x:Bind Path=liveRoomVM.AvailableCodecs, Mode=OneWay}"
                                         SelectedItem="{x:Bind Path=liveRoomVM.SelectedCodec, Mode=TwoWay}"
                                         ToolTipService.ToolTip="编码" />
@@ -704,7 +706,7 @@
                                         Background="Transparent"
                                         BorderThickness="0"
                                         FontSize="16"
-                                        Foreground="White"
+                                        Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                         ToolTipService.ToolTip="解码器">
                                         <ComboBox.Items>
                                             <ComboBoxItem>自动</ComboBoxItem>
@@ -771,7 +773,8 @@
                         <Grid
                             x:Name="MiniControl"
                             VerticalAlignment="Bottom"
-                            Visibility="Collapsed">
+                            Visibility="Collapsed"
+                            Foreground="{ThemeResource TextFillColorPrimaryBrush}">
                             <Grid.Background>
                                 <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
                                     <GradientStop Color="#00000000" />
@@ -786,7 +789,7 @@
                                     Width="48"
                                     Height="48"
                                     Padding="8"
-                                    Foreground="White"
+                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                     Visibility="{Binding ElementName=PlayBtnPause, Path=Visibility, Mode=OneWay}">
                                     <PathIcon
                                         HorizontalAlignment="Center"
@@ -797,7 +800,7 @@
                                     Width="48"
                                     Height="48"
                                     Padding="8"
-                                    Foreground="White"
+                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                     Visibility="{Binding ElementName=PlayBtnPlay, Path=Visibility, Mode=OneWay}">
                                     <PathIcon
                                         HorizontalAlignment="Center"
@@ -822,7 +825,7 @@
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Bottom"
                                 Click="BottomBtnExitMiniWindows_Click"
-                                Foreground="White"
+                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                 ToolTipService.ToolTip="恢复窗口">
                                 <PathIcon
                                     HorizontalAlignment="Center"
@@ -830,7 +833,8 @@
                                     Data="{StaticResource ResourceKey=IconFullWindow}" />
                             </HyperlinkButton>
                         </Grid>
-                        <Grid x:Name="XBoxControl">
+                        <Grid x:Name="XBoxControl"
+                            Foreground="{ThemeResource TextFillColorPrimaryBrush}">
                             <Grid
                                 Padding="12"
                                 HorizontalAlignment="Stretch"
@@ -1088,7 +1092,7 @@
                                             FontSize="{Binding ElementName=numFontsize, Path=Value, Mode=OneWay}"
                                             IsTextSelectionEnabled="True"
                                             LineHeight="24"
-                                            TextWrapping="Wrap"><Run Foreground="Gray" Text="{Binding UserName}" /><Run Foreground="Gray" Text="：" /><Run Text="{Binding Message}" /></TextBlock>
+                                            TextWrapping="Wrap"><Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding UserName}" /><Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="：" /><Run Text="{Binding Message}" /></TextBlock>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                                 <ListView.ItemsPanel>
@@ -1144,21 +1148,21 @@
                                                             FontSize="14"
                                                             Foreground="Black"
                                                             Text="{x:Bind Path=UserName}" />
-                                                        <TextBlock FontSize="12" Foreground="Gray">
+                                                        <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
                                                             ￥<Run Text="{x:Bind Path=Price}" /></TextBlock>
                                                     </StackPanel>
                                                     <TextBlock
                                                         Grid.Column="2"
                                                         VerticalAlignment="Center"
                                                         FontSize="12"
-                                                        Foreground="Gray"
+                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                         Text="{x:Bind Path=StartTimeStr}"
                                                         Visibility="{x:Bind Path=ShowCountdown, Mode=OneWay, Converter={StaticResource displayConvert}}" />
                                                     <TextBlock
                                                         Grid.Column="2"
                                                         VerticalAlignment="Center"
                                                         FontSize="12"
-                                                        Foreground="Gray"
+                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                         Text="{x:Bind Path=CountdownTime, Mode=OneWay}"
                                                         Visibility="{x:Bind Path=ShowCountdown, Mode=OneWay}" />
                                                 </Grid>

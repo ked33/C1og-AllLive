@@ -1,6 +1,6 @@
 {
-	"version": "2.3.43",
-	"versionCode": 20343,
-	"message": "1. 设置：新增「图片降低亮度」开关（默认开启，约 70%），深色主题更护眼\r\n2. 封面、头像等图片跟随该设置即时生效",
+	"version": "2.3.42",
+	"versionCode": 20342,
+	"message": "1. 纯黑主题：直播间控件栏去掉写死纯白字\r\n2. 系统 ChromeWhite 前景改为主题主文字色",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }

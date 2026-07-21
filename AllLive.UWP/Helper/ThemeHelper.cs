@@ -268,11 +268,22 @@ namespace AllLive.UWP.Helper
             SetBrush("SystemControlForegroundBaseHighBrush", palette.Foreground);
             SetBrush("SystemControlForegroundBaseMediumBrush", palette.ForegroundSecondary);
             SetBrush("SystemControlForegroundBaseMediumHighBrush", palette.Foreground);
+            SetBrush("SystemControlForegroundChromeWhiteBrush", palette.Foreground);
             SetBrush("SystemControlHighlightAccentBrush", palette.Accent);
             SetBrush("SystemControlBackgroundAccentBrush", palette.Accent);
             SetBrush("ButtonBackground", palette.Control);
             SetBrush("ButtonForeground", palette.Foreground);
+            SetBrush("ButtonForegroundPointerOver", palette.Foreground);
+            SetBrush("ButtonForegroundPressed", palette.ForegroundSecondary);
             SetBrush("ButtonBorderBrush", noBorder);
+            SetBrush("ComboBoxForeground", palette.Foreground);
+            SetBrush("ComboBoxForegroundPointerOver", palette.Foreground);
+            SetBrush("ComboBoxForegroundFocused", palette.Foreground);
+            SetBrush("ComboBoxItemForeground", palette.Foreground);
+            SetBrush("ToggleSwitchHeaderForeground", palette.Foreground);
+            SetBrush("HyperlinkButtonForeground", palette.Foreground);
+            SetBrush("AppBarButtonForeground", palette.Foreground);
+            SetBrush("DefaultTextForegroundThemeBrush", palette.Foreground);
             SetBrush("TextControlBackground", palette.Control);
             SetBrush("TextControlForeground", palette.Foreground);
             SetBrush("TextControlBorderBrush", noBorder);
@@ -512,7 +523,8 @@ namespace AllLive.UWP.Helper
             SetBrush("SystemControlForegroundChromeDisabledLowBrush", palette.ForegroundTertiary);
             SetBrush("SystemControlForegroundChromeDisabledHighBrush", palette.ForegroundSecondary);
             SetBrush("SystemControlForegroundChromeBlackHighBrush", palette.Foreground);
-            SetBrush("SystemControlForegroundChromeWhiteBrush", palette.Background);
+            // 系统控件里大量用 ChromeWhite 当“亮色前景”，不能绑背景色，否则纯黑主题会变成纯白/错色
+            SetBrush("SystemControlForegroundChromeWhiteBrush", palette.Foreground);
             SetBrush("SystemControlForegroundTransparentBrush", Colors.Transparent);
             SetBrush("SystemControlForegroundAccentBrush", palette.Accent);
 
