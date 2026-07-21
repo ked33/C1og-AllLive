@@ -1,6 +1,6 @@
 {
-	"version": "2.3.37",
-	"versionCode": 20337,
+	"version": "2.3.38",
+	"versionCode": 20338,
 	"message": "1. 新增 One Dark Pro / Nord / Dracula / Catppuccin 主题\r\n2. 修复打开直播间主题跨线程崩溃\r\n3. 标题栏与侧栏背景跟随主题\r\n4. 去除卡片与控件边框",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }
