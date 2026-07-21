@@ -516,6 +516,7 @@ namespace AllLive.UWP.Views
                 str += $"Quality: {liveRoomVM.CurrentQuality?.Quality ?? ""}\r\n";
                 str += $"Video Codec: {interopMSS.CurrentVideoStream.CodecName}\r\nAudio Codec:{interopMSS.AudioStreams[0].CodecName}\r\n";
                 str += $"Resolution: {interopMSS.CurrentVideoStream.PixelWidth} x {interopMSS.CurrentVideoStream.PixelHeight}\r\n";
+                str += $"Video FPS: {FormatVideoFps(interopMSS.CurrentVideoStream)}\r\n";
                 str += $"Video Bitrate: {interopMSS.CurrentVideoStream.Bitrate / 1024} Kbps\r\n";
                 str += $"Audio Bitrate: {interopMSS.AudioStreams[0].Bitrate / 1024} Kbps\r\n";
                 str += $"Decoder Engine: {interopMSS.CurrentVideoStream.DecoderEngine.ToString()}";
@@ -528,6 +529,35 @@ namespace AllLive.UWP.Views
 
 
 
+        }
+
+        /// <summary>
+        /// 从 FFmpegInteropX 视频流读取帧率（流元数据，非实时测量）。
+        /// </summary>
+        private static string FormatVideoFps(FFmpegInteropX.VideoStreamInfo videoStream)
+        {
+            if (videoStream == null)
+            {
+                return "未知";
+            }
+            try
+            {
+                var fps = videoStream.FramesPerSecond;
+                if (double.IsNaN(fps) || double.IsInfinity(fps) || fps <= 0)
+                {
+                    return "未知";
+                }
+                // 常见 29.97 / 59.94 保留三位；整数帧率不带多余小数
+                if (Math.Abs(fps - Math.Round(fps)) < 0.001)
+                {
+                    return $"{Math.Round(fps):0} fps";
+                }
+                return $"{fps:0.###} fps";
+            }
+            catch
+            {
+                return "未知";
+            }
         }
 
         private void LogPlaybackMediaInfo(string source)
@@ -571,6 +601,7 @@ namespace AllLive.UWP.Views
                 {
                     AppendPlaybackValue(sb, "Video Codec", () => videoStream.CodecName);
                     AppendPlaybackValue(sb, "Resolution", () => $"{videoStream.PixelWidth} x {videoStream.PixelHeight}");
+                    AppendPlaybackValue(sb, "Video FPS", () => FormatVideoFps(videoStream));
                     AppendPlaybackValue(sb, "Video Bitrate", () => $"{videoStream.Bitrate / 1024} Kbps");
                     AppendPlaybackValue(sb, "Decoder Engine", () => videoStream.DecoderEngine.ToString());
                 }
