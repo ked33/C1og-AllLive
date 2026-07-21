@@ -1,6 +1,6 @@
 {
-	"version": "2.3.41",
-	"versionCode": 20341,
-	"message": "1. 新增纯黑主题（#000000 背景，柔和浅灰文字）\r\n2. 直播间播放器区域背景跟随主题",
+	"version": "2.3.42",
+	"versionCode": 20342,
+	"message": "1. 我的关注：开播状态检测完成后增量显示，无需等待全部检测结束\r\n2. 刷新时保留上一轮开播状态与标题，减少列表闪烁",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }

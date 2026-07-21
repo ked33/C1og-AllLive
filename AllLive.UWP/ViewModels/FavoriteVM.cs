@@ -8,8 +8,10 @@ using System.Threading.Tasks;
 using System.Threading;
 using System.Collections.ObjectModel;
 using System.Windows.Input;
+using Windows.ApplicationModel.Core;
 using Windows.Storage.Pickers;
 using Windows.Storage;
+using Windows.UI.Core;
 using Newtonsoft.Json;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
@@ -78,7 +80,7 @@ namespace AllLive.UWP.ViewModels
 
         public async void LoadData()
         {
-            await ReloadAsync(deferUiUpdate: false, loadRoomDetail: true);
+            await ReloadAsync(loadRoomDetail: true);
         }
 
         public void CancelRefresh()
@@ -88,14 +90,11 @@ namespace AllLive.UWP.ViewModels
             LoaddingLiveStatus = false;
         }
 
-        private async Task ReloadAsync(bool deferUiUpdate, bool loadRoomDetail)
+        private async Task ReloadAsync(bool loadRoomDetail)
         {
             var version = Interlocked.Increment(ref _refreshVersion);
-            Dictionary<string, FavoriteTitleSnapshot> previousTitleStates = null;
-            if (!loadRoomDetail)
-            {
-                previousTitleStates = CaptureFavoriteTitleSnapshots();
-            }
+            // 保留上一轮开播状态/标题，避免刷新时整表闪成「未开播」再统一蹦出。
+            var previousTitleStates = CaptureFavoriteTitleSnapshots();
             try
             {
                 Loading = true;
@@ -104,14 +103,12 @@ namespace AllLive.UWP.ViewModels
                 {
                     return;
                 }
+                RestorePreviousLiveInfo(list, previousTitleStates);
+                // 读库后立刻上屏；状态检测完成的项再增量更新 DisplayItems。
+                ApplySortAndFilter(list);
                 if (list.Count == 0)
                 {
-                    ApplySortAndFilter(list);
                     return;
-                }
-                if (!deferUiUpdate)
-                {
-                    ApplySortAndFilter(list);
                 }
                 LoaddingLiveStatus = true;
                 var failedCount = await UpdateLiveStatusAsync(list, version, loadRoomDetail);
@@ -119,11 +116,8 @@ namespace AllLive.UWP.ViewModels
                 {
                     return;
                 }
-                if (!loadRoomDetail)
-                {
-                    ApplyStatusRefreshTitles(list, previousTitleStates);
-                }
-                ApplySortAndFilter(list);
+                // 全部结束后再整表排序/过滤一次，修正增量阶段的顺序。
+                await RunOnUiThreadAsync(() => ApplySortAndFilter(list));
                 if (failedCount > 0)
                 {
                     Utils.ShowMessageToast(failedCount >= list.Count
@@ -169,9 +163,9 @@ namespace AllLive.UWP.ViewModels
                     StringComparer.OrdinalIgnoreCase);
         }
 
-        private static void ApplyStatusRefreshTitles(IList<FavoriteItem> items, IDictionary<string, FavoriteTitleSnapshot> previousTitleStates)
+        private static void RestorePreviousLiveInfo(IList<FavoriteItem> items, IDictionary<string, FavoriteTitleSnapshot> previousTitleStates)
         {
-            if (items == null)
+            if (items == null || previousTitleStates == null || previousTitleStates.Count == 0)
             {
                 return;
             }
@@ -182,22 +176,14 @@ namespace AllLive.UWP.ViewModels
                 {
                     continue;
                 }
-
-                if (!item.LiveStatus)
+                if (!previousTitleStates.TryGetValue(GetFavoriteItemKey(item), out var previous))
                 {
-                    item.LiveTitle = string.Empty;
                     continue;
                 }
-
-                var title = string.Empty;
-                if (previousTitleStates != null
-                    && previousTitleStates.TryGetValue(GetFavoriteItemKey(item), out var previous)
-                    && previous.LiveStatus)
-                {
-                    title = NormalizeLiveTitle(previous.LiveTitle);
-                }
-
-                item.LiveTitle = title;
+                item.LiveStatus = previous.LiveStatus;
+                item.LiveTitle = previous.LiveStatus
+                    ? NormalizeLiveTitle(previous.LiveTitle)
+                    : string.Empty;
             }
         }
 
@@ -335,12 +321,15 @@ namespace AllLive.UWP.ViewModels
                 {
                     return false;
                 }
-                item.LiveStatus = status;
+
                 if (!status)
                 {
-                    item.LiveTitle = string.Empty;
+                    await ApplyItemLiveInfoAsync(item, refreshVersion, liveStatus: false, liveTitle: string.Empty);
                     return false;
                 }
+
+                // 先按开播态增量上屏，标题可随后补全，避免等详情拖慢首屏。
+                await ApplyItemLiveInfoAsync(item, refreshVersion, liveStatus: true, liveTitle: null);
                 if (!loadRoomDetail)
                 {
                     return false;
@@ -355,19 +344,25 @@ namespace AllLive.UWP.ViewModels
                     }
                     if (detail != null)
                     {
-                        item.LiveStatus = detail.Status;
-                        item.LiveTitle = detail.Status ? NormalizeLiveTitle(detail.Title) : string.Empty;
+                        await ApplyItemLiveInfoAsync(
+                            item,
+                            refreshVersion,
+                            liveStatus: detail.Status,
+                            liveTitle: detail.Status ? NormalizeLiveTitle(detail.Title) : string.Empty);
                     }
                     else
                     {
-                        item.LiveTitle = string.Empty;
+                        await ApplyItemLiveInfoAsync(item, refreshVersion, liveStatus: true, liveTitle: string.Empty);
                     }
                 }
                 catch (Exception ex)
                 {
                     // 开播状态已获取成功，仅房间详情失败，标题留空，不计入失败提示。
                     LogHelper.Log($"获取直播间详情失败:{item.SiteName}-{item.RoomID}", LogType.ERROR, ex);
-                    item.LiveTitle = string.Empty;
+                    if (refreshVersion == _refreshVersion)
+                    {
+                        await ApplyItemLiveInfoAsync(item, refreshVersion, liveStatus: true, liveTitle: string.Empty);
+                    }
                 }
                 return false;
             }
@@ -375,6 +370,127 @@ namespace AllLive.UWP.ViewModels
             {
                 _liveStatusSemaphore.Release();
             }
+        }
+
+        // liveTitle == null 表示不改标题（仅更新开播状态）。
+        private async Task ApplyItemLiveInfoAsync(FavoriteItem item, int refreshVersion, bool liveStatus, string liveTitle)
+        {
+            if (item == null || refreshVersion != _refreshVersion)
+            {
+                return;
+            }
+            await RunOnUiThreadAsync(() =>
+            {
+                if (refreshVersion != _refreshVersion)
+                {
+                    return;
+                }
+                item.LiveStatus = liveStatus;
+                if (liveTitle != null)
+                {
+                    item.LiveTitle = liveTitle;
+                }
+                else if (!liveStatus)
+                {
+                    item.LiveTitle = string.Empty;
+                }
+                ProgressiveApplyItem(item);
+            });
+        }
+
+        // 单条检测完成后增量更新展示：隐藏未开播时即时露出/移除；显示全部时依赖属性通知，整表重排放在刷新结束。
+        private void ProgressiveApplyItem(FavoriteItem item)
+        {
+            if (item == null || DisplayItems == null)
+            {
+                return;
+            }
+
+            if (!HideOffline)
+            {
+                IsEmpty = DisplayItems.Count == 0;
+                return;
+            }
+
+            var index = IndexOfDisplayItem(item);
+            if (item.LiveStatus)
+            {
+                if (index < 0)
+                {
+                    InsertDisplayItemSorted(item);
+                }
+            }
+            else if (index >= 0)
+            {
+                DisplayItems.RemoveAt(index);
+            }
+            IsEmpty = DisplayItems.Count == 0;
+        }
+
+        private int IndexOfDisplayItem(FavoriteItem item)
+        {
+            if (item == null || DisplayItems == null)
+            {
+                return -1;
+            }
+            for (var i = 0; i < DisplayItems.Count; i++)
+            {
+                var current = DisplayItems[i];
+                if (ReferenceEquals(current, item)
+                    || string.Equals(GetFavoriteItemKey(current), GetFavoriteItemKey(item), StringComparison.OrdinalIgnoreCase))
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        private void InsertDisplayItemSorted(FavoriteItem item)
+        {
+            var insertAt = DisplayItems.Count;
+            for (var i = 0; i < DisplayItems.Count; i++)
+            {
+                if (CompareFavoriteDisplayOrder(item, DisplayItems[i]) < 0)
+                {
+                    insertAt = i;
+                    break;
+                }
+            }
+            DisplayItems.Insert(insertAt, item);
+        }
+
+        // <0 表示 a 应排在 b 之前（SortOrder 降序，LiveStatus 降序）。
+        private static int CompareFavoriteDisplayOrder(FavoriteItem a, FavoriteItem b)
+        {
+            var sortCmp = b.SortOrder.CompareTo(a.SortOrder);
+            if (sortCmp != 0)
+            {
+                return sortCmp;
+            }
+            return b.LiveStatus.CompareTo(a.LiveStatus);
+        }
+
+        private static async Task RunOnUiThreadAsync(Action action)
+        {
+            if (action == null)
+            {
+                return;
+            }
+            CoreDispatcher dispatcher = null;
+            try
+            {
+                dispatcher = CoreApplication.MainView?.Dispatcher;
+            }
+            catch
+            {
+                // MainView 在部分生命周期不可用时回退到当前线程执行。
+            }
+            if (dispatcher == null || dispatcher.HasThreadAccess)
+            {
+                action();
+                return;
+            }
+            await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => action());
         }
 
         private static string NormalizeLiveTitle(string title)
@@ -408,13 +524,13 @@ namespace AllLive.UWP.ViewModels
         public override void Refresh()
         {
             base.Refresh();
-            _ = ReloadAsync(deferUiUpdate: true, loadRoomDetail: true);
+            _ = ReloadAsync(loadRoomDetail: true);
         }
 
         public void RefreshLiveStatusOnly()
         {
             base.Refresh();
-            _ = ReloadAsync(deferUiUpdate: true, loadRoomDetail: false);
+            _ = ReloadAsync(loadRoomDetail: false);
         }
 
         public void RemoveItem(FavoriteItem item)
