@@ -143,7 +143,7 @@ namespace AllLive.UWP.Helper
                     await newView.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                     {
                         Frame frame = new Frame();
-                        frame.RequestedTheme = (ElementTheme)SettingHelper.GetValue<int>(SettingHelper.THEME, 0);
+                        ThemeHelper.Apply(frame);
                         frame.Navigate(typeof(LiveRoomPage), data);
                         Window.Current.Content = frame;
                         Window.Current.Activate();

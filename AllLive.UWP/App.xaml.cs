@@ -158,7 +158,6 @@ namespace AllLive.UWP
                 {
                     //TODO: 从之前挂起的应用程序加载状态
                 }
-                rootFrame.RequestedTheme = (ElementTheme)SettingHelper.GetValue<int>(SettingHelper.THEME, 0);
                 // 将框架放在当前窗口中
                 Window.Current.Content = rootFrame;
             }
@@ -176,7 +175,7 @@ namespace AllLive.UWP
                 Window.Current.Activate();
             }
 
-            SetTitleBar();
+            ThemeHelper.Apply(rootFrame);
         }
 
 
@@ -203,15 +202,8 @@ namespace AllLive.UWP
 
         private static Color TitltBarButtonColor(UISettings uISettings)
         {
-            var settingTheme = SettingHelper.GetValue<int>(SettingHelper.THEME, 0);
-            var uiSettings = new Windows.UI.ViewManagement.UISettings();
-            var color = uiSettings.GetColorValue(UIColorType.Foreground);
-            if (settingTheme != 0)
-            {
-                color = settingTheme == 1 ? Colors.Black : Colors.White;
-
-            }
-            return color;
+            var systemForeground = uISettings.GetColorValue(UIColorType.Foreground);
+            return ThemeHelper.GetTitleBarButtonForeground(systemForeground);
         }
 
 

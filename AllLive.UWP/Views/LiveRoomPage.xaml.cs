@@ -272,14 +272,8 @@ namespace AllLive.UWP.Views
      
         private void SetTitleBarColor()
         {
-            var settingTheme = SettingHelper.GetValue<int>(SettingHelper.THEME, 0);
             UISettings uiSettings = new UISettings();
-            var color = uiSettings.GetColorValue(UIColorType.Foreground);
-            if (settingTheme != 0)
-            {
-                color = settingTheme == 1 ? Colors.Black : Colors.White;
-
-            }
+            var color = ThemeHelper.GetTitleBarButtonForeground(uiSettings.GetColorValue(UIColorType.Foreground));
             ApplicationViewTitleBar titleBar = ApplicationView.GetForCurrentView().TitleBar;
 
             titleBar.ButtonBackgroundColor = Colors.Transparent;

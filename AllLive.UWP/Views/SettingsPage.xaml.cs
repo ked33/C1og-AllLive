@@ -107,26 +107,19 @@ namespace AllLive.UWP.Views
         private void LoadUI()
         {
             //主题
-            cbTheme.SelectedIndex = SettingHelper.GetValue<int>(SettingHelper.THEME, 0);
+            cbTheme.SelectedIndex = ThemeHelper.GetSavedTheme();
             cbTheme.Loaded += new RoutedEventHandler((sender, e) =>
             {
                 cbTheme.SelectionChanged += new SelectionChangedEventHandler((obj, args) =>
                 {
-                    SettingHelper.SetValue(SettingHelper.THEME, cbTheme.SelectedIndex);
-                    Frame rootFrame = Window.Current.Content as Frame;
-                    switch (cbTheme.SelectedIndex)
+                    var theme = ThemeHelper.NormalizeTheme(cbTheme.SelectedIndex);
+                    if (cbTheme.SelectedIndex != theme)
                     {
-                        case 1:
-                            rootFrame.RequestedTheme = ElementTheme.Light;
-                            break;
-                        case 2:
-                            rootFrame.RequestedTheme = ElementTheme.Dark;
-                            break;
-                        default:
-                            rootFrame.RequestedTheme = ElementTheme.Default;
-                            break;
+                        cbTheme.SelectedIndex = theme;
+                        return;
                     }
-                    App.SetTitleBar();
+                    SettingHelper.SetValue(SettingHelper.THEME, theme);
+                    ThemeHelper.Apply(theme, Window.Current?.Content as FrameworkElement);
                 });
             });
 
@@ -576,7 +569,7 @@ namespace AllLive.UWP.Views
             {
                 return;
             }
-            var theme = ClampInt(data.Theme ?? SettingHelper.GetValue<int>(SettingHelper.THEME, 0), 0, 2);
+            var theme = ThemeHelper.NormalizeTheme(data.Theme ?? SettingHelper.GetValue<int>(SettingHelper.THEME, 0));
             var xboxMode = ClampInt(data.XboxMode ?? SettingHelper.GetValue<int>(SettingHelper.XBOX_MODE, 0), 0, 1);
             var paneDisplayMode = ClampInt(data.PaneDisplayMode ?? SettingHelper.GetValue<int>(SettingHelper.PANE_DISPLAY_MODE, 0), 0, 1);
             var mouseBack = data.MouseBack ?? SettingHelper.GetValue<bool>(SettingHelper.MOUSE_BACK, true);
@@ -677,6 +670,7 @@ namespace AllLive.UWP.Views
             numCleanCount.Value = danmuCleanCount;
             swLogEnabled.IsOn = logEnabled;
 
+            ThemeHelper.Apply(theme, Window.Current?.Content as FrameworkElement);
             LogHelper.SetEnabled(logEnabled);
             ApplyDouyuSignServiceSetting(txtDouyuSignUrl.Text, swDouyuSignService.IsOn);
             ApplyDouyinSignServiceSetting(txtDouyinSignUrl.Text, swDouyinSignService.IsOn);

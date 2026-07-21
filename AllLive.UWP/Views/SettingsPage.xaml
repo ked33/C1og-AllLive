@@ -40,7 +40,7 @@
                         CornerRadius="4">
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock>显示模式</TextBlock>
-                            <TextBlock FontSize="12" Foreground="Gray">切换深色与浅色模式</TextBlock>
+                            <TextBlock FontSize="12" Foreground="Gray">切换系统浅深色或预设主题配色</TextBlock>
                         </StackPanel>
                         <ComboBox
                             x:Name="cbTheme"
@@ -50,6 +50,10 @@
                                 <ComboBoxItem>跟随系统</ComboBoxItem>
                                 <ComboBoxItem>浅色</ComboBoxItem>
                                 <ComboBoxItem>深色</ComboBoxItem>
+                                <ComboBoxItem>One Dark Pro</ComboBoxItem>
+                                <ComboBoxItem>Nord</ComboBoxItem>
+                                <ComboBoxItem>Dracula</ComboBoxItem>
+                                <ComboBoxItem>Catppuccin</ComboBoxItem>
                             </ComboBox.Items>
                         </ComboBox>
                     </Grid>
