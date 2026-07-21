@@ -54,6 +54,7 @@
                                 <ComboBoxItem>Nord</ComboBoxItem>
                                 <ComboBoxItem>Dracula</ComboBoxItem>
                                 <ComboBoxItem>Catppuccin</ComboBoxItem>
+                                <ComboBoxItem>纯黑</ComboBoxItem>
                             </ComboBox.Items>
                         </ComboBox>
                     </Grid>

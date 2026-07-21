@@ -10,7 +10,7 @@ namespace AllLive.UWP.Helper
 {
     /// <summary>
     /// 应用显示模式 / 自定义主题配色。
-    /// THEME: 0 跟随系统, 1 浅色, 2 深色, 3 One Dark Pro, 4 Nord, 5 Dracula, 6 Catppuccin Mocha
+    /// THEME: 0 跟随系统, 1 浅色, 2 深色, 3 One Dark Pro, 4 Nord, 5 Dracula, 6 Catppuccin Mocha, 7 纯黑
     /// </summary>
     public static class ThemeHelper
     {
@@ -21,7 +21,8 @@ namespace AllLive.UWP.Helper
         public const int ThemeNord = 4;
         public const int ThemeDracula = 5;
         public const int ThemeCatppuccinMocha = 6;
-        public const int ThemeMax = ThemeCatppuccinMocha;
+        public const int ThemeTrueBlack = 7;
+        public const int ThemeMax = ThemeTrueBlack;
 
         private static readonly HashSet<string> AppliedKeys = new HashSet<string>(StringComparer.Ordinal);
         // 覆盖前的原值：null 表示原先不存在，清除时应 Remove
@@ -56,6 +57,7 @@ namespace AllLive.UWP.Helper
                 case ThemeNord:
                 case ThemeDracula:
                 case ThemeCatppuccinMocha:
+                case ThemeTrueBlack:
                     return ElementTheme.Dark;
                 default:
                     return ElementTheme.Default;
@@ -63,7 +65,7 @@ namespace AllLive.UWP.Helper
         }
 
         /// <summary>
-        /// 标题栏按钮前景：浅色主题用黑，深色/自定义主题用白，跟随系统用系统前景色。
+        /// 标题栏按钮前景：浅色主题用黑，纯黑主题用柔和浅灰，其他深色/自定义用白，跟随系统用系统前景色。
         /// </summary>
         public static Color GetTitleBarButtonForeground(Color systemForeground)
         {
@@ -72,7 +74,16 @@ namespace AllLive.UWP.Helper
             {
                 return systemForeground;
             }
-            return theme == ThemeLight ? Colors.Black : Colors.White;
+            if (theme == ThemeLight)
+            {
+                return Colors.Black;
+            }
+            // 纯黑主题避免标题栏纯白高对比
+            if (theme == ThemeTrueBlack)
+            {
+                return Hex("C2C2C2");
+            }
+            return Colors.White;
         }
 
         /// <summary>
@@ -331,6 +342,8 @@ namespace AllLive.UWP.Helper
                     return CreateDracula();
                 case ThemeCatppuccinMocha:
                     return CreateCatppuccinMocha();
+                case ThemeTrueBlack:
+                    return CreateTrueBlack();
                 default:
                     return CreateOneDarkPro();
             }
@@ -922,6 +935,30 @@ namespace AllLive.UWP.Helper
                 AccentLight = Hex("B4BEFE"),
                 AccentDark = Hex("74C7EC"),
                 OnAccent = Hex("1E1E2E"),
+            };
+        }
+
+        private static ThemePalette CreateTrueBlack()
+        {
+            // 纯黑 OLED 风格：背景 #000000；正文用柔和浅灰（非纯白），次级再降一档
+            // 主文字 #C2C2C2 在纯黑上约 9.5:1，可读且不刺眼
+            return new ThemePalette
+            {
+                Background = Hex("000000"),
+                Surface = Hex("000000"),
+                SurfaceAlt = Hex("141414"),
+                Control = Hex("1A1A1A"),
+                Hover = Hex("242424"),
+                Pressed = Hex("2E2E2E"),
+                Border = Hex("2A2A2A"),
+                BorderStrong = Hex("3A3A3A"),
+                Foreground = Hex("C2C2C2"),
+                ForegroundSecondary = Hex("9A9A9A"),
+                ForegroundTertiary = Hex("6E6E6E"),
+                Accent = Hex("8A9BB0"),
+                AccentLight = Hex("A8B6C8"),
+                AccentDark = Hex("6E7F94"),
+                OnAccent = Hex("000000"),
             };
         }
 

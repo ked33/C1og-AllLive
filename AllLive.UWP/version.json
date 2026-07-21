@@ -1,6 +1,6 @@
 {
-	"version": "2.3.40",
-	"versionCode": 20340,
-	"message": "1. 直播间播放器区域背景跟随主题\r\n2. 主题适配 Toast / 对话框 / 新窗口",
+	"version": "2.3.41",
+	"versionCode": 20341,
+	"message": "1. 新增纯黑主题（#000000 背景，柔和浅灰文字）\r\n2. 直播间播放器区域背景跟随主题",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }

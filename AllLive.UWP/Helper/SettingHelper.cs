@@ -27,7 +27,7 @@ namespace AllLive.UWP.Helper
             storageHelper.Save<T>(key, value);
         }
         /// <summary>
-        /// 主题: 0 跟随系统, 1 浅色, 2 深色, 3 One Dark Pro, 4 Nord, 5 Dracula, 6 Catppuccin Mocha
+        /// 主题: 0 跟随系统, 1 浅色, 2 深色, 3 One Dark Pro, 4 Nord, 5 Dracula, 6 Catppuccin Mocha, 7 纯黑
         /// </summary>
         public const string THEME = "theme";
         /// <summary>
