@@ -14,18 +14,23 @@
     xmlns:ui="using:Microsoft.Toolkit.Uwp.UI"
     xmlns:winui="using:Microsoft.UI.Xaml.Controls"
     winui:BackdropMaterial.ApplyToRootOrPageBackground="False"
-    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+    Background="Transparent"
     mc:Ignorable="d">
     <Page.Resources>
         <convert:DanmakuStyleConvert x:Key="styleConvert" />
     </Page.Resources>
     <Grid
         x:Name="PageRoot"
-        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        Background="Transparent">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition />
         </Grid.RowDefinitions>
+        <!--  主题底色只作为最底层兄弟元素，避免不透明祖先层遮挡 MediaPlayerElement。  -->
+        <Border
+            Grid.RowSpan="2"
+            Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+            IsHitTestVisible="False" />
         <Grid
             x:Name="TitleBarGrid"
             Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
@@ -423,7 +428,7 @@
                 </SplitView.Pane>
                 <Grid
                     ui:UIElementExtensions.ClipToBounds="True"
-                    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+                    Background="Transparent"
                     DoubleTapped="Grid_DoubleTapped"
                     ManipulationCompleted="Grid_ManipulationCompleted"
                     ManipulationDelta="Grid_ManipulationDelta"

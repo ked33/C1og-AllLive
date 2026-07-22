@@ -1,6 +1,6 @@
 {
-	"version": "2.3.47",
-	"versionCode": 20347,
-	"message": "1. 直播信息右键菜单新增 Video FPS 帧率显示",
+	"version": "2.3.48",
+	"versionCode": 20348,
+	"message": "1. 修复纯黑主题遮挡直播视频画面",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }
