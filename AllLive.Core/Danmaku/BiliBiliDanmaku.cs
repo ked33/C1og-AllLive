@@ -443,25 +443,9 @@ namespace AllLive.Core.Danmaku
         /// <returns></returns>
         private byte[] DecompressDataWithBrotli(byte[] data)
         {
-
-            //using (var decompressedStream = new BrotliStream(new MemoryStream(data), CompressionMode.Decompress))
-            //{
-            //    using (var outBuffer = new MemoryStream())
-            //    {
-            //        var block = new byte[1024];
-            //        while (true)
-            //        {
-            //            var bytesRead = decompressedStream.Read(block, 0, block.Length);
-            //            if (bytesRead <= 0)
-            //                break;
-            //            outBuffer.Write(block, 0, bytesRead);
-            //        }
-            //        return outBuffer.ToArray();
-            //    }
-            //}
-            throw new NotImplementedException();
-
-
+            // 进房包声明 protover=2（zlib），服务端不会下发 brotli(protover=3)，此分支为防御路径。
+            // netstandard2.0 无 BrotliStream；若未来切到 protover=3 需引入 Brotli 解压依赖。
+            throw new NotSupportedException("收到 brotli(protover=3) 压缩包，当前客户端仅声明支持 protover=2");
         }
         private async Task<(string buvid3, string buvid4)> GetBuvid()
         {

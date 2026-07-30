@@ -30,7 +30,6 @@
             <convert:NumberToStringConvert x:Key="numberToStringConvert" />
             <convert:AvatarDecodeConvert x:Key="avatarDecodeConvert" />
             <convert:DisplayConvert x:Key="displayConvert" />
-            <convert:ImageSourceConvert x:Key="imageConvert" />
             <convert:DoublePrecisionConvert x:Key="doublePrecisionConvert" />
             <convert:ColorConvert x:Key="colorConvert" />
             <convert:CountTextConvert x:Key="countTextConvert" />
