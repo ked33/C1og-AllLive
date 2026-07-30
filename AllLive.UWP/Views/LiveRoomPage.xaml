@@ -132,7 +132,7 @@
                                                     Height="32"
                                                     Background="Gray"
                                                     Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
-                                                    ProfilePicture="{x:Bind Path=Face}" />
+                                                    ProfilePicture="{x:Bind Path=Face, Converter={StaticResource avatarDecodeConvert}, ConverterParameter=64}" />
 
                                                 <StackPanel Grid.Column="1" Margin="12,0,0,0">
                                                     <TextBlock
@@ -474,7 +474,7 @@
                         <ProgressRing
                             Width="56"
                             Height="56"
-                            IsActive="True" />
+                            IsActive="{x:Bind IsVisibleToBool(PlayerLoading.Visibility), Mode=OneWay}" />
                         <TextBlock
                             x:Name="PlayerLoadText"
                             Margin="0,8"
@@ -1027,7 +1027,7 @@
                         Height="48"
                         Background="Blue"
                         Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
-                        ProfilePicture="{x:Bind Path=liveRoomVM.Photo, Mode=OneWay}" />
+                        ProfilePicture="{x:Bind Path=liveRoomVM.Photo, Mode=OneWay, Converter={StaticResource avatarDecodeConvert}, ConverterParameter=96}" />
                     <StackPanel
                         Grid.Column="1"
                         Margin="8,0,0,0"
@@ -1143,7 +1143,7 @@
                                                         Height="32"
                                                         Background="Gray"
                                                         Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
-                                                        ProfilePicture="{x:Bind Path=Face}" />
+                                                        ProfilePicture="{x:Bind Path=Face, Converter={StaticResource avatarDecodeConvert}, ConverterParameter=64}" />
 
                                                     <StackPanel Grid.Column="1" Margin="12,0,0,0">
                                                         <TextBlock
@@ -1294,7 +1294,7 @@
                 Height="48"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
-                IsActive="True"
+                IsActive="{x:Bind Path=liveRoomVM.Loading, Mode=OneWay}"
                 Visibility="{x:Bind Path=liveRoomVM.Loading, Mode=OneWay}" />
         </Grid>
     </Grid>

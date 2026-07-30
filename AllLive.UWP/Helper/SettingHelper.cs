@@ -159,6 +159,11 @@ namespace AllLive.UWP.Helper
             /// 弹幕边框样式 int
             /// </summary>
             public const string BORDER_STYLE = "LiveDanmuStyle";
+            /// <summary>
+            /// 弹幕边框样式默认值。0=重叠（双 TextBlock 模拟描边）。
+            /// 不用 2=描边：NSDanmaku 的描边样式每条弹幕走一次 Win2D 绘制+PNG 编码解码，开销极大。
+            /// </summary>
+            public const int BORDER_STYLE_DEFAULT = 0;
 
             /// <summary>
             /// 弹幕透明度 double，0-1

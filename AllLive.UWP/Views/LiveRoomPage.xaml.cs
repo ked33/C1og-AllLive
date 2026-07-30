@@ -58,6 +58,9 @@ namespace AllLive.UWP.Views
         readonly MediaPlayer mediaPlayer;
 
         DisplayRequest dispRequest;
+        bool isDisplayRequestActive;
+        bool isSlideManipulating;
+        double? pendingRightDetailWidth;
         PageArgs pageArgs;
         //当前处于小窗
         private bool isMini = false;
@@ -434,7 +437,7 @@ namespace AllLive.UWP.Views
             await this.Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () =>
             {
                 //保持屏幕常亮
-                dispRequest.RequestActive();
+                EnsureDisplayRequestActive();
                 PlayerLoading.Visibility = Visibility.Collapsed;
                 lastMediaOpenedUtc = DateTimeOffset.UtcNow;
                 if (IsDebugDiagnosticsEnabled())
@@ -489,7 +492,7 @@ namespace AllLive.UWP.Views
                         PlayerLoading.Visibility = Visibility.Collapsed;
                         PlayBtnPlay.Visibility = Visibility.Collapsed;
                         PlayBtnPause.Visibility = Visibility.Visible;
-                        dispRequest.RequestActive();
+                        EnsureDisplayRequestActive();
                         liveRoomVM.Living = true;
                         SetMediaInfo();
                         ResetStreamReconnectState();
@@ -500,6 +503,7 @@ namespace AllLive.UWP.Views
                         PlayerLoading.Visibility = Visibility.Collapsed;
                         PlayBtnPlay.Visibility = Visibility.Visible;
                         PlayBtnPause.Visibility = Visibility.Collapsed;
+                        ReleaseDisplayRequestHold();
                         break;
                     default:
                         break;
@@ -3593,20 +3597,50 @@ namespace AllLive.UWP.Views
             PlayerLoading.Visibility = Visibility.Collapsed;
         }
 
+        // 供 XAML x:Bind 函数绑定：ProgressRing.IsActive 跟随容器可见性，
+        // 避免隐藏状态下动画时间线仍被驱动
+        public bool IsVisibleToBool(Visibility visibility)
+        {
+            return visibility == Visibility.Visible;
+        }
+
+        private void EnsureDisplayRequestActive()
+        {
+            // DisplayRequest 是计数式 API，用布尔标志保证 Active/Release 严格成对
+            if (dispRequest == null || isDisplayRequestActive)
+            {
+                return;
+            }
+            try
+            {
+                dispRequest.RequestActive();
+                isDisplayRequestActive = true;
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        private void ReleaseDisplayRequestHold()
+        {
+            if (dispRequest == null || !isDisplayRequestActive)
+            {
+                return;
+            }
+            try
+            {
+                dispRequest.RequestRelease();
+            }
+            catch (Exception)
+            {
+            }
+            isDisplayRequestActive = false;
+        }
+
         private void ReleaseDisplayRequest()
         {
-            if (dispRequest != null)
-            {
-                try
-                {
-                    dispRequest.RequestRelease();
-                }
-                catch (Exception)
-                {
-                }
-
-                dispRequest = null;
-            }
+            ReleaseDisplayRequestHold();
+            dispRequest = null;
         }
         private void ControlTimer_Tick(object sender, object e)
         {
@@ -3657,6 +3691,11 @@ namespace AllLive.UWP.Views
             }
             liveRoomCleaned = true;
             isPageClosing = true;
+            if (pendingRightDetailWidth.HasValue)
+            {
+                SettingHelper.SetValue<double>(SettingHelper.RIGHT_DETAIL_WIDTH, pendingRightDetailWidth.Value);
+                pendingRightDetailWidth = null;
+            }
             volumeFlyoutHideRequest++;
             try { VolumeFlyout.Hide(); } catch { }
             LogLiveRoomMemory("直播间页面开始清理");
@@ -4008,7 +4047,7 @@ namespace AllLive.UWP.Views
             DanmuSettingBold.Toggled -= DanmuSettingBold_Toggled;
             DanmuSettingBold.Toggled += DanmuSettingBold_Toggled;
             //弹幕样式
-            var danmuStyle = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, 2);
+            var danmuStyle = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, SettingHelper.LiveDanmaku.BORDER_STYLE_DEFAULT);
             if (danmuStyle > 2)
             {
                 danmuStyle = 2;
@@ -4194,6 +4233,11 @@ namespace AllLive.UWP.Views
         {
             var visibility = PlaySWDanmu.IsOn ? Visibility.Visible : Visibility.Collapsed;
             DanmuControl.Visibility = visibility;
+            if (!PlaySWDanmu.IsOn)
+            {
+                // 关闭时清掉在途弹幕，否则已入场动画会继续跑最长 25 秒
+                try { DanmuControl.ClearAll(); } catch { }
+            }
             SettingHelper.SetValue(SettingHelper.LiveDanmaku.SHOW, PlaySWDanmu.IsOn);
         }
 
@@ -4221,7 +4265,11 @@ namespace AllLive.UWP.Views
                 var clampedVolume = Math.Max(0, Math.Min(1, volume));
                 mediaPlayer.Volume = clampedVolume;
                 SliderVolume.Value = clampedVolume;
-                SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, clampedVolume);
+                // 手势滑动期间不落盘，结束时在 ManipulationCompleted 统一写一次
+                if (!isSlideManipulating)
+                {
+                    SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, clampedVolume);
+                }
             }
             finally
             {
@@ -4386,7 +4434,8 @@ namespace AllLive.UWP.Views
             {
                 return;
             }
-            SettingHelper.SetValue<double>(SettingHelper.RIGHT_DETAIL_WIDTH, e.NewSize.Width + 16);
+            // 拖动 GridSplitter 时每帧触发，改为记下宽度、页面清理时写一次
+            pendingRightDetailWidth = e.NewSize.Width + 16;
         }
         private void LoadXboxSetting()
         {
@@ -4432,7 +4481,7 @@ namespace AllLive.UWP.Views
             xboxSettingsDMBold.Toggled += XboxSettingsDMBold_Toggled;
 
             //弹幕样式
-            var danmuStyle = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, 2);
+            var danmuStyle = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, SettingHelper.LiveDanmaku.BORDER_STYLE_DEFAULT);
             if (danmuStyle > 2)
             {
                 danmuStyle = 2;
@@ -4657,6 +4706,7 @@ namespace AllLive.UWP.Views
             e.Handled = true;
             TxtToolTip.Text = "";
             ToolTip.Visibility = Visibility.Visible;
+            isSlideManipulating = true;
 
             if (e.Position.X < this.ActualWidth / 2)
                 ManipulatingBrightness = true;
@@ -4673,7 +4723,11 @@ namespace AllLive.UWP.Views
             {
                 _brightness = value;
                 BrightnessShield.Opacity = value;
-                SettingHelper.SetValue<double>(SettingHelper.PLAYER_BRIGHTNESS, _brightness);
+                // 手势滑动期间不落盘，结束时在 ManipulationCompleted 统一写一次
+                if (!isSlideManipulating)
+                {
+                    SettingHelper.SetValue<double>(SettingHelper.PLAYER_BRIGHTNESS, _brightness);
+                }
             }
         }
 
@@ -4681,6 +4735,18 @@ namespace AllLive.UWP.Views
         {
             e.Handled = true;
             ToolTip.Visibility = Visibility.Collapsed;
+            if (isSlideManipulating)
+            {
+                isSlideManipulating = false;
+                if (ManipulatingBrightness)
+                {
+                    SettingHelper.SetValue<double>(SettingHelper.PLAYER_BRIGHTNESS, _brightness);
+                }
+                else if (mediaPlayer != null)
+                {
+                    SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, mediaPlayer.Volume);
+                }
+            }
         }
         #endregion
         #region 窗口操作

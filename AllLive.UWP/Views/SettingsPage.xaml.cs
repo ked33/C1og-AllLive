@@ -551,7 +551,7 @@ namespace AllLive.UWP.Views
                 LiveDanmuSpeed = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.SPEED, 10),
                 LiveDanmuBold = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.BOLD, false),
                 LiveDanmuColourful = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.COLOURFUL, true),
-                LiveDanmuBorderStyle = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, 2),
+                LiveDanmuBorderStyle = SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, SettingHelper.LiveDanmaku.BORDER_STYLE_DEFAULT),
                 LiveDanmuOpacity = SettingHelper.GetValue<double>(SettingHelper.LiveDanmaku.OPACITY, 1.0),
                 ShieldWords = GetShieldWordsForBackup(),
                 LogEnabled = SettingHelper.GetValue<bool>(SettingHelper.LOG_ENABLED, false),
@@ -616,7 +616,7 @@ namespace AllLive.UWP.Views
             var liveDanmuSpeed = Math.Max(1, data.LiveDanmuSpeed ?? SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.SPEED, 10));
             var liveDanmuBold = data.LiveDanmuBold ?? SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.BOLD, false);
             var liveDanmuColourful = data.LiveDanmuColourful ?? SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.COLOURFUL, true);
-            var liveDanmuBorderStyle = ClampInt(data.LiveDanmuBorderStyle ?? SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, 2), 0, 2);
+            var liveDanmuBorderStyle = ClampInt(data.LiveDanmuBorderStyle ?? SettingHelper.GetValue<int>(SettingHelper.LiveDanmaku.BORDER_STYLE, SettingHelper.LiveDanmaku.BORDER_STYLE_DEFAULT), 0, 2);
             var liveDanmuOpacity = ClampDouble(data.LiveDanmuOpacity ?? SettingHelper.GetValue<double>(SettingHelper.LiveDanmaku.OPACITY, 1.0), 0, 1);
             var logEnabled = data.LogEnabled ?? SettingHelper.GetValue<bool>(SettingHelper.LOG_ENABLED, false);
             var ignoreBiliLoginTip = data.IgnoreBiliLoginTip ?? SettingHelper.GetValue<bool>(SettingHelper.IGNORE_BILI_LOGIN_TIP, false);
