@@ -625,6 +625,9 @@ namespace AllLive.UWP.ViewModels
                             case "抖音直播":
                                 siteId = "douyin";
                                 break;
+                            case "Twitch直播":
+                                siteId = "twitch";
+                                break;
                         }
 
                         items.Add(new FavoriteJsonItem()
@@ -726,6 +729,8 @@ namespace AllLive.UWP.ViewModels
                         return "虎牙直播";
                     case "douyin":
                         return "抖音直播";
+                    case "twitch":
+                        return "Twitch直播";
                     default:
                         return "未知";
                 }

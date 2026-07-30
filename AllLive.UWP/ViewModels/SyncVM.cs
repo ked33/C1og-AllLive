@@ -562,6 +562,8 @@ namespace AllLive.UWP.ViewModels
                     return "huya";
                 case "抖音直播":
                     return "douyin";
+                case "Twitch直播":
+                    return "twitch";
                 default:
                     return "";
             }
@@ -676,6 +678,9 @@ namespace AllLive.UWP.ViewModels
                         break;
                     case "抖音直播":
                         siteId = "douyin";
+                        break;
+                    case "Twitch直播":
+                        siteId = "twitch";
                         break;
                 }
 
@@ -876,6 +881,8 @@ namespace AllLive.UWP.ViewModels
                         return "虎牙直播";
                     case "douyin":
                         return "抖音直播";
+                    case "twitch":
+                        return "Twitch直播";
                     default:
                         return "未知";
                 }

@@ -436,6 +436,8 @@ namespace AllLive.UWP.Views
                     return "huya";
                 case "抖音直播":
                     return "douyin";
+                case "Twitch直播":
+                    return "twitch";
                 default:
                     return "";
             }

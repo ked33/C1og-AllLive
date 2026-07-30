@@ -704,7 +704,10 @@ namespace AllLive.UWP.ViewModels
                 SiteName = Site.Name,
                 UserName = Name
             });
-            IsFavorite = true;
+            // AddFavorite 兼容重复记录并且不返回新 ID；立即回查，确保刚关注后
+            // 无需刷新页面即可正常取消关注。
+            FavoriteID = DatabaseHelper.CheckFavorite(RoomID, Site.Name);
+            IsFavorite = FavoriteID != null;
             MessageCenter.UpdateFavorite();
         }
         private void RemoveFavorite()
@@ -1029,6 +1032,13 @@ namespace AllLive.UWP.ViewModels
             if (string.Equals(siteName, "抖音直播", StringComparison.OrdinalIgnoreCase)
                 && url.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
             {
+                return "AVC";
+            }
+            if (string.Equals(siteName, "Twitch直播", StringComparison.OrdinalIgnoreCase)
+                && url.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                // Twitch 请求只声明 supported_codecs=h264，Usher 返回的媒体
+                // 播放列表因此可以安全地交给现有 AVC 线路筛选逻辑。
                 return "AVC";
             }
 

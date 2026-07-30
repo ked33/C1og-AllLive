@@ -60,6 +60,8 @@ namespace AllLive.UWP.Models
                         return "斗鱼";
                     case "抖音直播":
                         return "抖音";
+                    case "Twitch直播":
+                        return "Twitch";
                     default:
                         return SiteName;
                 }

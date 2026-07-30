@@ -1,6 +1,6 @@
 {
-	"version": "2.3.48",
-	"versionCode": 20348,
-	"message": "1. 修复纯黑主题遮挡直播视频画面",
+	"version": "2.3.49",
+	"versionCode": 20349,
+	"message": "1. 支持通过 Twitch 频道 URL 加载直播\r\n2. 支持 Twitch 在线人数与 IRC 聊天弹幕",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }

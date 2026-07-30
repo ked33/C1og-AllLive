@@ -18,6 +18,8 @@ namespace AllLive.UWP.Helper
         Douyu=1,
         Huya=2,
         Douyin=3,
+        // 枚举值与 MainVM.Sites 列表下标绑定，只能追加新平台。
+        Twitch=4,
         Unknown=99,
     }
     public class SiteParser
@@ -116,6 +118,11 @@ namespace AllLive.UWP.Helper
                 return (LiveSite.Bilibili, roomId);
             }
 
+            if (IsTwitchHost(host))
+            {
+                return (LiveSite.Twitch, GetTwitchChannel(uri));
+            }
+
             return (LiveSite.Unknown, "");
         }
 
@@ -161,7 +168,107 @@ namespace AllLive.UWP.Helper
                 site = LiveSite.Douyin;
             }
 
+            if (TryGetTwitchChannelFromText(input, out var twitchChannel))
+            {
+                roomId = twitchChannel;
+                site = LiveSite.Twitch;
+            }
+
             return (site, roomId);
+        }
+
+        private static bool IsTwitchHost(string host)
+        {
+            return string.Equals(host, "twitch.tv", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(host, "www.twitch.tv", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetTwitchChannel(Uri uri)
+        {
+            if (uri == null || !IsTwitchHost(uri.Host))
+            {
+                return string.Empty;
+            }
+
+            var segments = uri.AbsolutePath
+                .Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => Uri.UnescapeDataString(x ?? string.Empty).Trim())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToList();
+            if (segments.Count != 1)
+            {
+                return string.Empty;
+            }
+
+            var channel = segments[0];
+            if (IsTwitchReservedPath(channel)
+                || !Regex.IsMatch(channel, @"^[0-9A-Za-z_]+$"))
+            {
+                return string.Empty;
+            }
+            return channel.ToLowerInvariant();
+        }
+
+        private static bool TryGetTwitchChannelFromText(string input, out string channel)
+        {
+            channel = string.Empty;
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                return false;
+            }
+
+            var match = Regex.Match(
+                input,
+                @"(?:^|[\s""'(<\[\{，。])(?:https?://)?(?:www\.)?twitch\.tv/([0-9A-Za-z_]+)(?:[/?\s]|$)",
+                RegexOptions.IgnoreCase);
+            if (!match.Success)
+            {
+                return false;
+            }
+
+            var candidate = match.Groups[1].Value;
+            if (IsTwitchReservedPath(candidate))
+            {
+                return false;
+            }
+            channel = candidate.ToLowerInvariant();
+            return true;
+        }
+
+        private static bool IsTwitchReservedPath(string value)
+        {
+            switch (value?.ToLowerInvariant())
+            {
+                case "about":
+                case "categories":
+                case "clips":
+                case "communities":
+                case "directory":
+                case "downloads":
+                case "events":
+                case "following":
+                case "friends":
+                case "inventory":
+                case "jobs":
+                case "login":
+                case "moderator":
+                case "payments":
+                case "p":
+                case "prime":
+                case "products":
+                case "search":
+                case "settings":
+                case "signup":
+                case "subscriptions":
+                case "turbo":
+                case "u":
+                case "videos":
+                case "wallet":
+                case "whispers":
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         private static string NormalizeInput(string input)

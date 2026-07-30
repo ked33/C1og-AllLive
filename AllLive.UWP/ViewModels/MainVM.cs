@@ -40,6 +40,15 @@ namespace AllLive.UWP.ViewModels
                 Logo="ms-appx:///Assets/Logo/douyin.png",
                 LiveSite=new AllLive.Core.Douyin(),
             },
+            new Site()
+            {
+                SiteType=LiveSite.Twitch,
+                Name="Twitch直播",
+                // 当前仓库没有 Twitch 专用图标，先使用通用占位图，避免引入
+                // 未核实授权的第三方 Logo 资源。
+                Logo="ms-appx:///Assets/Placeholder/Placeholder1x1.png",
+                LiveSite=new AllLive.Core.Twitch(),
+            },
         };
 
     }
