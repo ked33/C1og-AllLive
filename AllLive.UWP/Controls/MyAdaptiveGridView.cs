@@ -1,11 +1,5 @@
-﻿using Microsoft.Toolkit.Uwp.UI.Controls;
+using Microsoft.Toolkit.Uwp.UI.Controls;
 using System;
-using System.Collections.Generic;
-using System.Collections.Specialized;
-using System.Diagnostics;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Input;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
@@ -16,6 +10,7 @@ namespace AllLive.UWP.Controls
     {
         public MyAdaptiveGridView()
         {
+            Loaded += MyAdaptiveGridView_Loaded;
             Unloaded += MyAdaptiveGridView_Unloaded;
         }
 
@@ -37,11 +32,6 @@ namespace AllLive.UWP.Controls
         public static readonly DependencyProperty LoadMoreBottomOffsetProperty =
             DependencyProperty.Register("LoadMoreBottomOffset", typeof(double), typeof(MyAdaptiveGridView), new PropertyMetadata(100));
 
-
-
-
-
-
         public bool DataLoading
         {
             get { return (bool)GetValue(DataLoadingProperty); }
@@ -52,27 +42,42 @@ namespace AllLive.UWP.Controls
         public static readonly DependencyProperty DataLoadingProperty =
             DependencyProperty.Register("DataLoading", typeof(bool), typeof(MyAdaptiveGridView), new PropertyMetadata(true));
 
-
-
-
-
         ScrollViewer scrollViewer;
         long dataLoadingCallbackToken;
+
         protected override void OnApplyTemplate()
         {
             DetachTemplateCallbacks();
             base.OnApplyTemplate();
-            scrollViewer = GetTemplateChild("ScrollViewer") as ScrollViewer;
-            if (scrollViewer != null)
-            {
-                scrollViewer.ViewChanged += ScrollViewer_ViewChanged;
-            }
-            dataLoadingCallbackToken = RegisterPropertyChangedCallback(DataLoadingProperty, OnDataLoadingChanged);
+            AttachTemplateCallbacks();
+        }
+
+        private void MyAdaptiveGridView_Loaded(object sender, RoutedEventArgs e)
+        {
+            // 缓存页面二次进入时不会重新走 OnApplyTemplate，这里补挂监听，
+            // 否则 Unloaded 解绑后「滚动加载更多」在返回页面后永久失效
+            AttachTemplateCallbacks();
         }
 
         private void MyAdaptiveGridView_Unloaded(object sender, RoutedEventArgs e)
         {
             DetachTemplateCallbacks();
+        }
+
+        private void AttachTemplateCallbacks()
+        {
+            if (scrollViewer == null)
+            {
+                scrollViewer = GetTemplateChild("ScrollViewer") as ScrollViewer;
+                if (scrollViewer != null)
+                {
+                    scrollViewer.ViewChanged += ScrollViewer_ViewChanged;
+                }
+            }
+            if (dataLoadingCallbackToken == 0)
+            {
+                dataLoadingCallbackToken = RegisterPropertyChangedCallback(DataLoadingProperty, OnDataLoadingChanged);
+            }
         }
 
         private void DetachTemplateCallbacks()
@@ -91,27 +96,28 @@ namespace AllLive.UWP.Controls
 
         private void OnDataLoadingChanged(DependencyObject obj, DependencyProperty property)
         {
-            TryLoadMoreWhenContentDoesNotFill();
+            if (DataLoading)
+            {
+                return;
+            }
+            // 低优先级延后一拍，等本轮布局完成后再判断内容是否填满视口
+            _ = Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Low, () =>
+            {
+                TryLoadMoreWhenContentDoesNotFill();
+            });
         }
 
         private void TryLoadMoreWhenContentDoesNotFill()
         {
-            if (!DataLoading && scrollViewer != null && scrollViewer.ScrollableHeight == 0)
+            if (!DataLoading && CanLoadMore && scrollViewer != null && scrollViewer.ScrollableHeight == 0)
             {
                 LoadMoreCommand?.Execute(null);
             }
         }
 
-        private void MyAdaptiveGridView_CollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
-        {
-
-            Debug.WriteLine("内容变更");
-            TryLoadMoreWhenContentDoesNotFill();
-        }
-
         private void ScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
         {
-            if (scrollViewer == null)
+            if (scrollViewer == null || e.IsIntermediate)
             {
                 return;
             }

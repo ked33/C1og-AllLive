@@ -47,6 +47,7 @@
                             x:Name="gridView"
                             Padding="8,4"
                             CanLoadMore="{x:Bind Path=CanLoadMore, Mode=OneWay}"
+                            DataLoading="{x:Bind Path=Loading, Mode=OneWay}"
                             DesiredWidth="{StaticResource GridViewDesiredWidth}"
                             IsItemClickEnabled="True"
                             ItemClick="MyAdaptiveGridView_ItemClick"
