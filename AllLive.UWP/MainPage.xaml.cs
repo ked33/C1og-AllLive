@@ -90,6 +90,16 @@ namespace AllLive.UWP
             _ = CheckUpdate();
         }
 
+        private static readonly Dictionary<string, Type> pageTypeMap = new Dictionary<string, Type>
+        {
+            ["RecomendPage"] = typeof(RecomendPage),
+            ["CategoryPage"] = typeof(CategoryPage),
+            ["FavoritePage"] = typeof(FavoritePage),
+            ["HistoryPage"] = typeof(HistoryPage),
+            ["SyncPage"] = typeof(SyncPage),
+            ["SettingsPage"] = typeof(SettingsPage),
+        };
+
         private void NavigationView_SelectionChanged(Microsoft.UI.Xaml.Controls.NavigationView sender, Microsoft.UI.Xaml.Controls.NavigationViewSelectionChangedEventArgs args)
         {
             var item = args.SelectedItem as Microsoft.UI.Xaml.Controls.NavigationViewItem;
@@ -97,8 +107,17 @@ namespace AllLive.UWP
             {
                 item.Tag = "SettingsPage";
             }
-            frame.Navigate(Type.GetType("AllLive.UWP.Views." + item.Tag));
-
+            if (!pageTypeMap.TryGetValue(item.Tag.ToString(), out var pageType))
+            {
+                return;
+            }
+            if (frame.CurrentSourcePageType == pageType)
+            {
+                return;
+            }
+            frame.Navigate(pageType);
+            // tab 切换不需要页内后退历史（后退由外层 MainFrame 承担），清掉避免 BackStack 无限增长
+            frame.BackStack.Clear();
         }
 
         private async void searchBox_QuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)

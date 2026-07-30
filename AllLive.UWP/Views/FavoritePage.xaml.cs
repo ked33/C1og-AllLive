@@ -74,6 +74,11 @@ namespace AllLive.UWP.Views
             UnsubscribeUpdateFavorite();
             UnsubscribeFavoriteLiveInfo();
             favoriteVM.CancelRefresh();
+            // 无直播窗口需要后台刷新时停掉定时器，避免离开页面后空转
+            if (!MessageCenter.HasActiveLiveRoomWindows)
+            {
+                autoRefreshTimer?.Stop();
+            }
         }
 
         private void SubscribeUpdateFavorite()
@@ -201,6 +206,11 @@ namespace AllLive.UWP.Views
             }
             if (!ShouldRunAutoRefresh())
             {
+                // 页面不在前台且直播窗口已全部关闭：停掉自己，回到页面时会重新启动
+                if (!isPageActive)
+                {
+                    autoRefreshTimer.Stop();
+                }
                 return;
             }
             if (favoriteVM.Loading || favoriteVM.LoaddingLiveStatus)

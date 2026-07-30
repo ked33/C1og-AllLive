@@ -180,13 +180,22 @@ namespace AllLive.UWP
 
 
 
+        // UISettings 必须复用单例：每次 new 并订阅 ColorValuesChanged 会被系统事件源
+        // 永久持有（旧实例的订阅无法通过新实例的 -= 解除），反复调用会无限累积。
+        private static UISettings titleBarUISettings;
+        private static readonly object titleBarSettingsLock = new object();
+
         public static void SetTitleBar()
         {
-            UISettings uISettings = new UISettings();
-            ApplyTitleBarColors(uISettings);
-            // 避免重复订阅
-            uISettings.ColorValuesChanged -= TitleBarColorValuesChanged;
-            uISettings.ColorValuesChanged += TitleBarColorValuesChanged;
+            lock (titleBarSettingsLock)
+            {
+                if (titleBarUISettings == null)
+                {
+                    titleBarUISettings = new UISettings();
+                    titleBarUISettings.ColorValuesChanged += TitleBarColorValuesChanged;
+                }
+            }
+            ApplyTitleBarColors(titleBarUISettings);
         }
 
         private static void TitleBarColorValuesChanged(UISettings sender, object args)
