@@ -429,16 +429,8 @@ namespace AllLive.Core.Danmaku
             using (MemoryStream outBuffer = new MemoryStream())
             using (System.IO.Compression.DeflateStream compressedzipStream = new System.IO.Compression.DeflateStream(new MemoryStream(data, 2, data.Length - 2), System.IO.Compression.CompressionMode.Decompress))
             {
-                byte[] block = new byte[1024];
-                while (true)
-                {
-                    int bytesRead = compressedzipStream.Read(block, 0, block.Length);
-                    if (bytesRead <= 0)
-                        break;
-                    else
-                        outBuffer.Write(block, 0, bytesRead);
-                }
-                compressedzipStream.Close();
+                // 批量包解压后常为几十 KB，用 16KB 块拷贝减少 Read 次数与扩容
+                compressedzipStream.CopyTo(outBuffer, 16384);
                 return outBuffer.ToArray();
             }
 

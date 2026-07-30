@@ -152,7 +152,7 @@ namespace AllLive.Core.Danmaku
 
         }
 
-        private async void Ws_OnMessage(object sender, MessageEventArgs e)
+        private void Ws_OnMessage(object sender, MessageEventArgs e)
         {
             if (isStopped)
             {
@@ -164,15 +164,18 @@ namespace AllLive.Core.Danmaku
                 var message = e.RawData;
                 var wssPackage = DeserializeProto<PushFrame>(message);
                 var logId = wssPackage.logId;
-                var decompressed = GzipDecompress(wssPackage.Payload);
-                var payloadPackage = DeserializeProto<Response>(decompressed);
+                // GZipStream 直接交给 protobuf-net 反序列化，
+                // 省掉「解压到中间 byte[] 再包 MemoryStream」的双份缓冲
+                Response payloadPackage;
+                using (var payloadStream = new MemoryStream(wssPackage.Payload))
+                using (var gzipStream = new GZipStream(payloadStream, CompressionMode.Decompress))
+                {
+                    payloadPackage = Serializer.Deserialize<Response>(gzipStream);
+                }
                 if (payloadPackage.needAck ?? false)
                 {
-                    await Task.Run(() =>
-                    {
-                        SendACKData(logId ?? 0, payloadPackage.internalExt);
-                    });
-
+                    // 已在 websocket 后台线程，无需再 Task.Run 调度
+                    SendACKData(logId ?? 0, payloadPackage.internalExt);
                 }
 
                 foreach (var msg in payloadPackage.messagesLists)
@@ -367,22 +370,6 @@ namespace AllLive.Core.Danmaku
             socket.Send(SerializeProto(obj));
 
         }
-        public static byte[] GzipDecompress(byte[] bytes)
-        {
-            using (var memoryStream = new MemoryStream(bytes))
-            {
-
-                using (var outputStream = new MemoryStream())
-                {
-                    using (var decompressStream = new GZipStream(memoryStream, CompressionMode.Decompress))
-                    {
-                        decompressStream.CopyTo(outputStream);
-                    }
-                    return outputStream.ToArray();
-                }
-            }
-        }
-
         private static byte[] SerializeProto(object obj)
         {
             try
@@ -390,11 +377,7 @@ namespace AllLive.Core.Danmaku
                 using (MemoryStream ms = new MemoryStream())
                 {
                     Serializer.Serialize(ms, obj);
-                    var buffer = ms.GetBuffer();
-                    var dataBuffer = new byte[ms.Length];
-                    Array.Copy(buffer, dataBuffer, ms.Length);
-                    ms.Dispose();
-                    return dataBuffer;
+                    return ms.ToArray();
                 }
             }
             catch

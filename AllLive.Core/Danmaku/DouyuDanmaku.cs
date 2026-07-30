@@ -74,6 +74,12 @@ namespace AllLive.Core.Danmaku
                 string result = DeserializeDouyu(e.RawData);
                 if (result.Length != 0)
                 {
+                    // 斗鱼绝大部分广播（进场/礼物/排行等）不是弹幕，
+                    // 先做廉价的字符串预过滤，避免对每条消息做完整 STT 解析建树
+                    if (!result.Contains("type@=chatmsg"))
+                    {
+                        return;
+                    }
                     var json = SttToJObject(result);
                     var type = json["type"]?.ToString();
                     //斗鱼好像不会返回人气值
