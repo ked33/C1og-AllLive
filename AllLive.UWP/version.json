@@ -1,6 +1,6 @@
 {
-	"version": "2.3.51",
-	"versionCode": 20351,
-	"message": "1. 关注列表新增主播名实时筛选并优化工具栏布局",
+	"version": "2.3.52",
+	"versionCode": 20352,
+	"message": "1. 弹幕默认样式改为轻量描边，显著降低弹幕渲染开销\n2. 列表封面与头像按显示尺寸解码，大幅降低内存占用\n3. 修复标题栏主题监听累积泄漏与屏幕常亮计数问题",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }
