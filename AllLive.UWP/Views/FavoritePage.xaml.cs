@@ -105,6 +105,11 @@ namespace AllLive.UWP.Views
             favoriteVM.ApplyFavoriteLiveInfo(e);
         }
 
+        private void FavoriteSearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+        {
+            favoriteVM.SearchText = sender?.Text;
+        }
+
         private void SubscribeFavoriteLiveInfo()
         {
             if (isFavoriteLiveInfoSubscribed)

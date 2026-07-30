@@ -66,6 +66,28 @@ namespace AllLive.UWP.ViewModels
             }
         }
 
+        private string _searchText = string.Empty;
+        public string SearchText
+        {
+            get { return _searchText; }
+            set
+            {
+                var newValue = value ?? string.Empty;
+                if (string.Equals(_searchText, newValue, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                _searchText = newValue;
+                DoPropertyChanged(nameof(SearchText));
+                DoPropertyChanged(nameof(EmptyMessage));
+                ApplySortAndFilter();
+            }
+        }
+
+        public string EmptyMessage => string.IsNullOrWhiteSpace(SearchText)
+            ? "这里还什么都没有~"
+            : "没有找到匹配的关注主播";
+
         private bool _loadingLiveStatus;
 
         public bool LoaddingLiveStatus
@@ -398,7 +420,7 @@ namespace AllLive.UWP.ViewModels
             });
         }
 
-        // 单条检测完成后增量更新展示：隐藏未开播时即时露出/移除；显示全部时依赖属性通知，整表重排放在刷新结束。
+        // 单条检测完成后增量维护当前筛选结果；整表重排仍在刷新结束后统一完成。
         private void ProgressiveApplyItem(FavoriteItem item)
         {
             if (item == null || DisplayItems == null)
@@ -406,14 +428,10 @@ namespace AllLive.UWP.ViewModels
                 return;
             }
 
-            if (!HideOffline)
-            {
-                IsEmpty = DisplayItems.Count == 0;
-                return;
-            }
-
             var index = IndexOfDisplayItem(item);
-            if (item.LiveStatus)
+            var shouldDisplay = MatchesSearch(item, NormalizeSearchText(SearchText))
+                && (!HideOffline || item.LiveStatus);
+            if (shouldDisplay)
             {
                 if (index < 0)
                 {
@@ -502,6 +520,18 @@ namespace AllLive.UWP.ViewModels
             return title.Replace("\r", " ").Replace("\n", " ").Trim();
         }
 
+        private static string NormalizeSearchText(string searchText)
+        {
+            return string.IsNullOrWhiteSpace(searchText) ? string.Empty : searchText.Trim();
+        }
+
+        private static bool MatchesSearch(FavoriteItem item, string searchText)
+        {
+            return string.IsNullOrEmpty(searchText)
+                || (!string.IsNullOrEmpty(item?.UserName)
+                    && item.UserName.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
         private void ApplySortAndFilter(IList<FavoriteItem> source = null)
         {
             var baseList = source ?? Items?.ToList() ?? new List<FavoriteItem>();
@@ -509,7 +539,9 @@ namespace AllLive.UWP.ViewModels
             {
                 Items = new ObservableCollection<FavoriteItem>(baseList);
             }
+            var searchText = NormalizeSearchText(SearchText);
             var list = baseList
+                .Where(x => MatchesSearch(x, searchText))
                 .OrderByDescending(x => x.SortOrder)
                 .ThenByDescending(x => x.LiveStatus)
                 .ToList();

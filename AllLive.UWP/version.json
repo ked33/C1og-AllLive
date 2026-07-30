@@ -1,6 +1,6 @@
 {
-	"version": "2.3.49",
-	"versionCode": 20349,
-	"message": "1. 支持通过 Twitch 频道 URL 加载直播\r\n2. 支持 Twitch 在线人数与 IRC 聊天弹幕",
+	"version": "2.3.50",
+	"versionCode": 20350,
+	"message": "1. 关注列表新增主播名实时筛选",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }
