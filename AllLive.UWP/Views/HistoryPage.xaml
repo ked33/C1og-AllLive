@@ -52,7 +52,7 @@
                             Background="Blue"
                             BorderThickness="0"
                             Opacity="{Binding Opacity, Source={StaticResource ImageDimState}}"
-                            ProfilePicture="{x:Bind Path=Photo}" />
+                            ProfilePicture="{x:Bind Path=Photo, Converter={StaticResource avatarDecodeConvert}}" />
                         <StackPanel
                             Grid.Column="1"
                             Margin="8,0,0,0"

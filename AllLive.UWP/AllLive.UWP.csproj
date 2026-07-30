@@ -140,7 +140,9 @@
     <Compile Include="Controls\MessageToast.xaml.cs">
       <DependentUpon>MessageToast.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Controls\DecodedImageEx.cs" />
     <Compile Include="Controls\MyAdaptiveGridView.cs" />
+    <Compile Include="Converters\AvatarDecodeConvert.cs" />
     <Compile Include="Converters\ColorConvert.cs" />
     <Compile Include="Converters\CountTextConvert.cs" />
     <Compile Include="Converters\DanmakuStyleConvert.cs" />
