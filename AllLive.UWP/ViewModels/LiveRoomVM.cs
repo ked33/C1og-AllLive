@@ -663,12 +663,13 @@ namespace AllLive.UWP.ViewModels
                         {
                             return;
                         }
-                        for (var i = 0; i < SuperChatMessages.Count; i++)
+                        for (var i = SuperChatMessages.Count - 1; i >= 0; i--)
                         {
                             var item = SuperChatMessages[i];
                             item.CountdownTime--;
                             if (item.CountdownTime <= 0)
                             {
+                                // 反向遍历，RemoveAt 不会跳过下一项
                                 SuperChatMessages.RemoveAt(i);
                             }
                         }
@@ -1453,14 +1454,15 @@ namespace AllLive.UWP.ViewModels
                 }
                 if (e.Type == LiveMessageType.Chat)
                 {
+                    // 屏蔽词判断放在最前，被屏蔽的消息不应挤掉历史消息
+                    if (settingVM.ShieldWords != null && settingVM.ShieldWords.Count > 0)
+                    {
+                        if (settingVM.ShieldWords.FirstOrDefault(x => e.Message.Contains(x)) != null) return;
+                    }
                     if (Messages.Count >= MessageCleanCount)
                     {
                         Messages.RemoveAt(0);
                         //Messages.Clear();
-                    }
-                    if (settingVM.ShieldWords != null && settingVM.ShieldWords.Count > 0)
-                    {
-                        if (settingVM.ShieldWords.FirstOrDefault(x => e.Message.Contains(x)) != null) return;
                     }
                     if (!Utils.IsXbox)
                     {
