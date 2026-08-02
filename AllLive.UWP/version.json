@@ -1,6 +1,6 @@
 {
-	"version": "2.3.56",
-	"versionCode": 20356,
-	"message": "1. 播中卡顿自动切换异构 CDN 线路并重建播放源\n2. 哔哩 HLS 候选保留多 CDN，便于自动换线\n3. 卡顿时提示可手动切换线路或降低清晰度（不自动降画质）",
+	"version": "2.3.57",
+	"versionCode": 20357,
+	"message": "1. 取消播中卡顿自动换线/重建，避免连环切线加重卡顿\n2. 检测到卡顿时仅提示可手动切换线路或降低清晰度\n3. 保留健康监控与调试诊断，不自动改画质",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }
