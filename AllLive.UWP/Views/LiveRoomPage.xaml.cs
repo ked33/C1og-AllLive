@@ -86,6 +86,8 @@ namespace AllLive.UWP.Views
         private static readonly TimeSpan BilibiliDirectFlvCreateSourceTimeout = TimeSpan.FromSeconds(6);
         private static readonly TimeSpan BilibiliLocalProxyCreateSourceTimeout = TimeSpan.FromSeconds(3);
         private static readonly TimeSpan BilibiliCreateSourceTimeout = TimeSpan.FromSeconds(12);
+        private static readonly TimeSpan DefaultMediaSourceCreateTimeout = TimeSpan.FromSeconds(20);
+        private static readonly TimeSpan MediaSourceNetworkIoTimeout = TimeSpan.FromSeconds(12);
         private const string BilibiliPlaybackUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
 
         private System.Threading.CancellationTokenSource streamReconnectCts;
@@ -107,6 +109,9 @@ namespace AllLive.UWP.Views
         private string pendingSetPlayerUrl;
         private DateTimeOffset pendingSetPlayerUtc;
         private int mediaSourceAttemptVersion;
+        private readonly object mediaSourceCreateLock = new object();
+        private readonly HashSet<MediaSourceCreateAttempt> pendingMediaSourceCreateAttempts =
+            new HashSet<MediaSourceCreateAttempt>();
         private System.Threading.CancellationTokenSource playbackSamplingCts;
         private int playbackDiagnosticProbeCount;
         private DateTimeOffset? currentBufferingStartedUtc;
@@ -170,6 +175,58 @@ namespace AllLive.UWP.Views
             public long ElapsedMs { get; set; }
             public bool TimedOut { get; set; }
             public string Error { get; set; }
+        }
+
+        // 保留原始 WinRT 操作，切线或关闭时既结束上层等待，也向底层发出取消。
+        private sealed class MediaSourceCreateAttempt : IDisposable
+        {
+            private readonly System.Threading.CancellationTokenSource cancellationSource;
+            private int cancellationRequested;
+            private int disposed;
+
+            public MediaSourceCreateAttempt(int version, IAsyncOperation<FFmpegMediaSource> operation)
+            {
+                Version = version;
+                if (operation == null)
+                {
+                    throw new ArgumentNullException(nameof(operation));
+                }
+                Operation = operation;
+                cancellationSource = new System.Threading.CancellationTokenSource();
+                CreateTask = operation.AsTask(cancellationSource.Token);
+            }
+
+            public int Version { get; }
+            public IAsyncOperation<FFmpegMediaSource> Operation { get; }
+            public Task<FFmpegMediaSource> CreateTask { get; }
+            public System.Threading.CancellationToken CancellationToken
+            {
+                get { return cancellationSource.Token; }
+            }
+
+            public bool Cancel()
+            {
+                if (System.Threading.Interlocked.Exchange(ref cancellationRequested, 1) != 0)
+                {
+                    return false;
+                }
+
+                try { cancellationSource.Cancel(); } catch { }
+                return true;
+            }
+
+            public void Dispose()
+            {
+                if (System.Threading.Interlocked.Exchange(ref disposed, 1) != 0)
+                {
+                    return;
+                }
+
+                // IAsyncInfo.Close 只能在操作完成后调用；此对象仅由完成/异常清理路径释放。
+                try { cancellationSource.Cancel(); } catch { }
+                try { Operation.Close(); } catch { }
+                cancellationSource.Dispose();
+            }
         }
 
         private static bool IsDebugDiagnosticsEnabled()
@@ -1591,20 +1648,110 @@ namespace AllLive.UWP.Views
 
         private int BeginMediaSourceAttempt()
         {
+            MediaSourceCreateAttempt[] previousAttempts;
+            int attemptVersion;
             ResetPlaybackDiagnosticsForNewAttempt();
-            return System.Threading.Interlocked.Increment(ref mediaSourceAttemptVersion);
+            lock (mediaSourceCreateLock)
+            {
+                previousAttempts = pendingMediaSourceCreateAttempts.ToArray();
+                attemptVersion = ++mediaSourceAttemptVersion;
+            }
+            CancelMediaSourceCreateAttempts(previousAttempts, "新播放尝试已开始");
+            return attemptVersion;
         }
 
         private void InvalidateMediaSourceAttempt()
         {
             CancelPlaybackSampling();
-            System.Threading.Interlocked.Increment(ref mediaSourceAttemptVersion);
+            MediaSourceCreateAttempt[] attempts;
+            lock (mediaSourceCreateLock)
+            {
+                mediaSourceAttemptVersion++;
+                attempts = pendingMediaSourceCreateAttempts.ToArray();
+            }
+            CancelMediaSourceCreateAttempts(attempts, "播放请求已失效");
+        }
+
+        private void CancelPendingMediaSourceCreates(string reason)
+        {
+            MediaSourceCreateAttempt[] attempts;
+            lock (mediaSourceCreateLock)
+            {
+                attempts = pendingMediaSourceCreateAttempts.ToArray();
+            }
+            CancelMediaSourceCreateAttempts(attempts, reason);
         }
 
         private bool IsMediaSourceAttemptCurrent(int attemptVersion)
         {
             return !isPageClosing &&
                 System.Threading.Volatile.Read(ref mediaSourceAttemptVersion) == attemptVersion;
+        }
+
+        private bool IsMediaSourceAttemptCurrentLocked(int attemptVersion)
+        {
+            return !isPageClosing && mediaSourceAttemptVersion == attemptVersion;
+        }
+
+        private MediaSourceCreateAttempt RegisterMediaSourceCreateAttempt(
+            int attemptVersion,
+            IAsyncOperation<FFmpegMediaSource> operation)
+        {
+            var attempt = new MediaSourceCreateAttempt(attemptVersion, operation);
+            bool registered;
+            lock (mediaSourceCreateLock)
+            {
+                registered = IsMediaSourceAttemptCurrentLocked(attemptVersion);
+                if (registered)
+                {
+                    pendingMediaSourceCreateAttempts.Add(attempt);
+                }
+            }
+
+            if (!registered)
+            {
+                CancelMediaSourceCreateAttempt(attempt, "注册建源时播放请求已失效");
+                return attempt;
+            }
+
+            return attempt;
+        }
+
+        private void DetachMediaSourceCreateAttempt(MediaSourceCreateAttempt attempt)
+        {
+            if (attempt == null)
+            {
+                return;
+            }
+
+            lock (mediaSourceCreateLock)
+            {
+                pendingMediaSourceCreateAttempts.Remove(attempt);
+            }
+        }
+
+        private void CancelMediaSourceCreateAttempt(MediaSourceCreateAttempt attempt, string reason)
+        {
+            if (attempt != null && attempt.Cancel())
+            {
+                LogDebugIfEnabled(() =>
+                    $"播放器建源取消 reason={reason} attempt={attempt.Version}");
+            }
+        }
+
+        private void CancelMediaSourceCreateAttempts(
+            IEnumerable<MediaSourceCreateAttempt> attempts,
+            string reason)
+        {
+            if (attempts == null)
+            {
+                return;
+            }
+
+            foreach (var attempt in attempts)
+            {
+                CancelMediaSourceCreateAttempt(attempt, reason);
+            }
         }
 
         private bool TryScheduleStreamReconnect(string reason)
@@ -3142,6 +3289,7 @@ namespace AllLive.UWP.Views
         private async Task SetPlayer(string url)
         {
             var attemptVersion = 0;
+            MediaSourceCreateAttempt createAttempt = null;
             try
             {
                 if (isPageClosing)
@@ -3170,6 +3318,9 @@ namespace AllLive.UWP.Views
                 config.FFmpegOptions.Add("reconnect_at_eof", "1");
                 config.FFmpegOptions.Add("reconnect_streamed", "1");
                 config.FFmpegOptions.Add("reconnect_delay_max", "2");
+                config.FFmpegOptions.Add("rw_timeout",
+                    ((long)MediaSourceNetworkIoTimeout.TotalMilliseconds * 1000).ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
                 var decoder = GetEffectiveVideoDecoderIndex();
                 switch (decoder)
                 {
@@ -3234,47 +3385,72 @@ namespace AllLive.UWP.Views
                 {
                     var createTimeout = GetMediaSourceCreateTimeout(url);
                     var createStartedUtc = DateTimeOffset.UtcNow;
-                    var createTask = FFmpegMediaSource.CreateFromUriAsync(url, config).AsTask();
-                    if (createTimeout.HasValue)
+                    createAttempt = RegisterMediaSourceCreateAttempt(
+                        attemptVersion,
+                        FFmpegMediaSource.CreateFromUriAsync(url, config));
+                    var createTask = createAttempt.CreateTask;
+                    var cancellationTask = Task.Delay(
+                        System.Threading.Timeout.InfiniteTimeSpan,
+                        createAttempt.CancellationToken);
+                    var timeoutTask = Task.Delay(createTimeout);
+                    var completedTask = await Task.WhenAny(createTask, timeoutTask, cancellationTask);
+                    if (completedTask == cancellationTask || !IsMediaSourceAttemptCurrent(attemptVersion))
                     {
-                        var completedTask = await Task.WhenAny(createTask, Task.Delay(createTimeout.Value));
-                        if (!IsMediaSourceAttemptCurrent(attemptVersion))
+                        CancelMediaSourceCreateAttempt(createAttempt, "播放请求已失效");
+                        _ = DisposeLateMediaSourceAsync(createAttempt, url, attemptVersion);
+                        createAttempt = null;
+                        return;
+                    }
+                    if (completedTask != createTask)
+                    {
+                        CancelMediaSourceCreateAttempt(createAttempt, "播放器建源超时");
+                        _ = DisposeLateMediaSourceAsync(createAttempt, url, attemptVersion);
+                        createAttempt = null;
+                        var timeoutException = new TimeoutException($"FFmpegMediaSource.CreateFromUriAsync 超时 {createTimeout.TotalSeconds:F0}s");
+                        var playbackContext = IsDebugDiagnosticsEnabled() ? BuildPlaybackContext() : null;
+                        var timeoutSummary = $"播放器建源超时: {createTimeout.TotalSeconds:F0}s elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0}";
+                        if (IsDebugDiagnosticsEnabled())
                         {
-                            _ = DisposeLateMediaSourceAsync(createTask, url, attemptVersion);
-                            return;
+                            LogPlayError("播放器初始化超时，立即切换下一线路", timeoutException,
+                                JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, timeoutSummary, "详细网络诊断已转入后台"));
+                            StartMediaSourceFailureDiagnostics("播放器初始化超时", timeoutException, url,
+                                playbackContext, lastConfigSnapshot, lastUrlAnalysis, timeoutSummary);
                         }
-                        if (completedTask != createTask)
-                        {
-                            _ = DisposeLateMediaSourceAsync(createTask, url, attemptVersion);
-                            var timeoutException = new TimeoutException($"FFmpegMediaSource.CreateFromUriAsync 超时 {createTimeout.Value.TotalSeconds:F0}s");
-                            var playbackContext = IsDebugDiagnosticsEnabled() ? BuildPlaybackContext() : null;
-                            var timeoutSummary = $"播放器建源超时: {createTimeout.Value.TotalSeconds:F0}s elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0}";
-                            if (IsDebugDiagnosticsEnabled())
-                            {
-                                LogPlayError("播放器初始化超时，立即切换下一线路", timeoutException,
-                                    JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, timeoutSummary, "详细网络诊断已转入后台"));
-                                StartMediaSourceFailureDiagnostics("播放器初始化超时", timeoutException, url,
-                                    playbackContext, lastConfigSnapshot, lastUrlAnalysis, timeoutSummary);
-                            }
-                            PlayError();
-                            return;
-                        }
+                        PlayError();
+                        return;
                     }
 
                     var mediaSource = await createTask;
+                    DetachMediaSourceCreateAttempt(createAttempt);
                     if (!IsMediaSourceAttemptCurrent(attemptVersion))
                     {
                         try { mediaSource?.Dispose(); } catch { }
+                        createAttempt.Dispose();
+                        createAttempt = null;
                         return;
                     }
                     interopMSS = mediaSource;
-                    if (createTimeout.HasValue)
-                    {
-                        LogDebugIfEnabled(() => $"播放器建源完成 elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0} 线路: {liveRoomVM?.CurrentLine?.Name}");
-                    }
+                    createAttempt.Dispose();
+                    createAttempt = null;
+                    LogDebugIfEnabled(() => $"播放器建源完成 elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0} 线路: {liveRoomVM?.CurrentLine?.Name}");
                 }
                 catch (Exception ex)
                 {
+                    if (createAttempt != null)
+                    {
+                        if (!createAttempt.CreateTask.IsCompleted)
+                        {
+                            CancelMediaSourceCreateAttempt(createAttempt, "播放器建源等待异常");
+                            _ = DisposeLateMediaSourceAsync(createAttempt, url, attemptVersion);
+                            createAttempt = null;
+                        }
+                    }
+                    if (createAttempt != null)
+                    {
+                        DetachMediaSourceCreateAttempt(createAttempt);
+                        createAttempt.Dispose();
+                        createAttempt = null;
+                    }
                     if (!IsMediaSourceAttemptCurrent(attemptVersion))
                     {
                         return;
@@ -3317,14 +3493,34 @@ namespace AllLive.UWP.Views
                 }
                 Utils.ShowMessageToast("播放失败" + ex.Message);
             }
+            finally
+            {
+                if (createAttempt != null)
+                {
+                    if (createAttempt.CreateTask.IsCompleted)
+                    {
+                        DetachMediaSourceCreateAttempt(createAttempt);
+                        createAttempt.Dispose();
+                    }
+                    else
+                    {
+                        CancelMediaSourceCreateAttempt(createAttempt, "播放器建源提前结束");
+                        _ = DisposeLateMediaSourceAsync(createAttempt, url, attemptVersion);
+                    }
+                    createAttempt = null;
+                }
+            }
 
         }
 
-        private async Task DisposeLateMediaSourceAsync(Task<FFmpegMediaSource> createTask, string url, int attemptVersion)
+        private async Task DisposeLateMediaSourceAsync(
+            MediaSourceCreateAttempt attempt,
+            string url,
+            int attemptVersion)
         {
             try
             {
-                var mediaSource = await createTask;
+                var mediaSource = await attempt.CreateTask;
                 mediaSource?.Dispose();
                 if (isPageClosing)
                 {
@@ -3337,6 +3533,11 @@ namespace AllLive.UWP.Views
             }
             catch
             {
+            }
+            finally
+            {
+                DetachMediaSourceCreateAttempt(attempt);
+                attempt.Dispose();
             }
         }
 
@@ -3432,16 +3633,16 @@ namespace AllLive.UWP.Views
             return true;
         }
 
-        private TimeSpan? GetMediaSourceCreateTimeout(string url)
+        private TimeSpan GetMediaSourceCreateTimeout(string url)
         {
             if (string.IsNullOrWhiteSpace(url))
             {
-                return null;
+                return DefaultMediaSourceCreateTimeout;
             }
 
             if (liveRoomVM?.SiteName != "哔哩哔哩直播")
             {
-                return null;
+                return DefaultMediaSourceCreateTimeout;
             }
 
             if (url.IndexOf("127.0.0.1:8789/api/bilibili/live.flv", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -3459,7 +3660,7 @@ namespace AllLive.UWP.Views
                 return BilibiliCreateSourceTimeout;
             }
 
-            return null;
+            return DefaultMediaSourceCreateTimeout;
         }
 
         private bool TryRetryCurrentLine(string reason)
@@ -3691,6 +3892,7 @@ namespace AllLive.UWP.Views
             }
             liveRoomCleaned = true;
             isPageClosing = true;
+            CancelPendingMediaSourceCreates("直播间关闭");
             if (pendingRightDetailWidth.HasValue)
             {
                 SettingHelper.SetValue<double>(SettingHelper.RIGHT_DETAIL_WIDTH, pendingRightDetailWidth.Value);
