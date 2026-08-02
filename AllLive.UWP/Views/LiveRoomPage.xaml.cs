@@ -114,6 +114,13 @@ namespace AllLive.UWP.Views
             new HashSet<MediaSourceCreateAttempt>();
         private System.Threading.CancellationTokenSource playbackSamplingCts;
         private int playbackDiagnosticProbeCount;
+        private int consecutiveSlowProgressCount;
+        private int consecutiveNormalProgressCount;
+        private int stallRecoveryCount;
+        private int stallSameLineRebuildCount;
+        private int stallRecoveryInProgress;
+        private DateTimeOffset? lastStallRecoveryUtc;
+        private DateTimeOffset? lastManualQualityTipUtc;
         private DateTimeOffset? currentBufferingStartedUtc;
         private DateTimeOffset? lastUiHeartbeatUtc;
         private double maxUiHeartbeatDelayMsSinceAttempt;
@@ -135,16 +142,22 @@ namespace AllLive.UWP.Views
         private static readonly TimeSpan DuplicateSetPlayerWindow = TimeSpan.FromSeconds(2);
         private static readonly TimeSpan PlaybackSampleInterval = TimeSpan.FromSeconds(2);
         private static readonly TimeSpan PlaybackSampleDuration = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan PlaybackHealthMonitorDuration = TimeSpan.FromMinutes(30);
         private static readonly TimeSpan PlaybackSlowWallThreshold = TimeSpan.FromSeconds(1.5);
         private static readonly TimeSpan UiHeartbeatDelayLogThreshold = TimeSpan.FromSeconds(2.5);
         private static readonly TimeSpan ProbeReadTimeout = TimeSpan.FromSeconds(6);
         private static readonly TimeSpan MediaSourceCreateProgressLogDelay = TimeSpan.FromSeconds(3);
         private static readonly TimeSpan FullFailureDiagnosticThrottle = TimeSpan.FromSeconds(20);
+        private static readonly TimeSpan StallRecoveryCooldown = TimeSpan.FromSeconds(8);
+        private static readonly TimeSpan ManualQualityTipCooldown = TimeSpan.FromSeconds(90);
         private static readonly object MediaSourceDiagnosticThrottleLock = new object();
         private static string lastFullFailureDiagnosticKey;
         private static DateTimeOffset lastFullFailureDiagnosticUtc = DateTimeOffset.MinValue;
         private const double PlaybackSlowRatioThreshold = 0.85;
         private const double PlaybackStallRatioThreshold = 0.20;
+        private const int ConsecutiveSlowBeforeRecovery = 2;
+        private const int MaxStallRecoveriesPerAttempt = 4;
+        private const int StableSamplesToResetSlowCounter = 3;
         private const int DefaultVideoDecoderIndex = 1;
         private const int ExperimentalD3D11VideoDecoderIndex = 3;
         private const int MaxPlaybackSampleHistory = 8;
@@ -535,10 +548,11 @@ namespace AllLive.UWP.Views
                     {
                         lastPlaybackStartUtc = DateTimeOffset.UtcNow;
                         lastPlaybackUrl = liveRoomVM?.CurrentLine?.Url;
+                        // 健康监控始终开启：卡顿时自动换线/重建；详细采样日志仍受调试开关控制。
+                        StartPlaybackHealthMonitor(System.Threading.Volatile.Read(ref mediaSourceAttemptVersion));
                         if (IsDebugDiagnosticsEnabled())
                         {
                             LogPlaybackMediaInfo("Playing");
-                            StartPlaybackSampling(System.Threading.Volatile.Read(ref mediaSourceAttemptVersion));
                         }
                     }
                 }
@@ -751,27 +765,29 @@ namespace AllLive.UWP.Views
                 snapshot), LogType.DEBUG);
         }
 
-        private void StartPlaybackSampling(int attemptVersion)
+        private void StartPlaybackHealthMonitor(int attemptVersion)
         {
-            if (!IsDebugDiagnosticsEnabled() ||
-                attemptVersion <= 0 ||
-                !IsMediaSourceAttemptCurrent(attemptVersion))
+            if (attemptVersion <= 0 ||
+                !IsMediaSourceAttemptCurrent(attemptVersion) ||
+                isPageClosing)
             {
                 return;
             }
 
             CancelPlaybackSampling();
             playbackDiagnosticProbeCount = 0;
+            consecutiveSlowProgressCount = 0;
+            consecutiveNormalProgressCount = 0;
             lock (playbackDiagnosticsLock)
             {
                 playbackSampleHistory.Clear();
             }
             var cts = new System.Threading.CancellationTokenSource();
             playbackSamplingCts = cts;
-            _ = RunPlaybackSamplingAsync(attemptVersion, cts);
+            _ = RunPlaybackHealthMonitorAsync(attemptVersion, cts);
         }
 
-        private async Task RunPlaybackSamplingAsync(int attemptVersion, System.Threading.CancellationTokenSource cts)
+        private async Task RunPlaybackHealthMonitorAsync(int attemptVersion, System.Threading.CancellationTokenSource cts)
         {
             var token = cts.Token;
             var startedUtc = DateTimeOffset.UtcNow;
@@ -782,13 +798,13 @@ namespace AllLive.UWP.Views
             try
             {
                 while (!token.IsCancellationRequested &&
-                    IsDebugDiagnosticsEnabled() &&
+                    !isPageClosing &&
                     IsMediaSourceAttemptCurrent(attemptVersion) &&
-                    DateTimeOffset.UtcNow - startedUtc < PlaybackSampleDuration)
+                    DateTimeOffset.UtcNow - startedUtc < PlaybackHealthMonitorDuration)
                 {
                     await Task.Delay(PlaybackSampleInterval, token);
                     if (token.IsCancellationRequested ||
-                        !IsDebugDiagnosticsEnabled() ||
+                        isPageClosing ||
                         !IsMediaSourceAttemptCurrent(attemptVersion))
                     {
                         return;
@@ -799,7 +815,7 @@ namespace AllLive.UWP.Views
                     await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                     {
                         if (token.IsCancellationRequested ||
-                            !IsDebugDiagnosticsEnabled() ||
+                            isPageClosing ||
                             !IsMediaSourceAttemptCurrent(attemptVersion))
                         {
                             return;
@@ -808,21 +824,57 @@ namespace AllLive.UWP.Views
                         var uiDispatchDelay = now - dispatchQueuedUtc;
                         sampleIndex++;
                         sample = BuildPlaybackSample(sampleIndex, now, previousUtc, previousPosition, uiDispatchDelay, attemptVersion);
-                        if (sample != null && !string.IsNullOrEmpty(sample.Text))
+                        if (sample != null && !string.IsNullOrEmpty(sample.Text) && IsDebugDiagnosticsEnabled())
                         {
-                            AddPlaybackSampleHistory(sample.Text);
-                            LogHelper.Log(sample.Text, LogType.DEBUG);
+                            // 调试：前 30s 全量采样；之后仅记录异常节奏，避免长时噪音。
+                            var withinVerboseWindow = now - startedUtc <= PlaybackSampleDuration;
+                            if (withinVerboseWindow || sample.Suspicious || sample.Slow)
+                            {
+                                AddPlaybackSampleHistory(sample.Text);
+                                LogHelper.Log(sample.Text, LogType.DEBUG);
+                            }
                         }
                         previousUtc = now;
                         previousPosition = TryReadPlaybackPosition(mediaPlayer?.PlaybackSession);
                     });
 
-                    if (sample != null &&
-                        (sample.Suspicious || sample.Slow) &&
-                        playbackDiagnosticProbeCount < MaxPlaybackDiagnosticProbeCount)
+                    if (sample == null)
                     {
-                        playbackDiagnosticProbeCount++;
-                        StartPlaybackStallProbe(sample.Url, sample.Text, sample.Reason, attemptVersion);
+                        continue;
+                    }
+
+                    if (sample.Suspicious || sample.Slow)
+                    {
+                        consecutiveNormalProgressCount = 0;
+                        if (sample.Suspicious)
+                        {
+                            consecutiveSlowProgressCount = ConsecutiveSlowBeforeRecovery;
+                        }
+                        else
+                        {
+                            consecutiveSlowProgressCount++;
+                        }
+
+                        if (IsDebugDiagnosticsEnabled() &&
+                            playbackDiagnosticProbeCount < MaxPlaybackDiagnosticProbeCount)
+                        {
+                            playbackDiagnosticProbeCount++;
+                            StartPlaybackStallProbe(sample.Url, sample.Text, sample.Reason, attemptVersion);
+                        }
+
+                        if (sample.Suspicious ||
+                            consecutiveSlowProgressCount >= ConsecutiveSlowBeforeRecovery)
+                        {
+                            TryRecoverFromPlaybackStall(sample.Reason, attemptVersion);
+                        }
+                    }
+                    else if (string.Equals(sample.Reason, "Normal", StringComparison.Ordinal))
+                    {
+                        consecutiveNormalProgressCount++;
+                        if (consecutiveNormalProgressCount >= StableSamplesToResetSlowCounter)
+                        {
+                            consecutiveSlowProgressCount = 0;
+                        }
                     }
                 }
             }
@@ -831,7 +883,7 @@ namespace AllLive.UWP.Views
             }
             catch (Exception ex)
             {
-                LogDebugIfEnabled(() => $"播放采样异常: {BuildExceptionSummary(ex)}");
+                LogDebugIfEnabled(() => $"播放健康监控异常: {BuildExceptionSummary(ex)}");
             }
             finally
             {
@@ -841,6 +893,143 @@ namespace AllLive.UWP.Views
                 }
                 cts.Dispose();
             }
+        }
+
+        private void TryRecoverFromPlaybackStall(string reason, int attemptVersion)
+        {
+            if (isPageClosing ||
+                !IsMediaSourceAttemptCurrent(attemptVersion) ||
+                liveRoomVM?.CurrentLine == null)
+            {
+                return;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            if (lastStallRecoveryUtc.HasValue &&
+                (now - lastStallRecoveryUtc.Value) < StallRecoveryCooldown)
+            {
+                return;
+            }
+
+            if (stallRecoveryCount >= MaxStallRecoveriesPerAttempt)
+            {
+                MaybeShowManualQualityTip("多次自动切换后仍不稳定");
+                return;
+            }
+
+            if (System.Threading.Interlocked.CompareExchange(ref stallRecoveryInProgress, 1, 0) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                if (!IsMediaSourceAttemptCurrent(attemptVersion) || isPageClosing)
+                {
+                    return;
+                }
+
+                lastStallRecoveryUtc = now;
+                stallRecoveryCount++;
+                consecutiveSlowProgressCount = 0;
+
+                if (TrySwitchToAlternatePlayLine(reason))
+                {
+                    Utils.ShowMessageToast("播放卡顿，正在切换线路…", 3);
+                    // 多次自动换线后仍不稳时，再提示用户可手动降清晰度（不自动改画质）。
+                    if (stallRecoveryCount >= 2)
+                    {
+                        MaybeShowManualQualityTip("自动切换后仍可能不稳");
+                    }
+                    return;
+                }
+
+                var url = liveRoomVM?.CurrentLine?.Url;
+                if (!string.IsNullOrWhiteSpace(url) && stallSameLineRebuildCount < 1)
+                {
+                    stallSameLineRebuildCount++;
+                    LogDebugIfEnabled(() => $"播放卡顿，重建当前线路 reason={reason} 线路={liveRoomVM?.CurrentLine?.Name}");
+                    Utils.ShowMessageToast("播放卡顿，正在尝试恢复…", 3);
+                    QueueSetPlayer(url, "StallRebuild");
+                    return;
+                }
+
+                MaybeShowManualQualityTip("当前线路不稳定");
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref stallRecoveryInProgress, 0);
+            }
+        }
+
+        private bool TrySwitchToAlternatePlayLine(string reason)
+        {
+            var lines = liveRoomVM?.Lines;
+            var current = liveRoomVM?.CurrentLine;
+            if (lines == null || lines.Count <= 1 || current == null)
+            {
+                return false;
+            }
+
+            var index = lines.IndexOf(current);
+            if (index < 0)
+            {
+                index = 0;
+            }
+
+            var currentHost = TryGetHost(current.Url);
+            PlayurlLine fallback = null;
+            for (var step = 1; step < lines.Count; step++)
+            {
+                var candidate = lines[(index + step) % lines.Count];
+                if (candidate == null || ReferenceEquals(candidate, current))
+                {
+                    continue;
+                }
+                if (string.IsNullOrWhiteSpace(candidate.Url))
+                {
+                    continue;
+                }
+
+                var host = TryGetHost(candidate.Url);
+                if (!string.Equals(host, currentHost, StringComparison.OrdinalIgnoreCase))
+                {
+                    LogDebugIfEnabled(() =>
+                        $"播放卡顿自动换线 reason={reason} from={current.Name}/{currentHost} to={candidate.Name}/{host}");
+                    liveRoomVM.CurrentLine = candidate;
+                    return true;
+                }
+
+                if (fallback == null)
+                {
+                    fallback = candidate;
+                }
+            }
+
+            if (fallback != null)
+            {
+                LogDebugIfEnabled(() =>
+                    $"播放卡顿自动换线(同主机族兜底) reason={reason} from={current.Name} to={fallback.Name}");
+                liveRoomVM.CurrentLine = fallback;
+                return true;
+            }
+
+            return false;
+        }
+
+        private void MaybeShowManualQualityTip(string context)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (lastManualQualityTipUtc.HasValue &&
+                (now - lastManualQualityTipUtc.Value) < ManualQualityTipCooldown)
+            {
+                return;
+            }
+
+            lastManualQualityTipUtc = now;
+            var prefix = string.IsNullOrWhiteSpace(context) ? "播放不稳定" : context;
+            Utils.ShowMessageToast($"{prefix}，可手动切换线路或降低清晰度", 4);
+            LogDebugIfEnabled(() => $"已提示手动降画质/换线 context={context}");
         }
 
         private PlaybackSampleResult BuildPlaybackSample(int sampleIndex, DateTimeOffset now, DateTimeOffset? previousUtc, TimeSpan? previousPosition, TimeSpan uiDispatchDelay, int attemptVersion)
@@ -961,7 +1150,13 @@ namespace AllLive.UWP.Views
                     throughputProbe = await ProbeThroughputAsync(url);
                 }
                 var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe, hlsProbe);
+                var correlation = BuildProbeCorrelationSummary(
+                    probe,
+                    throughputProbe,
+                    flvProbe,
+                    connectivityProbe,
+                    hlsProbe,
+                    reason);
                 if (!IsDebugDiagnosticsEnabled())
                 {
                     return;
@@ -1002,6 +1197,10 @@ namespace AllLive.UWP.Views
         {
             CancelPlaybackSampling();
             playbackDiagnosticProbeCount = 0;
+            consecutiveSlowProgressCount = 0;
+            consecutiveNormalProgressCount = 0;
+            // 不在此处清 stallRecoveryCount：自动换线会触发新的 SetPlayer，预算应按进房/换清晰度重置。
+            System.Threading.Interlocked.Exchange(ref stallRecoveryInProgress, 0);
             currentBufferingStartedUtc = null;
             lastMediaInfoSnapshot = null;
             lastUiHeartbeatUtc = DateTimeOffset.UtcNow;
@@ -1012,6 +1211,16 @@ namespace AllLive.UWP.Views
                 playbackSampleHistory.Clear();
                 playbackEventHistory.Clear();
             }
+        }
+
+        private void ResetStallRecoveryBudget()
+        {
+            stallRecoveryCount = 0;
+            stallSameLineRebuildCount = 0;
+            consecutiveSlowProgressCount = 0;
+            consecutiveNormalProgressCount = 0;
+            lastStallRecoveryUtc = null;
+            System.Threading.Interlocked.Exchange(ref stallRecoveryInProgress, 0);
         }
 
         private void AddPlaybackSampleHistory(string sample)
@@ -1427,6 +1636,13 @@ namespace AllLive.UWP.Views
 
         private async void LiveRoomVM_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
+            if (string.Equals(e?.PropertyName, "CurrentQuality", StringComparison.Ordinal))
+            {
+                // 用户手动切换清晰度：重置卡顿自愈预算（不自动改画质，仅响应用户操作）。
+                ResetStallRecoveryBudget();
+                return;
+            }
+
             if (e?.PropertyName != "RoomID" && e?.PropertyName != "SiteName")
             {
                 return;
@@ -1568,7 +1784,8 @@ namespace AllLive.UWP.Views
         private bool IsDuplicateSetPlayerRequest(string url, DateTimeOffset now, string source)
         {
             var allowRetryOfActiveUrl =
-                string.Equals(source, "RetryCurrentLine", StringComparison.OrdinalIgnoreCase) &&
+                (string.Equals(source, "RetryCurrentLine", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(source, "StallRebuild", StringComparison.OrdinalIgnoreCase)) &&
                 !string.IsNullOrEmpty(activeSetPlayerUrl) &&
                 string.Equals(activeSetPlayerUrl, url, StringComparison.OrdinalIgnoreCase) &&
                 string.IsNullOrWhiteSpace(pendingSetPlayerUrl);
@@ -3083,7 +3300,8 @@ namespace AllLive.UWP.Views
             string throughputProbe,
             string flvProbe,
             string connectivityProbe,
-            string hlsProbe = null)
+            string hlsProbe = null,
+            string diagnosticKind = null)
         {
             if (!IsDebugDiagnosticsEnabled())
             {
@@ -3093,6 +3311,9 @@ namespace AllLive.UWP.Views
             var targetText = JoinNonEmpty(urlProbe, throughputProbe, flvProbe, hlsProbe) ?? string.Empty;
             var baselineText = connectivityProbe ?? string.Empty;
             var hlsText = hlsProbe ?? string.Empty;
+            var isPlaybackStallDiagnostic =
+                string.Equals(diagnosticKind, "SlowProgress", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(diagnosticKind, "SevereStall", StringComparison.OrdinalIgnoreCase);
             var targetDnsFailure = ContainsOrdinalIgnoreCase(targetText, "NetworkFailureCategory: DnsNameResolutionFailure");
             var targetConnectFailure = ContainsOrdinalIgnoreCase(targetText, "NetworkFailureCategory: ConnectFailure");
             var targetTimeout = ContainsOrdinalIgnoreCase(targetText, "NetworkFailureCategory: NetworkTimeout") ||
@@ -3144,6 +3365,11 @@ namespace AllLive.UWP.Views
             else if (hlsMasterOnly)
             {
                 sb.AppendLine("LikelyRoot: HlsMasterPlaylistNeedsVariantSelection");
+            }
+            else if (isPlaybackStallDiagnostic && hlsPlaylistOk && !targetHttpFailure && !targetConnectFailure)
+            {
+                // 已进入 Playing 后的卡顿探针：清单可达说明更像 live underrun，而非建源失败。
+                sb.AppendLine("LikelyRoot: LiveUnderrunDespiteReachableHls");
             }
             else if (hlsPlaylistOk && !targetHttpFailure && !targetConnectFailure)
             {
@@ -4867,6 +5093,7 @@ namespace AllLive.UWP.Views
                 MessageCenter.ChangeTitle("", pageArgs.Site);
 
                 liveRoomVM.LoadData(pageArgs.Site, data.RoomID);
+                ResetStallRecoveryBudget();
 
                 // 如果是XBOX，自动进入全屏
                 if (Utils.IsXbox)

@@ -1,6 +1,6 @@
 {
-	"version": "2.3.55",
-	"versionCode": 20355,
-	"message": "1. 补强直播建源失败诊断：HLS 清单/分片深度预检与建源耗时摘要\n2. 修复小包探针误报 VerySlowRead，完善网络归因\n3. 完整诊断节流防抖，避免同 CDN 失败刷屏",
+	"version": "2.3.56",
+	"versionCode": 20356,
+	"message": "1. 播中卡顿自动切换异构 CDN 线路并重建播放源\n2. 哔哩 HLS 候选保留多 CDN，便于自动换线\n3. 卡顿时提示可手动切换线路或降低清晰度（不自动降画质）",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }

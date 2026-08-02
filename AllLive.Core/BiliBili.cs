@@ -713,7 +713,8 @@ namespace AllLive.Core
                 }
 
                 var selectedCandidates = await SelectBilibiliPlayUrlCandidatesAsync(client, roomID, qnValue, candidates);
-                selectedCandidates = LimitBilibiliHlsCandidates(selectedCandidates, 2);
+                // HLS-only：保留更多异构 CDN，供播中卡顿自动换线；有 FLV 时保持原排序不裁切。
+                selectedCandidates = DiversifyBilibiliPlayUrlCandidates(selectedCandidates, maxTotal: 6, maxPerHostFamily: 2);
                 var urls = await BuildBilibiliPlayUrlsWithLocalProxyFallbackAsync(roomID, qnValue, selectedCandidates);
                 CoreDebug.Log(() => $"[Bilibili] PlayInfo直出 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={urls.Count} flv={selectedCandidates.Count(x => x.IsFlv)} hls={selectedCandidates.Count(x => x.IsHls)} hevc={selectedCandidates.Count(x => x.IsHevc)}");
                 return urls;
@@ -942,6 +943,169 @@ namespace AllLive.Core
                 result.Add(candidate);
             }
             return result;
+        }
+
+        /// <summary>
+        /// 在已排序候选上做 host 族多样性裁剪：优先不同 CDN 家族，便于卡顿时自动换线。
+        /// 含 FLV 时不裁剪，避免影响官方 FLV 优先路径。
+        /// </summary>
+        private static List<BilibiliPlayUrlCandidate> DiversifyBilibiliPlayUrlCandidates(
+            List<BilibiliPlayUrlCandidate> candidates,
+            int maxTotal,
+            int maxPerHostFamily)
+        {
+            if (candidates == null || candidates.Count == 0)
+            {
+                return candidates ?? new List<BilibiliPlayUrlCandidate>();
+            }
+
+            if (candidates.Any(x => x != null && x.IsFlv))
+            {
+                return candidates;
+            }
+
+            if (maxTotal <= 0)
+            {
+                maxTotal = 6;
+            }
+            if (maxPerHostFamily <= 0)
+            {
+                maxPerHostFamily = 2;
+            }
+
+            var ordered = candidates.Where(x => x != null && !string.IsNullOrWhiteSpace(x.Url)).ToList();
+            if (ordered.Count <= maxTotal)
+            {
+                // 仍做一轮「先不同 host 族」重排，把异构 CDN 提前。
+                return ReorderBilibiliCandidatesByHostDiversity(ordered, maxPerHostFamily);
+            }
+
+            var familyCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var selected = new List<BilibiliPlayUrlCandidate>();
+            var selectedUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // 第一轮：每个 host 族先收 1 条（已排序，verified/AVC 优先）。
+            foreach (var candidate in ordered)
+            {
+                if (selected.Count >= maxTotal)
+                {
+                    break;
+                }
+                var family = GetBilibiliCdnHostFamily(candidate.Url);
+                if (familyCounts.ContainsKey(family))
+                {
+                    continue;
+                }
+                familyCounts[family] = 1;
+                selected.Add(candidate);
+                selectedUrls.Add(candidate.Url);
+            }
+
+            // 第二轮：补齐名额，每族最多 maxPerHostFamily。
+            foreach (var candidate in ordered)
+            {
+                if (selected.Count >= maxTotal)
+                {
+                    break;
+                }
+                if (selectedUrls.Contains(candidate.Url))
+                {
+                    continue;
+                }
+                var family = GetBilibiliCdnHostFamily(candidate.Url);
+                familyCounts.TryGetValue(family, out var count);
+                if (count >= maxPerHostFamily)
+                {
+                    continue;
+                }
+                familyCounts[family] = count + 1;
+                selected.Add(candidate);
+                selectedUrls.Add(candidate.Url);
+            }
+
+            return selected;
+        }
+
+        private static List<BilibiliPlayUrlCandidate> ReorderBilibiliCandidatesByHostDiversity(
+            List<BilibiliPlayUrlCandidate> ordered,
+            int maxPerHostFamily)
+        {
+            var familyCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var firstPass = new List<BilibiliPlayUrlCandidate>();
+            var rest = new List<BilibiliPlayUrlCandidate>();
+            foreach (var candidate in ordered)
+            {
+                var family = GetBilibiliCdnHostFamily(candidate.Url);
+                if (!familyCounts.ContainsKey(family))
+                {
+                    familyCounts[family] = 1;
+                    firstPass.Add(candidate);
+                }
+                else
+                {
+                    rest.Add(candidate);
+                }
+            }
+
+            var result = new List<BilibiliPlayUrlCandidate>(firstPass);
+            foreach (var candidate in rest)
+            {
+                var family = GetBilibiliCdnHostFamily(candidate.Url);
+                familyCounts.TryGetValue(family, out var count);
+                if (count >= maxPerHostFamily)
+                {
+                    // 超出每族上限的仍追加到末尾，避免丢候选；仅降低优先度。
+                    result.Add(candidate);
+                    continue;
+                }
+                familyCounts[family] = count + 1;
+                // 插入到 firstPass 之后、超额之前：简单 append 保持稳定。
+                result.Add(candidate);
+            }
+            return result;
+        }
+
+        private static string GetBilibiliCdnHostFamily(string url)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                {
+                    return "unknown";
+                }
+
+                var host = (uri.Host ?? string.Empty).ToLowerInvariant();
+                if (string.IsNullOrEmpty(host))
+                {
+                    return "unknown";
+                }
+
+                // d1--cn-gotcha208b.bilivideo.com -> gotcha208
+                var gotchaIndex = host.IndexOf("gotcha", StringComparison.OrdinalIgnoreCase);
+                if (gotchaIndex >= 0)
+                {
+                    var end = gotchaIndex + "gotcha".Length;
+                    while (end < host.Length && char.IsDigit(host[end]))
+                    {
+                        end++;
+                    }
+                    return host.Substring(gotchaIndex, end - gotchaIndex);
+                }
+
+                // cn-hnzz-cm-01-03.bilivideo.com -> cn-hnzz-cm
+                var parts = host.Split('.');
+                var head = parts.Length > 0 ? parts[0] : host;
+                var segments = head.Split('-');
+                if (segments.Length >= 3)
+                {
+                    return string.Join("-", segments.Take(3));
+                }
+                return head;
+            }
+            catch
+            {
+                return "unknown";
+            }
         }
 
         private async Task<List<BilibiliPlayUrlCandidate>> SelectBilibiliPlayUrlCandidatesAsync(HttpClient client, string roomID, int? qnValue, List<BilibiliPlayUrlCandidate> candidates)
