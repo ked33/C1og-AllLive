@@ -1127,18 +1127,17 @@ namespace AllLive.Core
                 return OrderBilibiliPlayUrlCandidates(all);
             }
 
-            // 首帧默认优先 AVC，只探测 AVC 候选；没有 AVC 时才探测全部 HLS。探测不再只看
-            // 入口 m3u8 的响应头，而会走到子播放列表、初始化分片和首个媒体分片，避免把
-            // “一级 gotcha 调度列表可达、实际 smtcdns 分片不可达”误判成可播放。
+            // 首帧默认优先 AVC；轻量探测：先按偏好排序，只探测前若干条，缩短开房等待。
             var avcCandidates = hlsCandidates
                 .Where(x => x.CodecName?.IndexOf("avc", StringComparison.OrdinalIgnoreCase) >= 0)
                 .ToList();
-            var probeCandidates = avcCandidates.Count > 0 ? avcCandidates : hlsCandidates;
-            CoreDebug.Log(() => $"[Bilibili] 未获得FLV，端到端探测HLS候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} probe={probeCandidates.Count} hls={hlsCandidates.Count}");
+            var probePool = avcCandidates.Count > 0 ? avcCandidates : hlsCandidates;
+            var probeCandidates = OrderBilibiliPlayUrlCandidates(probePool).Take(4).ToList();
+            CoreDebug.Log(() => $"[Bilibili] 未获得FLV，轻量探测HLS候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} probe={probeCandidates.Count}/{probePool.Count} hls={hlsCandidates.Count}");
             var verified = await VerifyBilibiliHlsCandidatesAsync(client, roomID, probeCandidates);
             var ordered = OrderBilibiliPlayUrlCandidates(all);
             var first = ordered.FirstOrDefault();
-            CoreDebug.Log(() => $"[Bilibili] HLS端到端探测完成 roomId={roomID} qn={qnValue?.ToString() ?? "null"} verified={verified.Count}/{probeCandidates.Count} first={(first != null ? BuildBilibiliUrlBrief(first) : "无")}");
+            CoreDebug.Log(() => $"[Bilibili] HLS探测完成 roomId={roomID} qn={qnValue?.ToString() ?? "null"} verified={verified.Count}/{probeCandidates.Count} first={(first != null ? BuildBilibiliUrlBrief(first) : "无")}");
             return ordered;
         }
 
@@ -1146,18 +1145,12 @@ namespace AllLive.Core
         {
             var urls = new List<string>();
             var dedupe = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var firstFlv = selectedCandidates?.FirstOrDefault(x => x != null && x.IsFlv && !string.IsNullOrWhiteSpace(x.Url));
+            var flvList = (selectedCandidates ?? Enumerable.Empty<BilibiliPlayUrlCandidate>())
+                .Where(x => x != null && x.IsFlv && !string.IsNullOrWhiteSpace(x.Url))
+                .ToList();
+            var firstFlv = flvList.FirstOrDefault();
 
-            // 先返回全部官方 FLV 直连候选，避免本地代理故障阻塞首帧。
-            foreach (var candidate in selectedCandidates?.Where(x => x != null && x.IsFlv)
-                ?? Enumerable.Empty<BilibiliPlayUrlCandidate>())
-            {
-                if (!string.IsNullOrWhiteSpace(candidate.Url) && dedupe.Add(candidate.Url))
-                {
-                    urls.Add(candidate.Url);
-                }
-            }
-
+            // 有 FLV 时：本地代理优先（桌面网络栈更稳），再官方直连，最后才 HLS。
             if (firstFlv != null)
             {
                 var headers = await GetRequestHeader();
@@ -1168,11 +1161,19 @@ namespace AllLive.Core
                     {
                         urls.Add(proxyResult.Url);
                     }
-                    CoreDebug.Log(() => $"[Bilibili] 注册本地FLV代理回退 roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} proxy={BuildBilibiliLocalProxyBrief(proxyResult.Url)}");
+                    CoreDebug.Log(() => $"[Bilibili] FLV本地代理优先 roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} proxy={BuildBilibiliLocalProxyBrief(proxyResult.Url)}");
                 }
                 else
                 {
-                    CoreDebug.Log(() => $"[Bilibili] 本地FLV代理回退不可用，继续使用官方直连 roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} err={proxyResult.Error}");
+                    CoreDebug.Log(() => $"[Bilibili] 本地FLV代理不可用，回退官方直连 roomId={roomID} qn={qnValue?.ToString() ?? "null"} upstream={BuildBilibiliUrlBrief(firstFlv)} err={proxyResult.Error}");
+                }
+
+                foreach (var candidate in flvList)
+                {
+                    if (dedupe.Add(candidate.Url))
+                    {
+                        urls.Add(candidate.Url);
+                    }
                 }
             }
             else
@@ -1180,7 +1181,7 @@ namespace AllLive.Core
                 CoreDebug.Log(() => $"[Bilibili] 未获得FLV，无法使用本地代理 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={selectedCandidates?.Count ?? 0}");
             }
 
-            // 代理回退之后再追加 HLS/其他协议候选。
+            // 无 FLV 或 FLV 之后再追加 HLS/其他协议候选。
             foreach (var candidate in selectedCandidates?.Where(x => x != null && !x.IsFlv)
                 ?? Enumerable.Empty<BilibiliPlayUrlCandidate>())
             {
@@ -1266,24 +1267,23 @@ namespace AllLive.Core
                 return new List<BilibiliPlayUrlCandidate>();
             }
 
-            // AVC 候选并发端到端探测，共享 4.5s 总预算。任一“直达媒体列表”候选完成
-            // init/media 分片验证后立即取消剩余慢探测，避免 Task.WhenAll 等最慢线路阻塞首帧。
-            var directWinnerSelected = 0;
-            using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(4500)))
+            // 轻量探测：共享 2.5s 总预算；playlist HTTP 成功即标 verified（加快首帧）。
+            // 任一成功立即取消其余，避免等最慢线路。
+            var winnerSelected = 0;
+            using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2500)))
             {
                 var tasks = targets.Select(async candidate =>
                 {
                     try
                     {
-                        var result = await ProbeBilibiliHlsEndToEndAsync(client, candidate.Url, cts.Token);
+                        var result = await ProbeBilibiliHlsPlaylistReachableAsync(client, candidate.Url, cts.Token);
                         if (result.Success)
                         {
                             candidate.Verified = true;
                             candidate.HlsMasterDepth = result.MasterDepth;
                             candidate.IsDirectHlsMediaPlaylist = result.MasterDepth == 0;
-                            CoreDebug.Log(() => $"[Bilibili] HLS端到端探测成功 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} direct={candidate.IsDirectHlsMediaPlaylist} depth={candidate.HlsMasterDepth} path={result.Path}");
-                            if (candidate.IsDirectHlsMediaPlaylist
-                                && Interlocked.CompareExchange(ref directWinnerSelected, 1, 0) == 0)
+                            CoreDebug.Log(() => $"[Bilibili] HLS探测成功 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} direct={candidate.IsDirectHlsMediaPlaylist} depth={candidate.HlsMasterDepth} path={result.Path}");
+                            if (Interlocked.CompareExchange(ref winnerSelected, 1, 0) == 0)
                             {
                                 cts.Cancel();
                             }
@@ -1291,20 +1291,19 @@ namespace AllLive.Core
                         else
                         {
                             candidate.VerifyFailed = true;
-                            CoreDebug.Log(() => $"[Bilibili] HLS端到端探测失败 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason={result.Reason}");
+                            CoreDebug.Log(() => $"[Bilibili] HLS探测失败 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason={result.Reason}");
                         }
                     }
                     catch (OperationCanceledException ex) when (cts.IsCancellationRequested)
                     {
-                        if (Volatile.Read(ref directWinnerSelected) == 0)
+                        if (Volatile.Read(ref winnerSelected) == 0)
                         {
-                            // 总预算耗尽仍保留为“未确认”，不永久判死。
-                            CoreDebug.Log(() => $"[Bilibili] HLS端到端探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=timeout err={ex.GetType().FullName} {ex.Message}");
+                            CoreDebug.Log(() => $"[Bilibili] HLS探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=timeout err={ex.GetType().FullName} {ex.Message}");
                         }
                     }
                     catch (Exception ex)
                     {
-                        CoreDebug.Log(() => $"[Bilibili] HLS端到端探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=exception err={ex.GetType().FullName} {ex.Message}");
+                        CoreDebug.Log(() => $"[Bilibili] HLS探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=exception err={ex.GetType().FullName} {ex.Message}");
                     }
                     return candidate;
                 }).ToList();
@@ -1312,6 +1311,41 @@ namespace AllLive.Core
                 await Task.WhenAll(tasks);
             }
             return targets.Where(x => x.Verified).ToList();
+        }
+
+        /// <summary>
+        /// 轻量可达性：只验证 playlist 可下载且为 m3u8，不做 init/分片深探（深探改由播放器建源承担）。
+        /// </summary>
+        private async Task<BilibiliHlsProbeResult> ProbeBilibiliHlsPlaylistReachableAsync(
+            HttpClient client,
+            string url,
+            CancellationToken cancellationToken)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var playlistUri))
+            {
+                return new BilibiliHlsProbeResult() { Reason = "invalid-playlist-url" };
+            }
+
+            var playlistResult = await DownloadBilibiliHlsPlaylistAsync(client, playlistUri, cancellationToken);
+            if (!playlistResult.Success)
+            {
+                return new BilibiliHlsProbeResult() { Reason = playlistResult.Reason, Path = playlistUri.Host };
+            }
+
+            var content = playlistResult.Content ?? string.Empty;
+            if (content.IndexOf("#EXTM3U", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return new BilibiliHlsProbeResult() { Reason = "not-m3u8", Path = playlistUri.Host };
+            }
+
+            var isMaster = content.IndexOf("#EXT-X-STREAM-INF", StringComparison.OrdinalIgnoreCase) >= 0
+                && content.IndexOf("#EXTINF:", StringComparison.OrdinalIgnoreCase) < 0;
+            return new BilibiliHlsProbeResult()
+            {
+                Success = true,
+                Path = playlistUri.Host,
+                MasterDepth = isMaster ? 1 : 0,
+            };
         }
 
         private sealed class BilibiliHlsProbeResult
@@ -1491,22 +1525,50 @@ namespace AllLive.Core
             return Uri.TryCreate(baseUri, value.Trim(), out var result) ? result : null;
         }
 
-        private static bool IsPreferredBilibiliHlsHost(string url)
+        /// <summary>
+        /// HLS host 惩罚分：越小越优先。gotcha/d1 边缘通常更稳更快（对齐 DTV 偏好）。
+        /// </summary>
+        private static int GetBilibiliHlsHostPenalty(string url)
         {
             if (string.IsNullOrWhiteSpace(url))
             {
-                return false;
+                return 5;
             }
 
+            string host;
             if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
             {
-                return url.IndexOf("bilivideo.com", StringComparison.OrdinalIgnoreCase) >= 0
-                    && url.IndexOf("d1--", StringComparison.OrdinalIgnoreCase) < 0;
+                host = url;
+            }
+            else
+            {
+                host = uri.Host ?? string.Empty;
             }
 
-            var host = uri.Host ?? string.Empty;
-            return host.EndsWith(".bilivideo.com", StringComparison.OrdinalIgnoreCase)
-                && !host.StartsWith("d1--", StringComparison.OrdinalIgnoreCase);
+            if (host.IndexOf("mcdn", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return 4;
+            }
+
+            // d1--cn-gotcha* / *gotcha* 官方边缘
+            if (host.IndexOf("d1--", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                host.IndexOf("gotcha", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return 0;
+            }
+
+            // 省节点 bilivideo（cn-xxx-cm 等）
+            if (host.EndsWith(".bilivideo.com", StringComparison.OrdinalIgnoreCase))
+            {
+                return 1;
+            }
+
+            return 3;
+        }
+
+        private static bool IsPreferredBilibiliHlsHost(string url)
+        {
+            return GetBilibiliHlsHostPenalty(url) == 0;
         }
 
         private static int? TryConvertToInt(object value)
@@ -1572,7 +1634,7 @@ namespace AllLive.Core
                     codecPenalty = GetBilibiliCodecPenalty(candidate.CodecName),
                     unverifiedPenalty = candidate.Verified ? 0 : 1,
                     directMediaPenalty = candidate.IsHls && candidate.Verified && !candidate.IsDirectHlsMediaPlaylist ? 1 : 0,
-                    preferredPenalty = IsPreferredBilibiliHlsHost(candidate.Url) ? 0 : 1,
+                    hostPenalty = GetBilibiliHlsHostPenalty(candidate.Url),
                     mcdnPenalty = candidate.IsMcdn ? 1 : 0,
                     order = candidate.Order,
                     score = candidate.Score
@@ -1582,7 +1644,7 @@ namespace AllLive.Core
                 .ThenBy(x => x.codecPenalty)
                 .ThenBy(x => x.unverifiedPenalty)
                 .ThenBy(x => x.directMediaPenalty)
-                .ThenBy(x => x.preferredPenalty)
+                .ThenBy(x => x.hostPenalty)
                 .ThenBy(x => x.mcdnPenalty)
                 .ThenBy(x => x.order)
                 .ThenByDescending(x => x.score)

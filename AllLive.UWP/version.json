@@ -1,6 +1,6 @@
 {
-	"version": "2.3.57",
-	"versionCode": 20357,
-	"message": "1. 取消播中卡顿自动换线/重建，避免连环切线加重卡顿\n2. 检测到卡顿时仅提示可手动切换线路或降低清晰度\n3. 保留健康监控与调试诊断，不自动改画质",
+	"version": "2.3.58",
+	"versionCode": 20358,
+	"message": "1. 升级 FFmpegInteropX 至 2.0.0 稳定版\n2. fmp4 HLS 加大 live 缓冲（live_start_index/分析窗口）\n3. 有 FLV 时本地代理优先于直连\n4. 卡顿时同线路软解兜底或重建 demux（不自动换线）\n5. 减轻 HLS 探测并优先 gotcha 边缘节点",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }

@@ -119,6 +119,10 @@ namespace AllLive.UWP.Views
         private int consecutiveNormalProgressCount;
         private DateTimeOffset? lastManualQualityTipUtc;
         private DateTimeOffset? playbackHealthMonitorStartedUtc;
+        private DateTimeOffset? lastStallMitigationUtc;
+        private int stallSoftDecodeUsed;
+        private int stallDemuxRebuildUsed;
+        private bool forceSoftwareDecoderForCurrentSession;
         private DateTimeOffset? currentBufferingStartedUtc;
         private DateTimeOffset? lastUiHeartbeatUtc;
         private double maxUiHeartbeatDelayMsSinceAttempt;
@@ -148,6 +152,8 @@ namespace AllLive.UWP.Views
         private static readonly TimeSpan FullFailureDiagnosticThrottle = TimeSpan.FromSeconds(20);
         private static readonly TimeSpan StallTipGracePeriod = TimeSpan.FromSeconds(8);
         private static readonly TimeSpan ManualQualityTipCooldown = TimeSpan.FromSeconds(90);
+        private static readonly TimeSpan StallMitigationCooldown = TimeSpan.FromSeconds(20);
+        private static readonly TimeSpan HlsLiveOpenAnalyzeDuration = TimeSpan.FromSeconds(2);
         private static readonly object MediaSourceDiagnosticThrottleLock = new object();
         private static string lastFullFailureDiagnosticKey;
         private static DateTimeOffset lastFullFailureDiagnosticUtc = DateTimeOffset.MinValue;
@@ -874,6 +880,8 @@ namespace AllLive.UWP.Views
                         {
                             MaybeShowManualQualityTip(
                                 sample.Suspicious ? "播放出现卡顿" : "播放不太流畅");
+                            // 不自动换线：同线路内软解兜底或重建 demux，减轻花屏/卡死。
+                            TryStallMitigationWithoutLineSwitch(sample.Reason, attemptVersion);
                             consecutiveSlowProgressCount = 0;
                             consecutiveSevereStallCount = 0;
                         }
@@ -919,6 +927,58 @@ namespace AllLive.UWP.Views
             var prefix = string.IsNullOrWhiteSpace(context) ? "播放不稳定" : context;
             Utils.ShowMessageToast($"{prefix}，可手动切换线路或降低清晰度", 4);
             LogDebugIfEnabled(() => $"已提示手动降画质/换线 context={context}");
+        }
+
+        /// <summary>
+        /// 卡顿缓解：不换线路。优先同 URL 软解重开；已软解则重建 demux。
+        /// </summary>
+        private void TryStallMitigationWithoutLineSwitch(string reason, int attemptVersion)
+        {
+            if (isPageClosing ||
+                !IsMediaSourceAttemptCurrent(attemptVersion))
+            {
+                return;
+            }
+
+            var url = liveRoomVM?.CurrentLine?.Url ?? lastPlaybackUrl;
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            if (lastStallMitigationUtc.HasValue &&
+                (now - lastStallMitigationUtc.Value) < StallMitigationCooldown)
+            {
+                return;
+            }
+
+            // 当前是硬解/自动且未用过软解：强制软解重开，减轻花屏。
+            var currentDecoder = GetEffectiveVideoDecoderIndex();
+            if (stallSoftDecodeUsed < 1 &&
+                !forceSoftwareDecoderForCurrentSession &&
+                currentDecoder != 2)
+            {
+                lastStallMitigationUtc = now;
+                stallSoftDecodeUsed++;
+                forceSoftwareDecoderForCurrentSession = true;
+                LogDebugIfEnabled(() =>
+                    $"卡顿缓解：同线路切软解重开 reason={reason} line={liveRoomVM?.CurrentLine?.Name}");
+                Utils.ShowMessageToast("播放卡顿，正在尝试软解恢复…", 3);
+                QueueSetPlayer(url, "StallSoftDecode");
+                return;
+            }
+
+            // 已软解仍卡：重建 demux 一次（同 URL）。
+            if (stallDemuxRebuildUsed < 1)
+            {
+                lastStallMitigationUtc = now;
+                stallDemuxRebuildUsed++;
+                LogDebugIfEnabled(() =>
+                    $"卡顿缓解：同线路重建 demux reason={reason} line={liveRoomVM?.CurrentLine?.Name}");
+                Utils.ShowMessageToast("播放卡顿，正在尝试恢复…", 3);
+                QueueSetPlayer(url, "StallDemuxRebuild");
+            }
         }
 
         private PlaybackSampleResult BuildPlaybackSample(int sampleIndex, DateTimeOffset now, DateTimeOffset? previousUtc, TimeSpan? previousPosition, TimeSpan uiDispatchDelay, int attemptVersion)
@@ -1107,6 +1167,10 @@ namespace AllLive.UWP.Views
             consecutiveSevereStallCount = 0;
             consecutiveNormalProgressCount = 0;
             playbackHealthMonitorStartedUtc = null;
+            lastStallMitigationUtc = null;
+            stallSoftDecodeUsed = 0;
+            stallDemuxRebuildUsed = 0;
+            forceSoftwareDecoderForCurrentSession = false;
             // 进房/换清晰度时允许重新提示；90s 内重复提示仍由 MaybeShowManualQualityTip 节流。
         }
 
@@ -1671,7 +1735,9 @@ namespace AllLive.UWP.Views
         private bool IsDuplicateSetPlayerRequest(string url, DateTimeOffset now, string source)
         {
             var allowRetryOfActiveUrl =
-                string.Equals(source, "RetryCurrentLine", StringComparison.OrdinalIgnoreCase) &&
+                (string.Equals(source, "RetryCurrentLine", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(source, "StallSoftDecode", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(source, "StallDemuxRebuild", StringComparison.OrdinalIgnoreCase)) &&
                 !string.IsNullOrEmpty(activeSetPlayerUrl) &&
                 string.Equals(activeSetPlayerUrl, url, StringComparison.OrdinalIgnoreCase) &&
                 string.IsNullOrWhiteSpace(pendingSetPlayerUrl);
@@ -3597,6 +3663,86 @@ namespace AllLive.UWP.Views
                 url.IndexOf(".flv", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        /// <summary>
+        /// fmp4/HLS 直播：从 live edge 回退若干分片开播，换约 2～3 秒延迟换缓冲稳定性。
+        /// </summary>
+        private void ApplyStreamSpecificFFmpegOptions(MediaSourceConfig config, string url)
+        {
+            if (config?.FFmpegOptions == null || string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+
+            if (IsHlsUrl(url))
+            {
+                // 负值表示相对 live edge 的分片偏移；1s TARGETDURATION 时 -3 ≈ 多扛约 3 秒。
+                TryAddFFmpegOption(config, "live_start_index", "-3");
+                // 稍增大分析窗口，利于 fmp4 init+首片齐套（微秒）。
+                TryAddFFmpegOption(
+                    config,
+                    "analyzeduration",
+                    ((long)HlsLiveOpenAnalyzeDuration.TotalMilliseconds * 1000).ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+                TryAddFFmpegOption(config, "probesize", "1048576");
+                // 允许扩展名（部分 CDN m3u8 引用无后缀分片）。
+                TryAddFFmpegOption(config, "allowed_extensions", "ALL");
+            }
+            else if (IsFlvUrl(url))
+            {
+                // FLV 直播：更快探测即可，避免无谓加长建源。
+                TryAddFFmpegOption(config, "analyzeduration", "500000");
+                TryAddFFmpegOption(config, "probesize", "32768");
+            }
+        }
+
+        private static void TryAddFFmpegOption(MediaSourceConfig config, string key, string value)
+        {
+            if (config?.FFmpegOptions == null || string.IsNullOrEmpty(key))
+            {
+                return;
+            }
+
+            try
+            {
+                config.FFmpegOptions.Add(key, value);
+            }
+            catch
+            {
+                // 已存在或字典实现不支持重复添加时忽略。
+            }
+        }
+
+        /// <summary>
+        /// 兼容不同 FFmpegInteropX 版本的缓冲相关属性（存在才设置，避免编译期绑死 API）。
+        /// </summary>
+        private static void TryConfigureMediaSourceBuffering(MediaSourceConfig config, string url)
+        {
+            if (config == null || !IsHlsUrl(url))
+            {
+                return;
+            }
+
+            try
+            {
+                var type = config.GetType();
+                // 部分版本提供更大读前缓冲（字节），约 3Mbps * 3s ≈ 1.1MB，取 4MB 更稳。
+                var maxBuffer = type.GetProperty("MaxBufferBytes") ?? type.GetProperty("ReadAheadBufferSize");
+                if (maxBuffer != null && maxBuffer.CanWrite && maxBuffer.PropertyType == typeof(uint))
+                {
+                    maxBuffer.SetValue(config, (uint)(4 * 1024 * 1024));
+                }
+
+                var streamBuffering = type.GetProperty("StreamBuffering");
+                if (streamBuffering != null && streamBuffering.CanWrite && streamBuffering.PropertyType == typeof(bool))
+                {
+                    streamBuffering.SetValue(config, true);
+                }
+            }
+            catch
+            {
+            }
+        }
+
         private static string TryGetHost(string url)
         {
             try
@@ -4179,6 +4325,8 @@ namespace AllLive.UWP.Views
                 config.FFmpegOptions.Add("rw_timeout",
                     ((long)MediaSourceNetworkIoTimeout.TotalMilliseconds * 1000).ToString(
                         System.Globalization.CultureInfo.InvariantCulture));
+                ApplyStreamSpecificFFmpegOptions(config, url);
+                TryConfigureMediaSourceBuffering(config, url);
                 var decoder = GetEffectiveVideoDecoderIndex();
                 switch (decoder)
                 {
@@ -4347,6 +4495,14 @@ namespace AllLive.UWP.Views
 
                 mediaPlayer.AutoPlay = true;
                 mediaPlayer.Volume = SliderVolume.Value;
+                // HLS 直播关闭 RealTimePlayback，允许 MF 侧多缓冲，降低短时 underrun。
+                try
+                {
+                    mediaPlayer.RealTimePlayback = !IsHlsUrl(url);
+                }
+                catch
+                {
+                }
                 mediaPlayer.Source = interopMSS.CreateMediaPlaybackItem();
                 player.SetMediaPlayer(mediaPlayer);
             }
@@ -5180,6 +5336,12 @@ namespace AllLive.UWP.Views
 
         private int GetEffectiveVideoDecoderIndex()
         {
+            // 卡顿缓解会话内强制软解（不写设置，关房/换清晰度后恢复用户选择）。
+            if (forceSoftwareDecoderForCurrentSession)
+            {
+                return 2;
+            }
+
             var globalDecoder = GetGlobalVideoDecoderIndex();
             var roomKey = GetRoomVideoDecoderSettingKey();
             if (string.IsNullOrEmpty(roomKey))
