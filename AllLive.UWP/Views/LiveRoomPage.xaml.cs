@@ -138,6 +138,11 @@ namespace AllLive.UWP.Views
         private static readonly TimeSpan PlaybackSlowWallThreshold = TimeSpan.FromSeconds(1.5);
         private static readonly TimeSpan UiHeartbeatDelayLogThreshold = TimeSpan.FromSeconds(2.5);
         private static readonly TimeSpan ProbeReadTimeout = TimeSpan.FromSeconds(6);
+        private static readonly TimeSpan MediaSourceCreateProgressLogDelay = TimeSpan.FromSeconds(3);
+        private static readonly TimeSpan FullFailureDiagnosticThrottle = TimeSpan.FromSeconds(20);
+        private static readonly object MediaSourceDiagnosticThrottleLock = new object();
+        private static string lastFullFailureDiagnosticKey;
+        private static DateTimeOffset lastFullFailureDiagnosticUtc = DateTimeOffset.MinValue;
         private const double PlaybackSlowRatioThreshold = 0.85;
         private const double PlaybackStallRatioThreshold = 0.20;
         private const int DefaultVideoDecoderIndex = 1;
@@ -149,6 +154,10 @@ namespace AllLive.UWP.Views
         private const uint FlvDiagnosticProbeBytes = 1048576;
         private const uint ThroughputProbeBytes = 1048576;
         private const uint ConnectivityProbeBytes = 4096;
+        private const uint HlsPlaylistProbeMaxBytes = 65536;
+        private const uint HlsSegmentProbeBytes = 8192;
+        private const int HlsSegmentProbeMaxCount = 2;
+        private const int HlsPlaylistPreviewMaxLines = 24;
         private const string ConnectivityProbeUrl = "http://www.msftconnecttest.com/connecttest.txt";
         private const int VolumeFlyoutHideDelayMilliseconds = 200;
         private bool updatingDecoderSelection;
@@ -935,10 +944,24 @@ namespace AllLive.UWP.Views
                 }
 
                 var probe = await ProbeUrlAsync(url);
-                var throughputProbe = await ProbeThroughputAsync(url);
-                var flvProbe = await ProbeFlvAsync(url);
+                string hlsProbe = null;
+                string throughputProbe = null;
+                string flvProbe = null;
+                if (IsHlsUrl(url))
+                {
+                    hlsProbe = await ProbeHlsAsync(url);
+                }
+                else if (IsFlvUrl(url))
+                {
+                    throughputProbe = await ProbeThroughputAsync(url);
+                    flvProbe = await ProbeFlvAsync(url);
+                }
+                else
+                {
+                    throughputProbe = await ProbeThroughputAsync(url);
+                }
                 var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe);
+                var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe, hlsProbe);
                 if (!IsDebugDiagnosticsEnabled())
                 {
                     return;
@@ -954,6 +977,7 @@ namespace AllLive.UWP.Views
                     BuildNetworkStateSnapshot(),
                     correlation,
                     probe,
+                    hlsProbe,
                     throughputProbe,
                     flvProbe,
                     connectivityProbe);
@@ -2132,10 +2156,24 @@ namespace AllLive.UWP.Views
                 }
 
                 var probe = await ProbeUrlAsync(url);
-                var throughputProbe = await ProbeThroughputAsync(url);
-                var flvProbe = await ProbeFlvAsync(url);
+                string hlsProbe = null;
+                string throughputProbe = null;
+                string flvProbe = null;
+                if (IsHlsUrl(url))
+                {
+                    hlsProbe = await ProbeHlsAsync(url);
+                }
+                else if (IsFlvUrl(url))
+                {
+                    throughputProbe = await ProbeThroughputAsync(url);
+                    flvProbe = await ProbeFlvAsync(url);
+                }
+                else
+                {
+                    throughputProbe = await ProbeThroughputAsync(url);
+                }
                 var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe);
+                var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe, hlsProbe);
                 if (!IsDebugDiagnosticsEnabled())
                 {
                     return;
@@ -2150,6 +2188,7 @@ namespace AllLive.UWP.Views
                     BuildNetworkStateSnapshot(),
                     correlation,
                     probe,
+                    hlsProbe,
                     throughputProbe,
                     flvProbe,
                     connectivityProbe);
@@ -2411,9 +2450,22 @@ namespace AllLive.UWP.Views
             {
                 sb.AppendLine($"异常信息: {ex.Message}");
             }
+            var openClass = ClassifyMediaSourceOpenFailure(ex, elapsedMs: -1, timeout: null);
+            if (!string.IsNullOrEmpty(openClass))
+            {
+                sb.AppendLine($"OpenFailureClassHint: {openClass}");
+            }
+            if (ex.HResult == unchecked((int)0x80004005))
+            {
+                sb.AppendLine("E_FAIL提示: FFmpeg/WinRT 常将 demux 打开失败折叠为“未指定的错误”，需结合 HLS/分片预检判断。");
+            }
             if (ex.TargetSite != null)
             {
                 sb.AppendLine($"TargetSite: {ex.TargetSite.DeclaringType?.FullName}.{ex.TargetSite.Name}");
+            }
+            if (ex.Source != null)
+            {
+                sb.AppendLine($"ExceptionSource: {ex.Source}");
             }
             if (ex is AggregateException aggregate && aggregate.InnerExceptions != null && aggregate.InnerExceptions.Count > 0)
             {
@@ -2422,8 +2474,12 @@ namespace AllLive.UWP.Views
                 {
                     sb.AppendLine($"AggregateInner[{index}]: {inner.GetType().FullName} (0x{inner.HResult:X8}) {inner.Message}");
                     index++;
+                    if (index >= 6)
+                    {
+                        sb.AppendLine($"AggregateInner剩余: {aggregate.InnerExceptions.Count - index}");
+                        break;
+                    }
                 }
-                return sb.ToString().TrimEnd();
             }
             var innerDepth = 0;
             var innerEx = ex.InnerException;
@@ -3004,21 +3060,39 @@ namespace AllLive.UWP.Views
             {
                 sb.AppendLine($"{title}结果分类: NoData");
             }
-            else if (read.ElapsedMs > 0)
+            else
             {
-                var kbps = read.BytesRead * 1000.0 / read.ElapsedMs / 1024.0;
-                sb.AppendLine($"{title}结果分类: {(kbps < 128 ? "VerySlowRead" : "Readable")}");
+                // 小 playlist/对照文本在 0~几 ms 内读完时，用 KBps 会误报 VerySlowRead。
+                if (read.ElapsedMs <= 50 && read.BytesRead < 4096)
+                {
+                    sb.AppendLine($"{title}结果分类: SmallPayloadFast");
+                }
+                else if (read.ElapsedMs <= 0)
+                {
+                    sb.AppendLine($"{title}结果分类: Readable");
+                }
+                else
+                {
+                    var kbps = read.BytesRead * 1000.0 / read.ElapsedMs / 1024.0;
+                    sb.AppendLine($"{title}结果分类: {(kbps < 128 ? "VerySlowRead" : "Readable")}");
+                }
             }
         }
-        private string BuildProbeCorrelationSummary(string urlProbe, string throughputProbe, string flvProbe, string connectivityProbe)
+        private string BuildProbeCorrelationSummary(
+            string urlProbe,
+            string throughputProbe,
+            string flvProbe,
+            string connectivityProbe,
+            string hlsProbe = null)
         {
             if (!IsDebugDiagnosticsEnabled())
             {
                 return null;
             }
 
-            var targetText = JoinNonEmpty(urlProbe, throughputProbe, flvProbe) ?? string.Empty;
+            var targetText = JoinNonEmpty(urlProbe, throughputProbe, flvProbe, hlsProbe) ?? string.Empty;
             var baselineText = connectivityProbe ?? string.Empty;
+            var hlsText = hlsProbe ?? string.Empty;
             var targetDnsFailure = ContainsOrdinalIgnoreCase(targetText, "NetworkFailureCategory: DnsNameResolutionFailure");
             var targetConnectFailure = ContainsOrdinalIgnoreCase(targetText, "NetworkFailureCategory: ConnectFailure");
             var targetTimeout = ContainsOrdinalIgnoreCase(targetText, "NetworkFailureCategory: NetworkTimeout") ||
@@ -3033,7 +3107,12 @@ namespace AllLive.UWP.Views
                 ContainsOrdinalIgnoreCase(baselineText, "结果分类: ReadTimeout") ||
                 ContainsOrdinalIgnoreCase(baselineText, "结果分类: NoData");
             var baselineSuccess = ContainsOrdinalIgnoreCase(baselineText, "HttpStatusCategory: Success") &&
-                ContainsOrdinalIgnoreCase(baselineText, "对照读取结果分类: Readable");
+                (ContainsOrdinalIgnoreCase(baselineText, "对照读取结果分类: Readable") ||
+                 ContainsOrdinalIgnoreCase(baselineText, "对照读取结果分类: SmallPayloadFast"));
+            var hlsPlaylistOk = ContainsOrdinalIgnoreCase(hlsText, "HlsPlaylistReachable: True");
+            var hlsSegmentOk = ContainsOrdinalIgnoreCase(hlsText, "HlsFirstSegmentReachable: True");
+            var hlsSegmentFail = ContainsOrdinalIgnoreCase(hlsText, "HlsFirstSegmentReachable: False");
+            var hlsMasterOnly = ContainsOrdinalIgnoreCase(hlsText, "HlsPlaylistKind: Master");
 
             var sb = new StringBuilder();
             sb.AppendLine("网络探测归因:");
@@ -3042,6 +3121,8 @@ namespace AllLive.UWP.Views
             sb.AppendLine($"TargetTimeout: {targetTimeout}");
             sb.AppendLine($"TargetSlowRead: {targetSlowRead}");
             sb.AppendLine($"TargetHttpFailure: {targetHttpFailure}");
+            sb.AppendLine($"HlsPlaylistReachable: {hlsPlaylistOk}");
+            sb.AppendLine($"HlsFirstSegmentReachable: {(hlsSegmentOk ? "True" : hlsSegmentFail ? "False" : "Unknown")}");
             sb.AppendLine($"BaselineSuccess: {baselineSuccess}");
             sb.AppendLine($"BaselineFailure: {baselineFailure}");
             if (targetDnsFailure && baselineSuccess)
@@ -3055,6 +3136,18 @@ namespace AllLive.UWP.Views
             else if (targetConnectFailure && baselineSuccess)
             {
                 sb.AppendLine("LikelyRoot: CurrentCdnConnectionFailure");
+            }
+            else if (hlsSegmentFail)
+            {
+                sb.AppendLine("LikelyRoot: HlsSegmentFetchFailure");
+            }
+            else if (hlsMasterOnly)
+            {
+                sb.AppendLine("LikelyRoot: HlsMasterPlaylistNeedsVariantSelection");
+            }
+            else if (hlsPlaylistOk && !targetHttpFailure && !targetConnectFailure)
+            {
+                sb.AppendLine("LikelyRoot: FFmpegOpenFailureDespiteReachablePlaylist");
             }
             else if ((targetSlowRead || targetTimeout) && baselineSuccess)
             {
@@ -3258,14 +3351,44 @@ namespace AllLive.UWP.Views
         {
             try
             {
+                string throttleNote;
+                if (!TryAcquireFullFailureDiagnosticSlot(url, ex, out throttleNote))
+                {
+                    LogDebugIfEnabled(() => JoinNonEmpty(
+                        $"{title}后台网络诊断已节流",
+                        throttleNote,
+                        failureSummary,
+                        BuildExceptionSummary(ex),
+                        BuildUrlSummary(url)));
+                    return;
+                }
+
                 var probe = await ProbeUrlAsync(url);
+                string hlsProbe = null;
+                string throughputProbe = null;
+                string flvProbe = null;
+                if (IsHlsUrl(url))
+                {
+                    hlsProbe = await ProbeHlsAsync(url);
+                }
+                else if (IsFlvUrl(url))
+                {
+                    throughputProbe = await ProbeThroughputAsync(url);
+                    flvProbe = await ProbeFlvAsync(url);
+                }
+                else
+                {
+                    throughputProbe = await ProbeThroughputAsync(url);
+                }
+
                 var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                var correlation = BuildProbeCorrelationSummary(probe, null, null, connectivityProbe);
+                var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe, hlsProbe);
                 if (!IsDebugDiagnosticsEnabled())
                 {
                     return;
                 }
 
+                lastProbeSnapshot = JoinNonEmpty(correlation, probe, hlsProbe, throughputProbe, flvProbe, connectivityProbe);
                 var merged = JoinNonEmpty(
                     $"{title}后台网络诊断（不阻塞切换线路）",
                     playbackContext,
@@ -3275,6 +3398,9 @@ namespace AllLive.UWP.Views
                     BuildExceptionDetail(ex),
                     correlation,
                     probe,
+                    hlsProbe,
+                    throughputProbe,
+                    flvProbe,
                     connectivityProbe);
                 if (!string.IsNullOrEmpty(merged))
                 {
@@ -3285,6 +3411,626 @@ namespace AllLive.UWP.Views
             {
                 LogDebugIfEnabled(() => $"播放器失败后台诊断异常: {diagnosticEx.GetType().FullName} 0x{diagnosticEx.HResult:X8} {diagnosticEx.Message}");
             }
+        }
+
+        private bool TryAcquireFullFailureDiagnosticSlot(string url, Exception ex, out string throttleNote)
+        {
+            throttleNote = null;
+            var key = BuildFailureDiagnosticKey(url, ex);
+            lock (MediaSourceDiagnosticThrottleLock)
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (!string.IsNullOrEmpty(lastFullFailureDiagnosticKey) &&
+                    string.Equals(lastFullFailureDiagnosticKey, key, StringComparison.Ordinal) &&
+                    (now - lastFullFailureDiagnosticUtc) < FullFailureDiagnosticThrottle)
+                {
+                    throttleNote =
+                        $"节流键={key} 距上次完整诊断={(now - lastFullFailureDiagnosticUtc).TotalSeconds:F0}s 窗口={FullFailureDiagnosticThrottle.TotalSeconds:F0}s";
+                    return false;
+                }
+
+                lastFullFailureDiagnosticKey = key;
+                lastFullFailureDiagnosticUtc = now;
+                return true;
+            }
+        }
+
+        private static string BuildFailureDiagnosticKey(string url, Exception ex)
+        {
+            var host = "unknown";
+            var kindTag = "other";
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    var uri = new Uri(url);
+                    host = uri.Host ?? "unknown";
+                    var path = uri.AbsolutePath ?? string.Empty;
+                    if (path.IndexOf("_hevc", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        kindTag = "hevc";
+                    }
+                    else if (path.IndexOf("_av1", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        kindTag = "av1";
+                    }
+                    else if (path.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        kindTag = "hls-avc";
+                    }
+                    else if (path.IndexOf(".flv", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        kindTag = "flv";
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            var failKind = ex is TimeoutException ? "timeout" : "fail";
+            var hr = ex != null ? $"0x{ex.HResult:X8}" : "none";
+            return failKind + "|" + hr + "|" + host + "|" + kindTag;
+        }
+
+        private static bool IsHlsUrl(string url)
+        {
+            return !string.IsNullOrWhiteSpace(url) &&
+                url.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsFlvUrl(string url)
+        {
+            return !string.IsNullOrWhiteSpace(url) &&
+                url.IndexOf(".flv", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string TryGetHost(string url)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(url))
+                {
+                    return "unknown";
+                }
+                return new Uri(url).Host;
+            }
+            catch
+            {
+                return "invalid-url";
+            }
+        }
+
+        private static string ClassifyMediaSourceOpenFailure(Exception ex, double elapsedMs, TimeSpan? timeout)
+        {
+            if (ex == null)
+            {
+                return "None";
+            }
+            if (ex is TimeoutException)
+            {
+                return "CreateTimeout";
+            }
+            if (ex is OperationCanceledException || ex is TaskCanceledException)
+            {
+                return "CreateCancelled";
+            }
+
+            var hr = ex.HResult;
+            if (hr == unchecked((int)0x80004005))
+            {
+                if (timeout.HasValue && elapsedMs >= 0 &&
+                    elapsedMs >= timeout.Value.TotalMilliseconds * 0.9)
+                {
+                    return "LikelyTimeoutSurfacedAsEFail";
+                }
+                if (elapsedMs >= 0 && elapsedMs < 1500)
+                {
+                    return "FastOpenEFail";
+                }
+                return "FFmpegOpenEFail";
+            }
+            if (hr == unchecked((int)0x80070057))
+            {
+                return "InvalidArgument";
+            }
+            if (hr == unchecked((int)0x80070005))
+            {
+                return "AccessDenied";
+            }
+            return "OtherOpenFailure";
+        }
+
+        private string BuildMediaSourceCreateFailureSummary(Exception ex, double elapsedMs, TimeSpan? timeout, string url)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("建源失败摘要:");
+            sb.AppendLine($"ElapsedMs: {elapsedMs:F0}");
+            if (timeout.HasValue)
+            {
+                sb.AppendLine($"ConfiguredTimeoutSec: {timeout.Value.TotalSeconds:F0}");
+            }
+            sb.AppendLine($"StreamKind: {(IsHlsUrl(url) ? "HLS" : IsFlvUrl(url) ? "FLV" : "Other")}");
+            sb.AppendLine($"Host: {TryGetHost(url)}");
+            sb.AppendLine($"OpenFailureClass: {ClassifyMediaSourceOpenFailure(ex, elapsedMs, timeout)}");
+            if (ex != null)
+            {
+                sb.AppendLine($"Exception: {ex.GetType().FullName} 0x{ex.HResult:X8} {ex.Message}");
+            }
+            return sb.ToString().TrimEnd();
+        }
+
+        private void ScheduleMediaSourceCreateProgressLog(
+            MediaSourceCreateAttempt attempt,
+            string url,
+            int attemptVersion,
+            DateTimeOffset startedUtc,
+            TimeSpan timeout)
+        {
+            if (!IsDebugDiagnosticsEnabled() || attempt == null)
+            {
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(MediaSourceCreateProgressLogDelay, attempt.CancellationToken);
+                    if (!IsDebugDiagnosticsEnabled() ||
+                        !IsMediaSourceAttemptCurrent(attemptVersion) ||
+                        attempt.CreateTask.IsCompleted)
+                    {
+                        return;
+                    }
+
+                    var elapsed = (DateTimeOffset.UtcNow - startedUtc).TotalMilliseconds;
+                    LogDebugIfEnabled(() =>
+                        $"播放器建源进行中 elapsedMs={elapsed:F0} timeoutSec={timeout.TotalSeconds:F0} host={TryGetHost(url)} urlHash={url?.GetHashCode()} 线路={liveRoomVM?.CurrentLine?.Name}");
+                }
+                catch (TaskCanceledException)
+                {
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch
+                {
+                }
+            });
+        }
+
+        private async Task<string> ProbeHlsAsync(string url)
+        {
+            if (!IsDebugDiagnosticsEnabled() || string.IsNullOrWhiteSpace(url) || !IsHlsUrl(url))
+            {
+                return null;
+            }
+
+            var probeStarted = Stopwatch.StartNew();
+            try
+            {
+                var playlistUri = new Uri(url);
+                var sb = new StringBuilder();
+                sb.AppendLine("HLS深度预检:");
+                sb.AppendLine($"Host: {playlistUri.Host}");
+                sb.AppendLine($"Path: {playlistUri.AbsolutePath}");
+                AppendProbeTargetSummary(sb, playlistUri);
+
+                using (var client = new HttpClient())
+                using (var request = new HttpRequestMessage(HttpMethod.Get, playlistUri))
+                {
+                    ApplyProbeHeaders(request);
+                    var responseStarted = Stopwatch.StartNew();
+                    var response = await client.SendRequestAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                    responseStarted.Stop();
+                    sb.AppendLine($"GET playlist => {(int)response.StatusCode} {response.ReasonPhrase} headerElapsedMs={responseStarted.ElapsedMilliseconds}");
+                    AppendHttpStatusClassification(sb, response.StatusCode);
+                    if (response.Content?.Headers?.ContentType != null)
+                    {
+                        sb.AppendLine($"Content-Type: {response.Content.Headers.ContentType}");
+                    }
+                    if (response.Content?.Headers?.ContentLength != null)
+                    {
+                        sb.AppendLine($"Content-Length: {response.Content.Headers.ContentLength}");
+                    }
+                    if (response.Content == null)
+                    {
+                        sb.AppendLine("HlsPlaylistReachable: False");
+                        sb.AppendLine("响应无 Content");
+                        probeStarted.Stop();
+                        sb.AppendLine($"HLS深度预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
+                        return sb.ToString().TrimEnd();
+                    }
+
+                    using (var stream = await response.Content.ReadAsInputStreamAsync())
+                    {
+                        var read = await ReadProbeBytesAsync(stream, HlsPlaylistProbeMaxBytes, ProbeReadTimeout);
+                        AppendProbeReadSummary(sb, "HLS清单读取", read);
+                        if (read.BytesRead == 0 || read.Buffer == null)
+                        {
+                            sb.AppendLine("HlsPlaylistReachable: False");
+                            sb.AppendLine("清单读取为空");
+                        }
+                        else
+                        {
+                            var text = Encoding.UTF8.GetString(read.Buffer, 0, (int)read.BytesRead);
+                            sb.AppendLine(AnalyzeHlsPlaylist(text));
+                            var segmentUris = ExtractHlsMediaSegmentUris(playlistUri, text, HlsSegmentProbeMaxCount);
+                            if (segmentUris.Count == 0)
+                            {
+                                sb.AppendLine("HlsFirstSegmentReachable: False");
+                                sb.AppendLine("未解析到媒体分片 URL（可能是 Master 或空清单）");
+                            }
+                            else
+                            {
+                                var firstOk = false;
+                                for (var i = 0; i < segmentUris.Count; i++)
+                                {
+                                    var segmentProbe = await ProbeHlsSegmentAsync(segmentUris[i], i);
+                                    sb.AppendLine(segmentProbe);
+                                    if (ContainsOrdinalIgnoreCase(segmentProbe, "SegmentReachable: True"))
+                                    {
+                                        firstOk = true;
+                                    }
+                                }
+                                sb.AppendLine($"HlsFirstSegmentReachable: {(firstOk ? "True" : "False")}");
+                            }
+                        }
+                    }
+                }
+
+                probeStarted.Stop();
+                sb.AppendLine($"HLS深度预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
+                return sb.ToString().TrimEnd();
+            }
+            catch (Exception ex)
+            {
+                probeStarted.Stop();
+                return BuildProbeFailure("HLS深度预检失败", ex, probeStarted.ElapsedMilliseconds);
+            }
+        }
+
+        private string AnalyzeHlsPlaylist(string text)
+        {
+            var sb = new StringBuilder();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                sb.AppendLine("HlsPlaylistReachable: False");
+                sb.AppendLine("清单文本为空");
+                return sb.ToString().TrimEnd();
+            }
+
+            var startsWithM3u = text.StartsWith("#EXTM3U", StringComparison.OrdinalIgnoreCase);
+            sb.AppendLine($"HlsPlaylistReachable: {startsWithM3u}");
+            if (!startsWithM3u)
+            {
+                sb.AppendLine("清单首行不是 #EXTM3U");
+                sb.AppendLine($"清单预览: {TrimForLog(text, 180)}");
+                return sb.ToString().TrimEnd();
+            }
+
+            var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            var hasStreamInf = false;
+            var hasExtInf = false;
+            var hasEndList = false;
+            var hasMap = false;
+            var hasIndependentSegments = false;
+            var version = string.Empty;
+            var targetDuration = string.Empty;
+            var mediaSequence = string.Empty;
+            var playlistType = string.Empty;
+            var codecs = string.Empty;
+            var extInfCount = 0;
+            var streamInfCount = 0;
+            var preview = new StringBuilder();
+            var previewLines = 0;
+
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var raw = lines[i];
+                if (raw == null)
+                {
+                    continue;
+                }
+                var line = raw.Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+                if (previewLines < HlsPlaylistPreviewMaxLines)
+                {
+                    preview.AppendLine(line.Length > 180 ? line.Substring(0, 180) + "..." : line);
+                    previewLines++;
+                }
+
+                if (line.StartsWith("#EXT-X-VERSION:", StringComparison.OrdinalIgnoreCase))
+                {
+                    version = line.Substring("#EXT-X-VERSION:".Length).Trim();
+                }
+                else if (line.StartsWith("#EXT-X-TARGETDURATION:", StringComparison.OrdinalIgnoreCase))
+                {
+                    targetDuration = line.Substring("#EXT-X-TARGETDURATION:".Length).Trim();
+                }
+                else if (line.StartsWith("#EXT-X-MEDIA-SEQUENCE:", StringComparison.OrdinalIgnoreCase))
+                {
+                    mediaSequence = line.Substring("#EXT-X-MEDIA-SEQUENCE:".Length).Trim();
+                }
+                else if (line.StartsWith("#EXT-X-PLAYLIST-TYPE:", StringComparison.OrdinalIgnoreCase))
+                {
+                    playlistType = line.Substring("#EXT-X-PLAYLIST-TYPE:".Length).Trim();
+                }
+                else if (line.StartsWith("#EXT-X-MAP:", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasMap = true;
+                }
+                else if (line.StartsWith("#EXT-X-INDEPENDENT-SEGMENTS", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasIndependentSegments = true;
+                }
+                else if (line.StartsWith("#EXT-X-ENDLIST", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasEndList = true;
+                }
+                else if (line.StartsWith("#EXT-X-STREAM-INF:", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasStreamInf = true;
+                    streamInfCount++;
+                    var codecValue = ExtractHlsAttribute(line, "CODECS");
+                    if (!string.IsNullOrEmpty(codecValue) && string.IsNullOrEmpty(codecs))
+                    {
+                        codecs = codecValue;
+                    }
+                }
+                else if (line.StartsWith("#EXTINF:", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasExtInf = true;
+                    extInfCount++;
+                }
+            }
+
+            string kind;
+            if (hasStreamInf && !hasExtInf)
+            {
+                kind = "Master";
+            }
+            else if (hasExtInf)
+            {
+                kind = hasEndList ? "MediaVod" : "MediaLive";
+            }
+            else
+            {
+                kind = "Unknown";
+            }
+
+            sb.AppendLine($"HlsPlaylistKind: {kind}");
+            if (!string.IsNullOrEmpty(version)) sb.AppendLine($"EXT-X-VERSION: {version}");
+            if (!string.IsNullOrEmpty(targetDuration)) sb.AppendLine($"EXT-X-TARGETDURATION: {targetDuration}");
+            if (!string.IsNullOrEmpty(mediaSequence)) sb.AppendLine($"EXT-X-MEDIA-SEQUENCE: {mediaSequence}");
+            if (!string.IsNullOrEmpty(playlistType)) sb.AppendLine($"EXT-X-PLAYLIST-TYPE: {playlistType}");
+            if (!string.IsNullOrEmpty(codecs)) sb.AppendLine($"CODECS: {codecs}");
+            sb.AppendLine($"EXTINF条数: {extInfCount}");
+            sb.AppendLine($"STREAM-INF条数: {streamInfCount}");
+            sb.AppendLine($"HasMap: {hasMap}");
+            sb.AppendLine($"IndependentSegments: {hasIndependentSegments}");
+            sb.AppendLine($"HasEndList: {hasEndList}");
+            sb.AppendLine($"清单字节: {Encoding.UTF8.GetByteCount(text)}");
+            sb.AppendLine("清单预览:");
+            sb.Append(preview.ToString().TrimEnd());
+            return sb.ToString().TrimEnd();
+        }
+
+        private static string ExtractHlsAttribute(string line, string name)
+        {
+            if (string.IsNullOrEmpty(line) || string.IsNullOrEmpty(name))
+            {
+                return null;
+            }
+            var token = name + "=";
+            var index = line.IndexOf(token, StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+            {
+                return null;
+            }
+            var start = index + token.Length;
+            if (start >= line.Length)
+            {
+                return null;
+            }
+            if (line[start] == '"')
+            {
+                var end = line.IndexOf('"', start + 1);
+                if (end > start)
+                {
+                    return line.Substring(start + 1, end - start - 1);
+                }
+                return null;
+            }
+            var comma = line.IndexOf(',', start);
+            if (comma < 0)
+            {
+                return line.Substring(start).Trim();
+            }
+            return line.Substring(start, comma - start).Trim();
+        }
+
+        private static List<Uri> ExtractHlsMediaSegmentUris(Uri playlistUri, string text, int maxCount)
+        {
+            var result = new List<Uri>();
+            if (playlistUri == null || string.IsNullOrWhiteSpace(text) || maxCount <= 0)
+            {
+                return result;
+            }
+
+            var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            for (var i = 0; i < lines.Length && result.Count < maxCount; i++)
+            {
+                var line = (lines[i] ?? string.Empty).Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+                if (line.StartsWith("#EXT-X-MAP:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var mapUri = ExtractHlsAttribute(line, "URI");
+                    Uri absoluteMap;
+                    if (!string.IsNullOrEmpty(mapUri) && Uri.TryCreate(playlistUri, mapUri, out absoluteMap))
+                    {
+                        result.Add(absoluteMap);
+                    }
+                    continue;
+                }
+                if (line[0] == '#')
+                {
+                    continue;
+                }
+                // Master 变体 URL 也是非注释行；仅在前面有 EXTINF 时当作媒体分片。
+                var prev = i > 0 ? (lines[i - 1] ?? string.Empty).Trim() : string.Empty;
+                if (!prev.StartsWith("#EXTINF:", StringComparison.OrdinalIgnoreCase) &&
+                    !prev.StartsWith("#EXT-X-BYTERANGE:", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 允许 BYTERANGE 后的 URI；若再上一行是 EXTINF 也接受。
+                    var prev2 = i > 1 ? (lines[i - 2] ?? string.Empty).Trim() : string.Empty;
+                    if (!prev2.StartsWith("#EXTINF:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                }
+                Uri absolute;
+                if (Uri.TryCreate(playlistUri, line, out absolute))
+                {
+                    result.Add(absolute);
+                }
+            }
+            return result;
+        }
+
+        private async Task<string> ProbeHlsSegmentAsync(Uri segmentUri, int index)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"HLS分片[{index}]:");
+            if (segmentUri == null)
+            {
+                sb.AppendLine("SegmentReachable: False");
+                sb.AppendLine("分片 URI 为空");
+                return sb.ToString().TrimEnd();
+            }
+
+            sb.AppendLine($"Host: {segmentUri.Host}");
+            sb.AppendLine($"Path: {segmentUri.AbsolutePath}");
+            sb.AppendLine($"QueryLength: {segmentUri.Query?.Length ?? 0}");
+            var probeStarted = Stopwatch.StartNew();
+            try
+            {
+                using (var client = new HttpClient())
+                using (var request = new HttpRequestMessage(HttpMethod.Get, segmentUri))
+                {
+                    ApplyProbeHeaders(request);
+                    request.Headers.Append("Range", $"bytes=0-{HlsSegmentProbeBytes - 1}");
+                    var responseStarted = Stopwatch.StartNew();
+                    var response = await client.SendRequestAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                    responseStarted.Stop();
+                    var code = (int)response.StatusCode;
+                    sb.AppendLine($"GET Range=0-{HlsSegmentProbeBytes - 1} => {code} {response.ReasonPhrase} headerElapsedMs={responseStarted.ElapsedMilliseconds}");
+                    AppendHttpStatusClassification(sb, response.StatusCode);
+                    if (response.Content?.Headers?.ContentType != null)
+                    {
+                        sb.AppendLine($"Content-Type: {response.Content.Headers.ContentType}");
+                    }
+                    if (response.Content?.Headers?.ContentLength != null)
+                    {
+                        sb.AppendLine($"Content-Length: {response.Content.Headers.ContentLength}");
+                    }
+                    var httpOk = code >= 200 && code <= 299;
+                    if (!httpOk || response.Content == null)
+                    {
+                        sb.AppendLine("SegmentReachable: False");
+                        probeStarted.Stop();
+                        sb.AppendLine($"分片预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
+                        return sb.ToString().TrimEnd();
+                    }
+
+                    using (var stream = await response.Content.ReadAsInputStreamAsync())
+                    {
+                        var read = await ReadProbeBytesAsync(stream, HlsSegmentProbeBytes, ProbeReadTimeout);
+                        AppendProbeReadSummary(sb, "分片首包", read);
+                        if (read.BytesRead == 0 || read.Buffer == null)
+                        {
+                            sb.AppendLine("SegmentReachable: False");
+                            sb.AppendLine("分片首包为空");
+                        }
+                        else
+                        {
+                            sb.AppendLine("SegmentReachable: True");
+                            sb.AppendLine($"分片媒体签名: {ClassifyMediaBytes(read.Buffer, (int)read.BytesRead)}");
+                            sb.AppendLine(AnalyzeFirstBytes(read.Buffer));
+                        }
+                    }
+                    probeStarted.Stop();
+                    sb.AppendLine($"分片预检耗时Ms: {probeStarted.ElapsedMilliseconds}");
+                    return sb.ToString().TrimEnd();
+                }
+            }
+            catch (Exception ex)
+            {
+                probeStarted.Stop();
+                sb.AppendLine("SegmentReachable: False");
+                sb.AppendLine(BuildProbeFailure("分片请求失败", ex, probeStarted.ElapsedMilliseconds));
+                return sb.ToString().TrimEnd();
+            }
+        }
+
+        private static string ClassifyMediaBytes(byte[] buffer, int length)
+        {
+            if (buffer == null || length <= 0)
+            {
+                return "Empty";
+            }
+            if (length >= 3 && buffer[0] == (byte)'F' && buffer[1] == (byte)'L' && buffer[2] == (byte)'V')
+            {
+                return "FLV";
+            }
+            if (length >= 7)
+            {
+                var ascii = Encoding.ASCII.GetString(buffer, 0, Math.Min(length, 16));
+                if (ascii.StartsWith("#EXTM3U", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "M3U8";
+                }
+            }
+            var scanLimit = Math.Min(length - 4, 64);
+            for (var i = 0; i <= scanLimit; i++)
+            {
+                if (buffer[i] == (byte)'f' && buffer[i + 1] == (byte)'t' &&
+                    buffer[i + 2] == (byte)'y' && buffer[i + 3] == (byte)'p')
+                {
+                    return "FMP4/ISOBMFF";
+                }
+                if (buffer[i] == (byte)'m' && buffer[i + 1] == (byte)'o' &&
+                    buffer[i + 2] == (byte)'o' && buffer[i + 3] == (byte)'f')
+                {
+                    return "FMP4/MOOF";
+                }
+            }
+            if (buffer[0] == 0x47)
+            {
+                return "PossibleMPEGTS";
+            }
+            return "UnknownBinary";
+        }
+
+        private static string TrimForLog(string text, int maxChars)
+        {
+            if (string.IsNullOrEmpty(text) || maxChars <= 0)
+            {
+                return text;
+            }
+            var normalized = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            if (normalized.Length <= maxChars)
+            {
+                return normalized;
+            }
+            return normalized.Substring(0, maxChars) + "...";
         }
         private async Task SetPlayer(string url)
         {
@@ -3381,13 +4127,22 @@ namespace AllLive.UWP.Views
                         LogHelper.Log(attemptLog, LogType.DEBUG);
                     }
                 }
+                var createStartedUtc = DateTimeOffset.UtcNow;
+                TimeSpan? createTimeoutUsed = null;
                 try
                 {
                     var createTimeout = GetMediaSourceCreateTimeout(url);
-                    var createStartedUtc = DateTimeOffset.UtcNow;
+                    createTimeoutUsed = createTimeout;
+                    createStartedUtc = DateTimeOffset.UtcNow;
                     createAttempt = RegisterMediaSourceCreateAttempt(
                         attemptVersion,
                         FFmpegMediaSource.CreateFromUriAsync(url, config));
+                    ScheduleMediaSourceCreateProgressLog(
+                        createAttempt,
+                        url,
+                        attemptVersion,
+                        createStartedUtc,
+                        createTimeout);
                     var createTask = createAttempt.CreateTask;
                     var cancellationTask = Task.Delay(
                         System.Threading.Timeout.InfiniteTimeSpan,
@@ -3408,7 +4163,12 @@ namespace AllLive.UWP.Views
                         createAttempt = null;
                         var timeoutException = new TimeoutException($"FFmpegMediaSource.CreateFromUriAsync 超时 {createTimeout.TotalSeconds:F0}s");
                         var playbackContext = IsDebugDiagnosticsEnabled() ? BuildPlaybackContext() : null;
-                        var timeoutSummary = $"播放器建源超时: {createTimeout.TotalSeconds:F0}s elapsedMs={(DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds:F0}";
+                        var elapsedMs = (DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds;
+                        var timeoutSummary = BuildMediaSourceCreateFailureSummary(
+                            timeoutException,
+                            elapsedMs,
+                            createTimeout,
+                            url);
                         if (IsDebugDiagnosticsEnabled())
                         {
                             LogPlayError("播放器初始化超时，立即切换下一线路", timeoutException,
@@ -3457,11 +4217,17 @@ namespace AllLive.UWP.Views
                     }
                     if (IsDebugDiagnosticsEnabled())
                     {
+                        var elapsedMs = (DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds;
+                        var failureSummary = BuildMediaSourceCreateFailureSummary(
+                            ex,
+                            elapsedMs,
+                            createTimeoutUsed,
+                            url);
                         var playbackContext = BuildPlaybackContext();
                         LogPlayError("播放器初始化失败，立即切换下一线路", ex,
-                            JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, "详细网络诊断已转入后台"));
+                            JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, failureSummary, "详细网络诊断已转入后台"));
                         StartMediaSourceFailureDiagnostics("播放器初始化失败", ex, url,
-                            playbackContext, lastConfigSnapshot, lastUrlAnalysis, null);
+                            playbackContext, lastConfigSnapshot, lastUrlAnalysis, failureSummary);
                     }
                     PlayError();
                     return;
@@ -3482,10 +4248,22 @@ namespace AllLive.UWP.Views
                 if (IsDebugDiagnosticsEnabled())
                 {
                     var probe = await ProbeUrlAsync(url);
+                    string hlsProbe = null;
+                    string throughputProbe = null;
+                    string flvProbe = null;
+                    if (IsHlsUrl(url))
+                    {
+                        hlsProbe = await ProbeHlsAsync(url);
+                    }
+                    else if (IsFlvUrl(url))
+                    {
+                        throughputProbe = await ProbeThroughputAsync(url);
+                        flvProbe = await ProbeFlvAsync(url);
+                    }
                     var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                    var correlation = BuildProbeCorrelationSummary(probe, null, null, connectivityProbe);
-                    lastProbeSnapshot = probe;
-                    mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, correlation, probe, connectivityProbe);
+                    var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe, hlsProbe);
+                    lastProbeSnapshot = JoinNonEmpty(correlation, probe, hlsProbe, throughputProbe, flvProbe, connectivityProbe);
+                    mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, correlation, probe, hlsProbe, throughputProbe, flvProbe, connectivityProbe);
                 }
                 if (IsDebugDiagnosticsEnabled())
                 {

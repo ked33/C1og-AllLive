@@ -1,6 +1,6 @@
 {
-	"version": "2.3.54",
-	"versionCode": 20354,
-	"message": "1. 直播建源超时、切线或关闭窗口时取消底层网络操作\n2. 为所有直播源增加建源与网络读写超时保护\n3. 防止过期建源长期占用代理连接和 CPU",
+	"version": "2.3.55",
+	"versionCode": 20355,
+	"message": "1. 补强直播建源失败诊断：HLS 清单/分片深度预检与建源耗时摘要\n2. 修复小包探针误报 VerySlowRead，完善网络归因\n3. 完整诊断节流防抖，避免同 CDN 失败刷屏",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }
