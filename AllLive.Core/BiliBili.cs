@@ -590,22 +590,14 @@ namespace AllLive.Core
             var client = await CreateBilibiliPlayInfoHttpClientAsync();
             using (client)
             {
-                var playurl = (await RequestBilibiliPlayInfoAsync(client, roomID, null, "0"))?["data"]?["playurl_info"]?["playurl"];
-                var qualitiesMap = new Dictionary<int, string>();
-                foreach (var item in playurl?["g_qn_desc"] ?? new JArray())
-                {
-                    qualitiesMap[item["qn"].ToObject<int>()] = item["desc"]?.ToString() ?? "未知清晰度";
-                }
+                var playurl = await RequestBilibiliPlayUrlAsync(client, roomID, null, "0");
+                var qualitiesMap = GetBilibiliQualityDescriptions(playurl);
                 var acceptQnList = GetBilibiliAcceptQnList(playurl);
                 if (acceptQnList.Count == 0)
                 {
                     CoreDebug.Log(() => $"[Bilibili] AVC清晰度为空，尝试HEVC兜底 roomId={roomID}");
-                    playurl = (await RequestBilibiliPlayInfoAsync(client, roomID, null, "0,1"))?["data"]?["playurl_info"]?["playurl"];
-                    qualitiesMap.Clear();
-                    foreach (var item in playurl?["g_qn_desc"] ?? new JArray())
-                    {
-                        qualitiesMap[item["qn"].ToObject<int>()] = item["desc"]?.ToString() ?? "未知清晰度";
-                    }
+                    playurl = await RequestBilibiliPlayUrlAsync(client, roomID, null, "0,1");
+                    qualitiesMap = GetBilibiliQualityDescriptions(playurl);
                     acceptQnList = GetBilibiliAcceptQnList(playurl);
                 }
                 if (acceptQnList.Count == 0)
@@ -637,7 +629,13 @@ namespace AllLive.Core
             List<LivePlayQuality> qualities = new List<LivePlayQuality>();
             var result = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/playUrl?cid={roomID}&qn=&platform=web", headers: await GetRequestHeader());
             var obj = JObject.Parse(result);
-            var qualityDescription = obj["data"]?["quality_description"] as JArray;
+            if (obj["code"]?.ToObject<int>() != 0)
+            {
+                CoreDebug.Log(() => $"[Bilibili] 旧接口获取清晰度失败 roomId={roomID} code={obj["code"]} message={obj["message"] ?? obj["msg"]}");
+                return qualities;
+            }
+            var data = obj["data"] as JObject;
+            var qualityDescription = data?["quality_description"] as JArray;
             if (qualityDescription == null)
             {
                 return qualities;
@@ -677,15 +675,13 @@ namespace AllLive.Core
             var client = await CreateBilibiliPlayInfoHttpClientAsync();
             using (client)
             {
-                var obj = await RequestBilibiliPlayInfoAsync(client, roomID, qnValue, "0");
-                var playurl = obj?["data"]?["playurl_info"]?["playurl"];
+                var playurl = await RequestBilibiliPlayUrlAsync(client, roomID, qnValue, "0");
                 var candidates = ParseBilibiliPlayUrlCandidates(playurl);
                 LogBilibiliCandidateSummary(roomID, qnValue, candidates, "AVC");
                 if (candidates.Count == 0)
                 {
                     CoreDebug.Log(() => $"[Bilibili] AVC播放流为空，尝试HEVC兜底 roomId={roomID} qn={qnValue?.ToString() ?? "null"}");
-                    obj = await RequestBilibiliPlayInfoAsync(client, roomID, qnValue, "0,1");
-                    playurl = obj?["data"]?["playurl_info"]?["playurl"];
+                    playurl = await RequestBilibiliPlayUrlAsync(client, roomID, qnValue, "0,1");
                     candidates = ParseBilibiliPlayUrlCandidates(playurl);
                     LogBilibiliCandidateSummary(roomID, qnValue, candidates, "AVC+HEVC");
                 }
@@ -698,8 +694,7 @@ namespace AllLive.Core
                     // 直达媒体列表、避开不可达 smtcdns 子列表的概率。
                     try
                     {
-                        var refreshedObj = await RequestBilibiliPlayInfoAsync(client, roomID, qnValue, "0");
-                        var refreshedPlayurl = refreshedObj?["data"]?["playurl_info"]?["playurl"];
+                        var refreshedPlayurl = await RequestBilibiliPlayUrlAsync(client, roomID, qnValue, "0");
                         var refreshedCandidates = ParseBilibiliPlayUrlCandidates(refreshedPlayurl);
                         LogBilibiliCandidateSummary(roomID, qnValue, refreshedCandidates, "AVC-HLS-REFRESH");
                         candidates = MergeBilibiliPlayUrlCandidates(candidates, refreshedCandidates);
@@ -731,7 +726,13 @@ namespace AllLive.Core
             List<string> urls = new List<string>();
             var result = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/playUrl?cid={roomID}&qn={qn}&platform=web", headers: await GetRequestHeader());
             var obj = JObject.Parse(result);
-            var durl = obj["data"]?["durl"] as JArray;
+            if (obj["code"]?.ToObject<int>() != 0)
+            {
+                CoreDebug.Log(() => $"[Bilibili] 旧接口获取播放地址失败 roomId={roomID} qn={qn} code={obj["code"]} message={obj["message"] ?? obj["msg"]}");
+                return urls;
+            }
+            var data = obj["data"] as JObject;
+            var durl = data?["durl"] as JArray;
             if (durl == null)
             {
                 return urls;
@@ -783,7 +784,7 @@ namespace AllLive.Core
             return client;
         }
 
-        private async Task<JObject> RequestBilibiliPlayInfoAsync(HttpClient client, string roomID, int? qn, string codec)
+        private async Task<JObject> RequestBilibiliPlayUrlAsync(HttpClient client, string roomID, int? qn, string codec)
         {
             var queryParameters = new Dictionary<string, string>()
             {
@@ -809,11 +810,36 @@ namespace AllLive.Core
                 {
                     throw new Exception($"getRoomPlayInfo返回异常 code={obj["code"]} message={obj["message"] ?? obj["msg"]}");
                 }
-                return obj;
+                // 仅有 HEVC 的直播间在请求 AVC 时会返回 code=0、playurl=null。
+                // JSON null 是非空的 JValue，?[] 无法拦截；在接口边界逐层校验对象，
+                // 让清晰度和播放地址解析都能把它视为空结果，继续执行 HEVC 兜底。
+                var data = obj["data"] as JObject;
+                var playurlInfo = data?["playurl_info"] as JObject;
+                var playurl = playurlInfo?["playurl"] as JObject;
+                if (playurl == null)
+                {
+                    CoreDebug.Log(() => $"[Bilibili] PlayInfo无播放对象 roomId={roomID} qn={qn?.ToString() ?? "null"} codec={codec} dataType={obj["data"]?.Type.ToString() ?? "missing"} playurlInfoType={data?["playurl_info"]?.Type.ToString() ?? "missing"} playurlType={playurlInfo?["playurl"]?.Type.ToString() ?? "missing"}");
+                }
+                return playurl;
             }
         }
 
-        private static List<BilibiliPlayUrlCandidate> ParseBilibiliPlayUrlCandidates(JToken playurl)
+        private static Dictionary<int, string> GetBilibiliQualityDescriptions(JObject playurl)
+        {
+            var result = new Dictionary<int, string>();
+            var descriptions = playurl?["g_qn_desc"] as JArray;
+            foreach (var item in (descriptions ?? new JArray()).OfType<JObject>())
+            {
+                var qn = TryConvertToInt(item["qn"]);
+                if (qn.HasValue)
+                {
+                    result[qn.Value] = item["desc"]?.Value<string>() ?? "未知清晰度";
+                }
+            }
+            return result;
+        }
+
+        private static List<BilibiliPlayUrlCandidate> ParseBilibiliPlayUrlCandidates(JObject playurl)
         {
             var result = new List<BilibiliPlayUrlCandidate>();
             var dedupe = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -823,7 +849,7 @@ namespace AllLive.Core
                 return result;
             }
 
-            foreach (var streamItem in streamList)
+            foreach (var streamItem in streamList.OfType<JObject>())
             {
                 var protocolName = streamItem["protocol_name"]?.ToString() ?? string.Empty;
                 var formatList = streamItem["format"] as JArray;
@@ -832,7 +858,7 @@ namespace AllLive.Core
                     continue;
                 }
 
-                foreach (var formatItem in formatList)
+                foreach (var formatItem in formatList.OfType<JObject>())
                 {
                     var formatName = formatItem["format_name"]?.ToString() ?? string.Empty;
                     var codecList = formatItem["codec"] as JArray;
@@ -841,7 +867,7 @@ namespace AllLive.Core
                         continue;
                     }
 
-                    foreach (var codecItem in codecList)
+                    foreach (var codecItem in codecList.OfType<JObject>())
                     {
                         var codecName = codecItem["codec_name"]?.ToString() ?? string.Empty;
                         var baseUrl = codecItem["base_url"]?.ToString() ?? string.Empty;
@@ -856,7 +882,7 @@ namespace AllLive.Core
                             continue;
                         }
 
-                        foreach (var urlItem in urlList)
+                        foreach (var urlItem in urlList.OfType<JObject>())
                         {
                             var host = urlItem["host"]?.ToString() ?? string.Empty;
                             var extra = urlItem["extra"]?.ToString() ?? string.Empty;
@@ -1208,7 +1234,7 @@ namespace AllLive.Core
             CoreDebug.Log(() => $"[Bilibili] PlayInfo候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} stage={stage} total={total} flv={flv} hls={hls} hevc={hevc}");
         }
 
-        private static List<int> GetBilibiliAcceptQnList(JToken playurl)
+        private static List<int> GetBilibiliAcceptQnList(JObject playurl)
         {
             var result = new List<int>();
             var seen = new HashSet<int>();
@@ -1218,7 +1244,7 @@ namespace AllLive.Core
                 return result;
             }
 
-            foreach (var streamItem in streamList)
+            foreach (var streamItem in streamList.OfType<JObject>())
             {
                 var formatList = streamItem["format"] as JArray;
                 if (formatList == null)
@@ -1226,7 +1252,7 @@ namespace AllLive.Core
                     continue;
                 }
 
-                foreach (var formatItem in formatList)
+                foreach (var formatItem in formatList.OfType<JObject>())
                 {
                     var codecList = formatItem["codec"] as JArray;
                     if (codecList == null)
@@ -1234,7 +1260,7 @@ namespace AllLive.Core
                         continue;
                     }
 
-                    foreach (var codecItem in codecList)
+                    foreach (var codecItem in codecList.OfType<JObject>())
                     {
                         var acceptQn = codecItem["accept_qn"] as JArray;
                         if (acceptQn == null)

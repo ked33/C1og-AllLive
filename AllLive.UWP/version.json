@@ -1,6 +1,6 @@
 {
-	"version": "2.3.59",
-	"versionCode": 20359,
-	"message": "1. 取消卡顿时自动软解/重建 demux 等自动切换\n2. 卡顿仅提示可手动切换线路、解码模式或降低清晰度\n3. 保留 FFmpeg 缓冲与 FLV 代理等非自动切换优化",
+	"version": "2.3.60",
+	"versionCode": 20360,
+	"message": "1. 修复仅提供 HEVC 的哔哩哔哩直播间加载失败\n2. 完善播放接口空值处理与 HEVC 兜底\n3. 补充旧播放接口错误码日志",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }
