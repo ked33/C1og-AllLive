@@ -691,7 +691,9 @@ namespace AllLive.UWP.ViewModels
         {
             if (SettingHelper.GetValue(SettingHelper.NEW_WINDOW_LIVEROOM, true))
             {
-                Windows.UI.ViewManagement.ApplicationView.GetForCurrentView().Title = Name ?? string.Empty;
+                // 新窗口标题：主播昵称 - 直播间标题（昵称在前，空值自动省略）
+                var parts = new[] { Name, Title }.Where(p => !string.IsNullOrWhiteSpace(p));
+                Windows.UI.ViewManagement.ApplicationView.GetForCurrentView().Title = string.Join(" - ", parts);
             }
         }
 

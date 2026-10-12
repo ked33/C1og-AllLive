@@ -71,6 +71,8 @@
                         FontSize="12"
                         Foreground="{ThemeResource TextFillColorPrimaryBrush}">
                         <Run Text="{x:Bind Path=liveRoomVM.Name, Mode=OneWay}" />
+                        <Run Text=" - " />
+                        <Run Text="{x:Bind Path=liveRoomVM.Title, Mode=OneWay}" />
                     </TextBlock>
                 </Grid>
 
