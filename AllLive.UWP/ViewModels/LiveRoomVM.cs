@@ -483,9 +483,9 @@ namespace AllLive.UWP.ViewModels
 
                 ApplyAudienceMetrics(result);
                 Title = result.Title;
-                SetWindowTitle();
 
                 Name = result.UserName;
+                SetWindowTitle();
                 MessageCenter.ChangeTitle(Title + " - " + Name, Site);
                 if (!string.IsNullOrEmpty(result.UserAvatar))
                 {
@@ -691,7 +691,7 @@ namespace AllLive.UWP.ViewModels
         {
             if (SettingHelper.GetValue(SettingHelper.NEW_WINDOW_LIVEROOM, true))
             {
-                Windows.UI.ViewManagement.ApplicationView.GetForCurrentView().Title = $"{Title} - {SiteName}";
+                Windows.UI.ViewManagement.ApplicationView.GetForCurrentView().Title = Name ?? string.Empty;
             }
         }
 

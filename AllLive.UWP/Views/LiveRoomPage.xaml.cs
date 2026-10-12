@@ -174,6 +174,7 @@ namespace AllLive.UWP.Views
         private const int VolumeFlyoutHideDelayMilliseconds = 200;
         private bool updatingDecoderSelection;
         private bool updatingVolume;
+        private double lastNonZeroVolume = 1.0;
         private bool pointerOverVolumeButton;
         private bool pointerOverVolumeFlyout;
         private bool volumeFlyoutOpen;
@@ -5186,8 +5187,7 @@ namespace AllLive.UWP.Views
 
             //音量
             var volume = SettingHelper.GetValue<double>(SettingHelper.PLAYER_VOLUME, 1.0);
-            mediaPlayer.Volume = volume;
-            SliderVolume.Value = volume;
+            SetPlayerVolume(volume, persist: false);
             SliderVolume.ValueChanged -= SliderVolume_ValueChanged;
             SliderVolume.ValueChanged += SliderVolume_ValueChanged;
             //亮度
@@ -5436,7 +5436,7 @@ namespace AllLive.UWP.Views
             SetPlayerVolume(e.NewValue);
         }
 
-        private void SetPlayerVolume(double volume)
+        private void SetPlayerVolume(double volume, bool persist = true)
         {
             if (updatingVolume)
             {
@@ -5447,10 +5447,16 @@ namespace AllLive.UWP.Views
             try
             {
                 var clampedVolume = Math.Max(0, Math.Min(1, volume));
+                if (clampedVolume > 0)
+                {
+                    lastNonZeroVolume = clampedVolume;
+                }
                 mediaPlayer.Volume = clampedVolume;
                 SliderVolume.Value = clampedVolume;
+                VolumeIcon.Glyph = clampedVolume > 0 ? "\uE15D" : "\uE198";
+                ToolTipService.SetToolTip(PlayBtnVolume, clampedVolume > 0 ? "静音" : "还原音量");
                 // 手势滑动期间不落盘，结束时在 ManipulationCompleted 统一写一次
-                if (!isSlideManipulating)
+                if (persist && !isSlideManipulating)
                 {
                     SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, clampedVolume);
                 }
@@ -5463,7 +5469,7 @@ namespace AllLive.UWP.Views
 
         private void PlayBtnVolume_Click(object sender, RoutedEventArgs e)
         {
-            SetPlayerVolume(mediaPlayer.Volume > 0 ? 0 : 1);
+            SetPlayerVolume(mediaPlayer.Volume > 0 ? 0 : lastNonZeroVolume);
         }
 
         private void PlayBtnVolume_PointerEntered(object sender, PointerRoutedEventArgs e)
@@ -5635,7 +5641,7 @@ namespace AllLive.UWP.Views
 
             ////音量
             var volume = SettingHelper.GetValue<double>(SettingHelper.PLAYER_VOLUME, 1.0);
-            SliderVolume.Value = volume;
+            SetPlayerVolume(volume, persist: false);
             SliderVolume.ValueChanged -= SliderVolume_ValueChanged;
             SliderVolume.ValueChanged += SliderVolume_ValueChanged;
 

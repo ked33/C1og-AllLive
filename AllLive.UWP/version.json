@@ -1,6 +1,6 @@
 {
-	"version": "2.3.60",
-	"versionCode": 20360,
-	"message": "1. 修复仅提供 HEVC 的哔哩哔哩直播间加载失败\n2. 完善播放接口空值处理与 HEVC 兜底\n3. 补充旧播放接口错误码日志",
+	"version": "2.3.61",
+	"versionCode": 20361,
+	"message": "1. 新窗口播放时，窗口标题改为显示主播昵称\n2. 修复点击音量按钮无法切换静音/还原音量，还原时恢复静音前音量",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }

@@ -70,8 +70,6 @@
                         VerticalAlignment="Center"
                         FontSize="12"
                         Foreground="{ThemeResource TextFillColorPrimaryBrush}">
-                        <Run Text="{x:Bind Path=liveRoomVM.Title, Mode=OneWay}" />
-                        <Run Text=" - " />
                         <Run Text="{x:Bind Path=liveRoomVM.Name, Mode=OneWay}" />
                     </TextBlock>
                 </Grid>
@@ -636,12 +634,14 @@
                                         Click="PlayBtnVolume_Click"
                                         PointerEntered="PlayBtnVolume_PointerEntered"
                                         PointerExited="PlayBtnVolume_PointerExited"
-                                        ToolTipService.ToolTip="音量">
-                                        <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE15D;" />
+                                        ToolTipService.ToolTip="静音">
+                                        <FontIcon x:Name="VolumeIcon" FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE15D;" />
                                         <FlyoutBase.AttachedFlyout>
                                             <Flyout
                                                 x:Name="VolumeFlyout"
                                                 Closed="VolumeFlyout_Closed"
+                                                OverlayInputPassThroughElement="{x:Bind PlayBtnVolume}"
+                                                ShowMode="Transient"
                                                 Placement="Top">
                                                 <StackPanel
                                                     Background="Transparent"
