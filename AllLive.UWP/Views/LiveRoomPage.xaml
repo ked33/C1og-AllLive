@@ -904,32 +904,29 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <CommandBar HorizontalAlignment="Left" DefaultLabelPosition="Right">
+                <CommandBar
+                    HorizontalAlignment="Left"
+                    DefaultLabelPosition="Right"
+                    IsDynamicOverflowEnabled="True"
+                    OverflowButtonVisibility="Auto">
                     <AppBarButton
-                        x:Name="PlayTopBtnScreenshot"
+                        x:Name="BottomBtnPlay"
                         BorderThickness="0"
-                        Click="PlayTopBtnScreenshot_Click"
-                        Label="截图">
+                        Click="PlayBtnPlay_Click"
+                        Label="播放"
+                        Visibility="{Binding ElementName=PlayBtnPlay, Path=Visibility, Mode=OneWay}">
                         <AppBarButton.Icon>
-                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE722;" />
+                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE102;" />
                         </AppBarButton.Icon>
                     </AppBarButton>
                     <AppBarButton
-                        x:Name="BottomBtnAddFavorite"
-                        Command="{x:Bind Path=liveRoomVM.AddFavoriteCommand}"
-                        Label="关注"
-                        Visibility="{x:Bind Path=liveRoomVM.IsFavorite, Mode=OneWay, Converter={StaticResource displayConvert}}">
+                        x:Name="BottomBtnPause"
+                        BorderThickness="0"
+                        Click="PlayBtnPause_Click"
+                        Label="暂停"
+                        Visibility="{Binding ElementName=PlayBtnPause, Path=Visibility, Mode=OneWay}">
                         <AppBarButton.Icon>
-                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xEB51;" />
-                        </AppBarButton.Icon>
-                    </AppBarButton>
-                    <AppBarButton
-                        x:Name="BottomBtnRemoveFavorite"
-                        Command="{x:Bind Path=liveRoomVM.RemoveFavoriteCommand}"
-                        Label="已关注"
-                        Visibility="{x:Bind Path=liveRoomVM.IsFavorite, Mode=OneWay}">
-                        <AppBarButton.Icon>
-                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xEB52;" />
+                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE103;" />
                         </AppBarButton.Icon>
                     </AppBarButton>
                     <AppBarButton
@@ -978,14 +975,29 @@
                 <!--<StackPanel HorizontalAlignment="Left" Orientation="Horizontal">
 
                 </StackPanel>-->
-                <CommandBar Grid.Column="1" HorizontalAlignment="Right" DefaultLabelPosition="Right">
+                <CommandBar
+                    Grid.Column="1"
+                    HorizontalAlignment="Right"
+                    DefaultLabelPosition="Right"
+                    IsDynamicOverflowEnabled="True"
+                    OverflowButtonVisibility="Auto">
 
                     <AppBarButton
-                        x:Name="BottomBtnShare"
-                        Click="BottomBtnShare_Click"
-                        Label="分享">
+                        x:Name="BottomBtnAddFavorite"
+                        Command="{x:Bind Path=liveRoomVM.AddFavoriteCommand}"
+                        Label="关注"
+                        Visibility="{x:Bind Path=liveRoomVM.IsFavorite, Mode=OneWay, Converter={StaticResource displayConvert}}">
                         <AppBarButton.Icon>
-                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE72D;" />
+                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xEB51;" />
+                        </AppBarButton.Icon>
+                    </AppBarButton>
+                    <AppBarButton
+                        x:Name="BottomBtnRemoveFavorite"
+                        Command="{x:Bind Path=liveRoomVM.RemoveFavoriteCommand}"
+                        Label="已关注"
+                        Visibility="{x:Bind Path=liveRoomVM.IsFavorite, Mode=OneWay}">
+                        <AppBarButton.Icon>
+                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xEB52;" />
                         </AppBarButton.Icon>
                     </AppBarButton>
                     <AppBarButton
@@ -994,14 +1006,6 @@
                         Label="浏览器">
                         <AppBarButton.Icon>
                             <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xEB41;" />
-                        </AppBarButton.Icon>
-                    </AppBarButton>
-                    <AppBarButton
-                        x:Name="BottomBtnPlayUrl"
-                        Click="BottomBtnPlayUrl_Click"
-                        Label="直链">
-                        <AppBarButton.Icon>
-                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE167;" />
                         </AppBarButton.Icon>
                     </AppBarButton>
                 </CommandBar>

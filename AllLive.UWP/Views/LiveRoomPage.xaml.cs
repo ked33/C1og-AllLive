@@ -5660,11 +5660,6 @@ namespace AllLive.UWP.Views
             MiniWidnows(false);
         }
 
-        private async void PlayTopBtnScreenshot_Click(object sender, RoutedEventArgs e)
-        {
-            await CaptureVideo();
-        }
-
         private void PlayBtnPlay_Click(object sender, RoutedEventArgs e)
         {
             mediaPlayer.Play();
@@ -5678,16 +5673,6 @@ namespace AllLive.UWP.Views
 
         #endregion
 
-        private void BottomBtnShare_Click(object sender, RoutedEventArgs e)
-        {
-            if (liveRoomVM.detail == null)
-            {
-                return;
-            }
-            Utils.SetClipboard(liveRoomVM.detail.Url);
-            Utils.ShowMessageToast("已复制链接到剪切板");
-        }
-
         private async void BottomBtnOpenBrowser_Click(object sender, RoutedEventArgs e)
         {
             if (liveRoomVM.detail == null)
@@ -5695,16 +5680,6 @@ namespace AllLive.UWP.Views
                 return;
             }
             await Windows.System.Launcher.LaunchUriAsync(new Uri(liveRoomVM.detail.Url));
-        }
-
-        private void BottomBtnPlayUrl_Click(object sender, RoutedEventArgs e)
-        {
-            if (liveRoomVM.CurrentLine == null)
-            {
-                return;
-            }
-            Utils.SetClipboard(liveRoomVM.CurrentLine.Url);
-            Utils.ShowMessageToast("已复制链接到剪切板");
         }
 
         private async void BottomBtnRefresh_Click(object sender, RoutedEventArgs e)
