@@ -627,42 +627,6 @@
 
 
                                 <StackPanel Grid.Column="2" Orientation="Horizontal">
-                                    <Button
-                                        x:Name="PlayBtnVolume"
-                                        Width="48"
-                                        Height="48"
-                                        Background="Transparent"
-                                        BorderThickness="0"
-                                        Click="PlayBtnVolume_Click"
-                                        DoubleTapped="PlayBtnVolume_DoubleTapped"
-                                        PointerEntered="PlayBtnVolume_PointerEntered"
-                                        PointerExited="PlayBtnVolume_PointerExited"
-                                        ToolTipService.ToolTip="静音">
-                                        <FontIcon x:Name="VolumeIcon" FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE15D;" />
-                                        <FlyoutBase.AttachedFlyout>
-                                            <Flyout
-                                                x:Name="VolumeFlyout"
-                                                Closed="VolumeFlyout_Closed"
-                                                OverlayInputPassThroughElement="{x:Bind PlayBtnVolume}"
-                                                ShowMode="Transient"
-                                                Placement="Top">
-                                                <StackPanel
-                                                    Background="Transparent"
-                                                    PointerEntered="VolumeFlyoutContent_PointerEntered"
-                                                    PointerExited="VolumeFlyoutContent_PointerExited">
-                                                    <TextBlock>音量</TextBlock>
-                                                    <Slider
-                                                        x:Name="SliderVolume"
-                                                        Width="200"
-                                                        Maximum="1"
-                                                        Minimum="0"
-                                                        StepFrequency="0.1"
-                                                        Value="1" />
-                                                </StackPanel>
-                                            </Flyout>
-                                        </FlyoutBase.AttachedFlyout>
-                                    </Button>
-
                                     <ComboBox
                                         x:Name="PlayQuality"
                                         MinWidth="80"
@@ -936,6 +900,10 @@
             </SplitView>
 
             <Grid Grid.Row="1" Background="{ThemeResource NavigationViewTopPaneBackground}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
                 <CommandBar HorizontalAlignment="Left" DefaultLabelPosition="Right">
                     <AppBarButton
                         x:Name="PlayTopBtnScreenshot"
@@ -972,11 +940,45 @@
                             <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE72C;" />
                         </AppBarButton.Icon>
                     </AppBarButton>
+                    <AppBarButton
+                        x:Name="PlayBtnVolume"
+                        Label="音量"
+                        Click="PlayBtnVolume_Click"
+                        DoubleTapped="PlayBtnVolume_DoubleTapped"
+                        PointerEntered="PlayBtnVolume_PointerEntered"
+                        PointerExited="PlayBtnVolume_PointerExited"
+                        ToolTipService.ToolTip="静音">
+                        <AppBarButton.Icon>
+                            <FontIcon x:Name="VolumeIcon" FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE15D;" />
+                        </AppBarButton.Icon>
+                        <FlyoutBase.AttachedFlyout>
+                            <Flyout
+                                x:Name="VolumeFlyout"
+                                Closed="VolumeFlyout_Closed"
+                                OverlayInputPassThroughElement="{x:Bind PlayBtnVolume}"
+                                ShowMode="Transient"
+                                Placement="Top">
+                                <StackPanel
+                                    Background="Transparent"
+                                    PointerEntered="VolumeFlyoutContent_PointerEntered"
+                                    PointerExited="VolumeFlyoutContent_PointerExited">
+                                    <TextBlock>音量</TextBlock>
+                                    <Slider
+                                        x:Name="SliderVolume"
+                                        Width="200"
+                                        Maximum="1"
+                                        Minimum="0"
+                                        StepFrequency="0.1"
+                                        Value="1" />
+                                </StackPanel>
+                            </Flyout>
+                        </FlyoutBase.AttachedFlyout>
+                    </AppBarButton>
                 </CommandBar>
                 <!--<StackPanel HorizontalAlignment="Left" Orientation="Horizontal">
 
                 </StackPanel>-->
-                <CommandBar HorizontalAlignment="Right" DefaultLabelPosition="Right">
+                <CommandBar Grid.Column="1" HorizontalAlignment="Right" DefaultLabelPosition="Right">
 
                     <AppBarButton
                         x:Name="BottomBtnShare"
