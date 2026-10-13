@@ -211,12 +211,40 @@ jobs:
             }
           }
 
-      - name: Upload Artifact
+      - name: Prepare installation artifacts
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+        shell: pwsh
+        run: |
+          & ./.github/scripts/Prepare-UwpArtifacts.ps1 `
+            -AppPackagesDirectory (Join-Path $PWD 'AllLive.UWP/AppPackages') `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'AllLive-Artifacts')
+
+      - name: Upload installer
         uses: actions/upload-artifact@v6
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         with:
           name: AllLive-UWP-Packages
-          path: AllLive.UWP/AppPackages/**
+          path: ${{ runner.temp }}/AllLive-Artifacts/Installer/
+          compression-level: 9
+          if-no-files-found: error
+
+      - name: Upload x64 dependencies
+        uses: actions/upload-artifact@v6
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+        with:
+          name: AllLive-UWP-Dependencies-x64
+          path: ${{ runner.temp }}/AllLive-Artifacts/Dependencies/
+          compression-level: 9
+          if-no-files-found: error
+
+      - name: Upload debugging symbols
+        uses: actions/upload-artifact@v6
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+        with:
+          name: AllLive-UWP-Symbols-x64
+          path: ${{ runner.temp }}/AllLive-Artifacts/Symbols/
+          compression-level: 9
+          if-no-files-found: error
 
       - name: Generate Commit SHA
         if: github.event_name == 'workflow_dispatch'
