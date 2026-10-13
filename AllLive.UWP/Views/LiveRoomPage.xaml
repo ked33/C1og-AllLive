@@ -1137,12 +1137,12 @@
                                     x:Name="ScrollMessagesToBottomButton"
                                     Width="40"
                                     Height="40"
-                                    Margin="0,0,20,12"
+                                    Margin="0,0,16,12"
                                     Padding="0"
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Bottom"
                                     AutomationProperties.Name="滚动到底部"
-                                    Background="#4B5567"
+                                    Background="#1A1A1A"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1"
                                     Click="ScrollMessagesToBottomButton_Click"
@@ -1150,6 +1150,10 @@
                                     Foreground="White"
                                     ToolTipService.ToolTip="滚动到底部"
                                     Visibility="Collapsed">
+                                    <Button.Resources>
+                                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#1A1A1A" />
+                                        <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="White" />
+                                    </Button.Resources>
                                     <FontIcon FontFamily="{StaticResource SegoeFluent}" FontSize="16" Glyph="&#xE70D;" />
                                 </Button>
                             </Grid>

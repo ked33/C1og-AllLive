@@ -68,6 +68,7 @@ namespace AllLive.UWP.Views
         DispatcherTimer controlTimer;
         private DesktopWindowController desktopWindowController;
         private ScrollViewer messageScrollViewer;
+        private ScrollBar messageVerticalScrollBar;
         private long messageScrollableHeightToken;
         private string lastConfigSnapshot;
         private string lastUrlAnalysis;
@@ -5685,6 +5686,10 @@ namespace AllLive.UWP.Views
             if (isPageClosing || messageScrollViewer != null) return;
             messageScrollViewer = FindMessageScrollViewer(LiveMessageList);
             if (messageScrollViewer == null) return;
+            messageVerticalScrollBar = FindMessageVerticalScrollBar(messageScrollViewer);
+            if (messageVerticalScrollBar != null)
+                messageVerticalScrollBar.SizeChanged += MessageScrollViewer_SizeChanged;
+            UpdateMessageScrollButtonPosition();
             messageScrollViewer.ViewChanged += MessageScrollViewer_ViewChanged;
             messageScrollViewer.SizeChanged += MessageScrollViewer_SizeChanged;
             messageScrollableHeightToken = messageScrollViewer.RegisterPropertyChangedCallback(
@@ -5709,8 +5714,35 @@ namespace AllLive.UWP.Views
             return null;
         }
 
+        private static ScrollBar FindMessageVerticalScrollBar(DependencyObject root)
+        {
+            var bar = root as ScrollBar;
+            if (bar != null && bar.Orientation == Orientation.Vertical) return bar;
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                bar = FindMessageVerticalScrollBar(VisualTreeHelper.GetChild(root, i));
+                if (bar != null) return bar;
+            }
+            return null;
+        }
+
+        private void UpdateMessageScrollButtonPosition()
+        {
+            var container = ScrollMessagesToBottomButton.Parent as FrameworkElement;
+            if (messageVerticalScrollBar == null || container == null
+                || container.ActualWidth <= 0 || messageVerticalScrollBar.ActualWidth <= 0) return;
+            var left = messageVerticalScrollBar.TransformToVisual(container).TransformPoint(new Point(0, 0)).X;
+            // Align to the scrollbar's actual left edge, including DPI/theme width changes.
+            ScrollMessagesToBottomButton.Margin = new Thickness(0, 0, Math.Max(0, container.ActualWidth - left), 12);
+        }
+
         private void DetachMessageScrollViewer()
         {
+            if (messageVerticalScrollBar != null)
+            {
+                messageVerticalScrollBar.SizeChanged -= MessageScrollViewer_SizeChanged;
+                messageVerticalScrollBar = null;
+            }
             if (messageScrollViewer != null)
             {
                 messageScrollViewer.ViewChanged -= MessageScrollViewer_ViewChanged;
@@ -5729,6 +5761,7 @@ namespace AllLive.UWP.Views
 
         private void MessageScrollViewer_SizeChanged(object sender, SizeChangedEventArgs e)
         {
+            UpdateMessageScrollButtonPosition();
             UpdateScrollMessagesToBottomButton();
         }
 
