@@ -24,6 +24,15 @@ if ($rules.Count -ne 2 -or @($rules | Where-Object PackageFamilyName -ne $family
 if (($rules.Direction | Sort-Object) -join ',' -ne 'in,out') { throw 'Both loopback directions are required.' }
 if ($desktop.Package.Dependencies.TargetDeviceFamily.Name -ne 'Windows.Desktop') { throw 'Desktop family is required.' }
 if ($universal.Package.Dependencies.TargetDeviceFamily.Name -ne 'Windows.Universal') { throw 'Universal build must remain available.' }
+# UWP targets rewrite Windows.Universal placeholders, but not the explicit desktop family.
+# MSIX payloads require Windows 10 1809 or newer; use the actual project minimum (1903).
+[xml]$project = [IO.File]::ReadAllText((Join-Path $repo 'AllLive.UWP/AllLive.UWP.csproj'))
+$projectMinimum = [version]$project.SelectSingleNode('//*[local-name()="TargetPlatformMinVersion"]').InnerText
+$desktopMinimum = [version]$desktop.Package.Dependencies.TargetDeviceFamily.MinVersion
+$desktopMaximum = [version]$desktop.Package.Dependencies.TargetDeviceFamily.MaxVersionTested
+if ($desktopMinimum -lt [version]'10.0.17763.0' -or $desktopMinimum -ne $projectMinimum -or $desktopMaximum -lt $desktopMinimum) {
+    throw 'Desktop manifest must explicitly declare the project minimum and support MSIX (Windows 10 1809+).'
+}
 $extension = $desktop.SelectSingleNode('//*[local-name()="Extension" and @Category="windows.fullTrustProcess"]')
 if ($extension.Executable -ne 'LocalService\AllLive.SignService.exe') { throw 'Full-trust executable path mismatch.' }
 Write-Output 'PASS: desktop/universal manifests and package loopback identity.'

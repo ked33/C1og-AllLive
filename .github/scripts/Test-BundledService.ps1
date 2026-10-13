@@ -27,6 +27,9 @@ try {
         $reader = [IO.StreamReader]::new($package.GetEntry('AppxManifest.xml').Open())
         try { [xml]$manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
         if ($manifest.Package.Dependencies.TargetDeviceFamily.Name -ne 'Windows.Desktop') { throw 'Wrong packaged manifest.' }
+        if ([version]$manifest.Package.Dependencies.TargetDeviceFamily.MinVersion -lt [version]'10.0.18362.0') {
+            throw 'Packaged desktop minimum must be Windows 10 1903 or newer.'
+        }
         if ($null -eq $manifest.SelectSingleNode('//*[local-name()="Capability" and @Name="runFullTrust"]')) { throw 'Missing runFullTrust.' }
         $config = Get-Content -LiteralPath (Join-Path $publish 'AllLive.SignService.runtimeconfig.json') -Raw | ConvertFrom-Json
         if (-not $config.runtimeOptions.includedFrameworks) { throw 'Service is not self-contained.' }
