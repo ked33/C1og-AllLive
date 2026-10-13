@@ -27,6 +27,7 @@ namespace AllLive.UWP.Helper
         public static void SetEnabled(bool enabled)
         {
             LogHelper.enabled = enabled;
+            LocalServiceManager.UpdateLogging();
         }
         public static void LogDebug(string message)
         {

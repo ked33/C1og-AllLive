@@ -128,6 +128,8 @@ namespace AllLive.UWP
         /// <param name="e">有关启动请求和过程的详细信息。</param>
         protected async override void OnLaunched(LaunchActivatedEventArgs e)
         {
+            LocalServiceManager.Initialize();
+            if (!e.PrelaunchActivated) LocalServiceManager.RegisterCurrentView();
             //初始化数据库
             await DatabaseHelper.InitializeDatabase();
             await ApplyDouyinCookieSettingAsync();

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap4="http://schemas.microsoft.com/appx/manifest/uap/windows10/4"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap mp uap3 uap4 desktop rescap">
+
+  <Identity
+    Name="5421.24244EC421563"
+    Publisher="CN=xiaoyaocz"
+    Version="2.3.65.0" />
+
+  <mp:PhoneIdentity PhoneProductId="a29ec443-66b9-4d8d-8fd1-ffa29cf08e96" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
+
+  <Properties>
+    <DisplayName>聚合直播</DisplayName>
+    <PublisherDisplayName>逍遥橙子</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.0.0" MaxVersionTested="10.0.0.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="x-generate"/>
+  </Resources>
+
+  <Applications>
+    <Application Id="App"
+      Executable="$targetnametoken$.exe"
+      EntryPoint="AllLive.UWP.App">
+      <uap:VisualElements
+        DisplayName="聚合直播"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        Description="聚合多个网站的直播"
+        BackgroundColor="transparent">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" Square71x71Logo="Assets\SmallTile.png" Square310x310Logo="Assets\LargeTile.png" ShortName="聚合直播">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo"/>
+            <uap:ShowOn Tile="wide310x150Logo"/>
+            <uap:ShowOn Tile="square310x310Logo"/>
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile >
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+        <uap:LockScreen BadgeLogo="Assets\BadgeLogo.png" Notification="badge"/>
+      </uap:VisualElements>
+      <Extensions>
+        <desktop:Extension Category="windows.fullTrustProcess" Executable="LocalService\AllLive.SignService.exe">
+          <desktop:FullTrustProcess>
+            <desktop:ParameterGroup GroupId="Managed" Parameters="--managed" />
+          </desktop:FullTrustProcess>
+        </desktop:Extension>
+        <uap4:Extension Category="windows.loopbackAccessRules">
+          <uap4:LoopbackAccessRules>
+            <uap4:Rule Direction="out" PackageFamilyName="5421.24244EC421563_a5x6jjv384fej" />
+            <uap4:Rule Direction="in" PackageFamilyName="5421.24244EC421563_a5x6jjv384fej" />
+          </uap4:LoopbackAccessRules>
+        </uap4:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <Capability Name="internetClient" />
+    <Capability Name="privateNetworkClientServer" />
+    <uap3:Capability Name="backgroundMediaPlayback"/>
+    <uap:Capability Name="picturesLibrary"/>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

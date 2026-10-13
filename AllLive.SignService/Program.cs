@@ -8,139 +8,135 @@ using System.Linq;
 using System.Net;
 using System.Net.Http.Headers;
 
-var builder = WebApplication.CreateBuilder(args);
-var app = builder.Build();
-
-app.Urls.Add("http://0.0.0.0:8788");
-app.Urls.Add("http://127.0.0.1:8789");
-
+var managed = args.Contains("--managed", StringComparer.Ordinal);
+using var owner = managed ? ManagedServiceOwner.TryCreate() : null;
+if (managed && owner == null) return;
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = Array.Empty<string>(), ContentRootPath = AppContext.BaseDirectory
+});
+builder.Logging.ClearProviders();
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = 2 * 1024 * 1024;
+    options.Limits.MaxConcurrentConnections = 32;
+    options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(10);
+    options.Limits.KeepAliveTimeout = TimeSpan.FromSeconds(30);
+    if (managed) options.Listen(IPAddress.Loopback, 0);
+    else
+    {
+        options.Listen(IPAddress.Loopback, 8788);
+        options.Listen(IPAddress.Loopback, 8789);
+    }
+});
+await using var app = builder.Build();
+using var shutdown = owner?.Token.Register(() => app.Lifetime.StopApplication());
+using var stopDeadline = app.Lifetime.ApplicationStopping.Register(() => owner?.RequestStop());
 const string DouyinVersionCode = "180800";
 const string DouyinSdkVersion = "1.0.14-beta.0";
-const string BilibiliProxyUrl = "http://127.0.0.1:8789/api/bilibili/live.flv";
 var douyinWebmssdkScript = new Lazy<string>(LoadDouyinWebmssdkScript);
-var bilibiliStreamLock = new object();
-BilibiliStreamState? latestBilibiliStream = null;
-var bilibiliProxyHttpClient = CreateBilibiliProxyHttpClient();
-
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+var streams = new BilibiliStreamRegistry();
+using var bilibiliProxyHttpClient = CreateBilibiliProxyHttpClient();
+using var signingSlots = new SemaphoreSlim(2, 2);
+using var proxySlots = new SemaphoreSlim(8, 8);
+app.Use(async (context, next) =>
+{
+    if (managed && context.Request.Path.StartsWithSegments("/api/bilibili/live"))
+    {
+        // The random stream ID authorizes native players that cannot add headers.
+        await next(context);
+        return;
+    }
+    if (managed && context.Request.Headers["X-AllLive-Session"] != owner!.SessionId)
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
+    var signing = context.Request.Path.StartsWithSegments("/api/douyu")
+        || context.Request.Path.StartsWithSegments("/api/douyin");
+    if (!signing) { await next(context); return; }
+    if (!await signingSlots.WaitAsync(0, context.RequestAborted))
+    {
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        return;
+    }
+    try { await next(context); }
+    finally { signingSlots.Release(); }
+});
+app.MapGet("/health", () => Results.Ok(new { status = "ok", protocol = 1 }));
 
 app.MapPost("/api/bilibili/stream", async (HttpRequest request) =>
 {
-    if (!IsBilibiliProxyRequest(request))
-    {
-        return Results.NotFound();
-    }
-
+    if (!IsBilibiliProxyRequest(request, managed)) return Results.NotFound();
     BilibiliStreamRequest? payload;
-    try
-    {
-        payload = await request.ReadFromJsonAsync<BilibiliStreamRequest>();
-    }
-    catch
-    {
-        return Results.Json(new { code = -1, msg = "invalid json" });
-    }
-
+    try { payload = await request.ReadFromJsonAsync<BilibiliStreamRequest>(request.HttpContext.RequestAborted); }
+    catch { return Results.Json(new { code = -1, msg = "invalid json" }); }
     var upstreamUrl = payload?.url ?? string.Empty;
     if (!Uri.TryCreate(upstreamUrl, UriKind.Absolute, out var upstreamUri)
         || (upstreamUri.Scheme != Uri.UriSchemeHttp && upstreamUri.Scheme != Uri.UriSchemeHttps))
-    {
         return Results.Json(new { code = -1, msg = "invalid url" });
-    }
-
-    var state = new BilibiliStreamState(
-        upstreamUrl,
+    var state = new BilibiliStreamState(upstreamUrl,
         string.IsNullOrWhiteSpace(payload?.referer) ? "https://live.bilibili.com/" : payload.referer!,
         string.IsNullOrWhiteSpace(payload?.userAgent) ? GetDefaultUserAgent() : payload.userAgent!,
         payload?.cookie ?? string.Empty);
-
-    lock (bilibiliStreamLock)
-    {
-        latestBilibiliStream = state;
-    }
-
-    app.Logger.LogInformation("[BilibiliProxy] Registered upstream {Upstream}", BuildBilibiliStreamBrief(state.Url));
-    return Results.Json(new { code = 0, data = new { url = BilibiliProxyUrl }, msg = "" });
+    var id = streams.Register(state);
+    if (id == null) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    var port = managed ? request.HttpContext.Connection.LocalPort : 8789;
+    ServiceDiagnostics.Write(() => "[BilibiliProxy] Stream registered");
+    return Results.Json(new { code = 0, data = new { url = $"http://127.0.0.1:{port}/api/bilibili/live/{id}.flv" }, msg = "" });
 });
 
-app.MapGet("/api/bilibili/live.flv", async (HttpContext context) =>
+app.MapGet("/api/bilibili/live/{id}.flv", async (HttpContext context, string id) =>
 {
-    if (!IsBilibiliProxyRequest(context.Request))
+    if (!IsBilibiliProxyRequest(context.Request, managed))
     {
         context.Response.StatusCode = StatusCodes.Status404NotFound;
         return;
     }
-
-    BilibiliStreamState? state;
-    lock (bilibiliStreamLock)
+    using var lease = streams.Acquire(id);
+    if (lease == null) { context.Response.StatusCode = StatusCodes.Status404NotFound; return; }
+    if (!await proxySlots.WaitAsync(0, context.RequestAborted))
     {
-        state = latestBilibiliStream;
-    }
-
-    if (state == null)
-    {
-        context.Response.StatusCode = StatusCodes.Status404NotFound;
-        await context.Response.WriteAsync("bilibili stream not registered", context.RequestAborted);
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         return;
     }
-
+    var state = lease.State;
+    using var cancelled = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, app.Lifetime.ApplicationStopping);
     try
     {
         using var upstreamRequest = new HttpRequestMessage(HttpMethod.Get, state.Url);
         upstreamRequest.Headers.TryAddWithoutValidation("User-Agent", state.UserAgent);
         upstreamRequest.Headers.TryAddWithoutValidation("Referer", state.Referer);
         upstreamRequest.Headers.TryAddWithoutValidation("Accept", "video/x-flv,application/octet-stream,*/*");
-        upstreamRequest.Headers.TryAddWithoutValidation("Connection", "keep-alive");
-        if (!string.IsNullOrWhiteSpace(state.Cookie))
-        {
-            upstreamRequest.Headers.TryAddWithoutValidation("Cookie", state.Cookie);
-        }
-
+        if (!string.IsNullOrWhiteSpace(state.Cookie)) upstreamRequest.Headers.TryAddWithoutValidation("Cookie", state.Cookie);
         upstreamRequest.Headers.Range = new RangeHeaderValue(0, null);
-
-        using var upstreamResponse = await bilibiliProxyHttpClient.SendAsync(
-            upstreamRequest,
-            HttpCompletionOption.ResponseHeadersRead,
-            context.RequestAborted);
-
+        cancelled.CancelAfter(TimeSpan.FromSeconds(15));
+        using var upstreamResponse = await bilibiliProxyHttpClient.SendAsync(upstreamRequest,
+            HttpCompletionOption.ResponseHeadersRead, cancelled.Token);
+        cancelled.CancelAfter(Timeout.InfiniteTimeSpan);
         context.Response.StatusCode = (int)upstreamResponse.StatusCode;
         context.Response.Headers.CacheControl = "no-store";
-
         if (!upstreamResponse.IsSuccessStatusCode)
         {
-            app.Logger.LogWarning(
-                "[BilibiliProxy] Upstream returned {StatusCode} for {Upstream}",
-                (int)upstreamResponse.StatusCode,
-                BuildBilibiliStreamBrief(state.Url));
+            ServiceDiagnostics.Write(() => $"[BilibiliProxy] Upstream status={(int)upstreamResponse.StatusCode}");
             return;
         }
-
         context.Response.ContentType = "video/x-flv";
         CopyLongHeader(upstreamResponse.Content.Headers.ContentLength, value => context.Response.ContentLength = value);
         CopyStringHeader(upstreamResponse.Content.Headers.ContentRange?.ToString(), value => context.Response.Headers.ContentRange = value);
         CopyStringHeader(upstreamResponse.Content.Headers.LastModified?.ToString("R"), value => context.Response.Headers.LastModified = value);
         CopyListHeader(upstreamResponse.Headers.AcceptRanges, value => context.Response.Headers.AcceptRanges = value);
-
-        await using var stream = await upstreamResponse.Content.ReadAsStreamAsync(context.RequestAborted);
-        await stream.CopyToAsync(context.Response.Body, 81920, context.RequestAborted);
+        await using var stream = await upstreamResponse.Content.ReadAsStreamAsync(cancelled.Token);
+        await StreamTransfer.CopyAsync(stream, context.Response.Body, cancelled.Token);
     }
-    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
-    {
-    }
+    catch (OperationCanceledException) { context.Abort(); }
     catch (Exception ex)
     {
-        app.Logger.LogWarning(
-            "[BilibiliProxy] Proxy failed for {Upstream}: {Error}",
-            BuildBilibiliStreamBrief(state.Url),
-            BuildExceptionBrief(ex, state.Url));
-        if (!context.Response.HasStarted)
-        {
-            context.Response.StatusCode = StatusCodes.Status502BadGateway;
-            context.Response.ContentType = "text/plain";
-            context.Response.Headers.CacheControl = "no-store";
-            await context.Response.WriteAsync("bilibili proxy upstream failed", context.RequestAborted);
-        }
+        ServiceDiagnostics.Write(() => "[BilibiliProxy] Failed: " + ex.GetType().Name);
+        if (!context.Response.HasStarted) context.Response.StatusCode = StatusCodes.Status502BadGateway;
+        else context.Abort();
     }
+    finally { proxySlots.Release(); }
 });
 
 app.MapPost("/api/douyu/sign", async (HttpRequest request) =>
@@ -178,7 +174,8 @@ app.MapPost("/api/douyu/sign", async (HttpRequest request) =>
         var did = "10000000000000000000000000001501";
         var t10 = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
 
-        var engine = new Engine();
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(request.HttpContext.RequestAborted, app.Lifetime.ApplicationStopping);
+        var engine = ScriptExecution.CreateJint(budget.Token);
         engine.Execute(js);
         var jsEvalResult = engine.Evaluate("ub98484234()").ToString();
         if (string.IsNullOrEmpty(jsEvalResult))
@@ -241,7 +238,7 @@ app.MapPost("/api/douyin/sign", async (HttpRequest request) =>
             return Results.Json(new { code = -1, msg = "webmssdk script empty" });
         }
 
-        var sign = BuildDouyinSignature(script, roomId, uniqueId, out var signError);
+        var sign = BuildDouyinSignature(script, roomId, uniqueId, request.HttpContext.RequestAborted, out var signError);
         if (string.IsNullOrWhiteSpace(sign))
         {
             return Results.Json(new { code = -1, msg = string.IsNullOrWhiteSpace(signError) ? "signature empty" : signError });
@@ -283,9 +280,15 @@ app.MapPost("/api/douyin/abogus", async (HttpRequest request) =>
     }
 });
 
-app.Run();
+await app.StartAsync(owner?.Token ?? CancellationToken.None);
+if (owner != null)
+{
+    var address = app.Urls.Single();
+    owner.PublishReady(new Uri(address).Port);
+}
+await app.WaitForShutdownAsync();
 
-static string BuildDouyinSignature(string script, string roomId, string uniqueId, out string? error)
+static string BuildDouyinSignature(string script, string roomId, string uniqueId, CancellationToken token, out string? error)
 {
     error = null;
     var signParam = BuildDouyinSignParam(roomId, uniqueId);
@@ -295,7 +298,7 @@ static string BuildDouyinSignature(string script, string roomId, string uniqueId
         return "";
     }
     var md5 = Md5Hex(signParam);
-    var quickJsResult = TryGetSignByQuickJs(script, md5, out var quickJsError);
+    var quickJsResult = TryGetSignByQuickJs(script, md5, token, out var quickJsError);
     if (!string.IsNullOrWhiteSpace(quickJsResult))
     {
         return quickJsResult;
@@ -304,81 +307,19 @@ static string BuildDouyinSignature(string script, string roomId, string uniqueId
     return "";
 }
 
-static string? TryGetSignByQuickJs(string script, string md5Param, out string? error)
+static string? TryGetSignByQuickJs(string script, string md5Param, CancellationToken token, out string? error)
 {
-    error = null;
-    object? runtime = null;
-    object? context = null;
     try
     {
-        var runtimeType = Type.GetType("QuickJS.QuickJSRuntime, QuickJS.NET");
-        if (runtimeType == null)
-        {
-            error = "QuickJSRuntime类型未找到";
-            return null;
-        }
-        runtime = Activator.CreateInstance(runtimeType);
-        var createContext = runtimeType.GetMethod("CreateContext", Type.EmptyTypes);
-        context = createContext?.Invoke(runtime, null);
-        if (context == null)
-        {
-            error = "CreateContext返回空";
-            return null;
-        }
-
-        var contextType = context.GetType();
-        var flagsType = Type.GetType("QuickJS.JSEvalFlags, QuickJS.NET");
-        object? flags = null;
-        var evalMethod = flagsType == null
-            ? null
-            : contextType.GetMethod("Eval", new[] { typeof(string), typeof(string), flagsType });
-        if (evalMethod == null)
-        {
-            evalMethod = contextType.GetMethod("Eval", new[] { typeof(string), typeof(string) });
-        }
-        if (evalMethod == null)
-        {
-            error = "Eval方法未找到";
-            return null;
-        }
-        if (flagsType != null && evalMethod.GetParameters().Length == 3)
-        {
-            flags = Enum.Parse(flagsType, "Global");
-        }
-
-        string Eval(string code)
-        {
-            if (evalMethod.GetParameters().Length == 3)
-            {
-                return evalMethod.Invoke(context, new object?[] { code, "", flags })?.ToString() ?? "";
-            }
-            return evalMethod.Invoke(context, new object?[] { code, "" })?.ToString() ?? "";
-        }
-
-        Eval(script);
-        var result = Eval($"get_sign('{EscapeJs(md5Param)}')");
-        if (string.IsNullOrWhiteSpace(result))
-        {
-            error = "get_sign返回空";
-            return null;
-        }
+        var result = ScriptExecution.SignDouyin(script, md5Param, token);
+        error = string.IsNullOrWhiteSpace(result) ? "signature empty" : null;
         return result;
     }
     catch (Exception ex)
     {
-        error = $"{ex.GetType().FullName}: {ex.Message}";
+        ServiceDiagnostics.Write(() => "[DouyinSign] Failed: " + ex.GetType().Name);
+        error = "signature execution failed";
         return null;
-    }
-    finally
-    {
-        if (context is IDisposable contextDisposable)
-        {
-            contextDisposable.Dispose();
-        }
-        if (runtime is IDisposable runtimeDisposable)
-        {
-            runtimeDisposable.Dispose();
-        }
     }
 }
 
@@ -467,9 +408,9 @@ static HttpClient CreateBilibiliProxyHttpClient()
     };
 }
 
-static bool IsBilibiliProxyRequest(HttpRequest request)
+static bool IsBilibiliProxyRequest(HttpRequest request, bool managed)
 {
-    if (request.HttpContext.Connection.LocalPort != 8789)
+    if (!managed && request.HttpContext.Connection.LocalPort != 8789)
     {
         return false;
     }
@@ -501,32 +442,6 @@ static void CopyListHeader(IEnumerable<string> values, Action<string> assign)
     {
         assign(value);
     }
-}
-
-static string BuildBilibiliStreamBrief(string url)
-{
-    if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
-    {
-        return $"{uri.Host}{uri.AbsolutePath}";
-    }
-
-    return $"len={url?.Length ?? 0}";
-}
-
-static string BuildExceptionBrief(Exception ex, string sensitiveUrl)
-{
-    var message = ex?.Message ?? string.Empty;
-    if (!string.IsNullOrEmpty(sensitiveUrl))
-    {
-        message = message.Replace(sensitiveUrl, BuildBilibiliStreamBrief(sensitiveUrl));
-    }
-
-    if (message.Length > 300)
-    {
-        message = message.Substring(0, 300);
-    }
-
-    return $"{ex?.GetType().FullName}: {message}";
 }
 
 static string GetDefaultUserAgent()

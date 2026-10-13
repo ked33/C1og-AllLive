@@ -1807,7 +1807,7 @@ namespace AllLive.Core
         {
             if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
             {
-                return $"{uri.Host}:{uri.Port}{uri.AbsolutePath}";
+                return $"{uri.Host}:{uri.Port}/api/bilibili/live/[session].flv";
             }
 
             return $"len={url?.Length ?? 0}";

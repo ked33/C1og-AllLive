@@ -216,7 +216,7 @@
     </Compile>
   </ItemGroup>
   <ItemGroup>
-    <AppxManifest Include="Package.appxmanifest">
+    <AppxManifest Include="Package.appxmanifest" Condition="'$(IncludeLocalService)' != 'true'">
       <SubType>Designer</SubType>
     </AppxManifest>
   </ItemGroup>
@@ -411,6 +411,27 @@
     <None Include="AllLive.UWP_TemporaryKey.pfx" />
     <Content Include="Assets\Fonts\SegoeFluentIcons.ttf" />
   </ItemGroup>
+  <PropertyGroup Condition="'$(IncludeLocalService)' == 'true'">
+    <DefineConstants>$(DefineConstants);BUNDLED_LOCAL_SERVICE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Helper\LocalServiceManager.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(IncludeLocalService)' == 'true'">
+    <SDKReference Include="WindowsDesktop, Version=$(TargetPlatformVersion)" />
+    <AppxManifest Include="Package.Desktop.appxmanifest">
+      <SubType>Designer</SubType>
+    </AppxManifest>
+    <Content Include="$(LocalServicePublishDir)\**\*">
+      <Link>LocalService\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <Target Name="ValidateLocalServicePayload" BeforeTargets="PrepareForBuild" Condition="'$(IncludeLocalService)' == 'true'">
+    <Error Condition="'$(Platform)' != 'x64'" Text="The bundled local service currently requires the desktop x64 build." />
+    <Error Condition="!Exists('$(LocalServicePublishDir)\AllLive.SignService.exe')" Text="Publish the self-contained local service before building the desktop package." />
+    <Error Condition="!Exists('$(LocalServicePublishDir)\quickjs.dll')" Text="The native QuickJS runtime is missing from the service payload." />
+  </Target>
   <PropertyGroup Condition=" '$(VisualStudioVersion)' == '' or '$(VisualStudioVersion)' &lt; '14.0' ">
     <VisualStudioVersion>14.0</VisualStudioVersion>
   </PropertyGroup>

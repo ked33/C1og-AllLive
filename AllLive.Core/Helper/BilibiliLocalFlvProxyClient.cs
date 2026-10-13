@@ -41,7 +41,7 @@ namespace AllLive.Core.Helper
                     client.Timeout = TimeSpan.FromMilliseconds(750);
                     var json = JsonConvert.SerializeObject(payload);
                     using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
-                    using (var response = await client.PostAsync($"{DefaultBaseUrl}/api/bilibili/stream", content))
+                    using (var response = await LocalServiceClient.PostAsync(client, $"{DefaultBaseUrl}/api/bilibili/stream", content))
                     {
                         var body = await response.Content.ReadAsStringAsync();
                         if (!response.IsSuccessStatusCode)

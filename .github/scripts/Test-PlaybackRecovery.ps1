@@ -25,7 +25,7 @@ $coreSources = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'AllLive.Core')
 $syntaxFiles = @($uwpSources + $coreSources | Sort-Object -Unique)
 $options = [Microsoft.CodeAnalysis.CSharp.CSharpParseOptions]::Default.WithLanguageVersion(
     [Microsoft.CodeAnalysis.CSharp.LanguageVersion]::CSharp7_3).WithPreprocessorSymbols(
-    [string[]]@('TRACE', 'WINDOWS_UWP', 'NETFX_CORE'))
+    [string[]]@('TRACE', 'WINDOWS_UWP', 'NETFX_CORE', 'BUNDLED_LOCAL_SERVICE'))
 $errors = @()
 foreach ($path in $syntaxFiles) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Compile source is missing: $path" }

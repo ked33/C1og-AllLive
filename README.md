@@ -48,6 +48,8 @@
 | `AllLive-UWP-Packages` | 同级的 `AllLive.cer`、`Install-AllLive-Certificate.cmd` 和 `AllLive.UWP_<版本>_x64.msixbundle` | 日常安装、更新 |
 | `AllLive-UWP-Dependencies-x64` | `x64/` 下的框架 `.appx` 包 | 首次安装缺少依赖、离线安装时使用 |
 
+从 2.3.65.0 起，Actions 的 Windows x64 包内置本地签名与 B 站流转发服务。直接打开 AllLive 即会启动服务，关闭最后一个窗口后自动退出；无需运行旧 PS 启动脚本，也无需另装 .NET。最小化不会停止服务，诊断仍由“运行日志”开关控制。参见[内置服务说明](docs/bundled-local-service.md)。
+
 安装和更新步骤：
 
 1. 解压 `AllLive-UWP-Packages`，双击 `Install-AllLive-Certificate.cmd` 并确认管理员授权。脚本会将同目录的 `AllLive.cer` 导入“本地计算机 → 受信任的人”，出现 `[OK] Certificate installed.` 后继续。脚本使用 Windows 自带工具，无需安装 PowerShell 7；也可手动导入证书。

@@ -884,13 +884,12 @@ namespace AllLive.UWP.Views
             var url = string.IsNullOrWhiteSpace(txtDouyuSignUrl.Text)
                 ? SettingHelper.DOUYU_SIGN_URL_DEFAULT
                 : txtDouyuSignUrl.Text.Trim();
-            var healthUrl = BuildHealthUrl(url);
             txtDouyuSignStatus.Text = "检测中...";
 
             try
             {
                 using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) })
-                using (var response = await client.GetAsync(healthUrl))
+                using (var response = await AllLive.Core.Helper.LocalServiceClient.GetHealthAsync(client, url))
                 {
                     if (response.IsSuccessStatusCode)
                     {
@@ -925,13 +924,12 @@ namespace AllLive.UWP.Views
             var url = string.IsNullOrWhiteSpace(txtDouyinSignUrl.Text)
                 ? SettingHelper.DOUYIN_SIGN_URL_DEFAULT
                 : txtDouyinSignUrl.Text.Trim();
-            var healthUrl = BuildHealthUrl(url);
             txtDouyinSignStatus.Text = "检测中...";
 
             try
             {
                 using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) })
-                using (var response = await client.GetAsync(healthUrl))
+                using (var response = await AllLive.Core.Helper.LocalServiceClient.GetHealthAsync(client, url))
                 {
                     if (response.IsSuccessStatusCode)
                     {
@@ -953,20 +951,6 @@ namespace AllLive.UWP.Views
                     Utils.ShowMessageToast($"签名服务不可用：{ex.Message}");
                 }
             }
-        }
-
-        private static string BuildHealthUrl(string signUrl)
-        {
-            if (Uri.TryCreate(signUrl, UriKind.Absolute, out var uri))
-            {
-                var builder = new UriBuilder(uri)
-                {
-                    Path = "/health",
-                    Query = ""
-                };
-                return builder.Uri.ToString();
-            }
-            return signUrl.TrimEnd('/') + "/health";
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)

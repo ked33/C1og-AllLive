@@ -33,6 +33,18 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Verify and publish bundled local service
+        shell: pwsh
+        run: |
+          & ./.github/scripts/Test-LocalService.ps1
+          $publish = Join-Path $env:RUNNER_TEMP 'AllLive-LocalService'
+          & dotnet publish AllLive.SignService/AllLive.SignService.csproj -c Release -r win-x64 --self-contained true -o $publish -p:DebugType=None -p:DebugSymbols=false
+          if ($LASTEXITCODE -ne 0) { throw "Local service publish failed: $LASTEXITCODE" }
+          foreach ($name in @('AllLive.SignService.exe', 'quickjs.dll', 'coreclr.dll', 'hostfxr.dll', 'Assets/douyin-webmssdk.js')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $publish $name))) { throw "Missing service payload: $name" }
+          }
+          "LOCAL_SERVICE_PUBLISH_DIR=$publish" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Install UWP build tools
         shell: pwsh
         run: |
@@ -186,6 +198,8 @@ jobs:
               "/restore",
               "/p:Configuration=$env:BUILD_CONFIG",
               "/p:Platform=x64",
+              "/p:IncludeLocalService=true",
+              "/p:LocalServicePublishDir=$env:LOCAL_SERVICE_PUBLISH_DIR",
               "/p:AppxBundle=Always",
               "/p:AppxBundlePlatforms=x64",
               "/p:TargetPlatformVersion=$windowsSdkVersion",
@@ -214,6 +228,11 @@ jobs:
               Remove-Item -Path $certificatePath -Force
             }
           }
+
+      - name: Verify bundled service in signed package
+        shell: pwsh
+        run: |
+          & ./.github/scripts/Test-BundledService.ps1 -AppPackagesDirectory 'AllLive.UWP/AppPackages' -PublishDirectory $env:LOCAL_SERVICE_PUBLISH_DIR
 
       - name: Prepare installation artifacts
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'

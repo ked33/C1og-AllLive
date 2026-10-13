@@ -545,7 +545,7 @@ namespace AllLive.Core.Danmaku
                             : TimeSpan.FromSeconds(10);
                         var start = DateTimeOffset.UtcNow;
                         using (var content = new StringContent(payload, Encoding.UTF8, "application/json"))
-                        using (var response = await client.PostAsync(url, content))
+                        using (var response = await LocalServiceClient.PostAsync(client, url, content))
                         {
                             var body = await response.Content.ReadAsStringAsync();
                             var elapsedMs = (DateTimeOffset.UtcNow - start).TotalMilliseconds;

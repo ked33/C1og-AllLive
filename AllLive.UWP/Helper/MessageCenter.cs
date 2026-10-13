@@ -145,12 +145,15 @@ namespace AllLive.UWP.Helper
                     return;
                 }
 
+                int newViewId = 0;
+                using (var serviceView = LocalServiceManager.ReserveNewView())
                 try
                 {
                     CoreApplicationView newView = CoreApplication.CreateNewView();
-                    int newViewId = 0;
                     await newView.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                     {
+                        newViewId = ApplicationView.GetForCurrentView().Id;
+                        LocalServiceManager.RegisterCurrentView();
                         Frame frame = new Frame();
                         ThemeHelper.Apply(frame);
                         frame.Navigate(typeof(LiveRoomPage), data);
@@ -158,7 +161,6 @@ namespace AllLive.UWP.Helper
                         Window.Current.Activate();
                         // 新窗口标题栏再应用一次（ExtendViewIntoTitleBar 之后）
                         ThemeHelper.Apply(frame);
-                        newViewId = ApplicationView.GetForCurrentView().Id;
                         if (!string.IsNullOrWhiteSpace(liveRoomKey))
                         {
                             OpenLiveRoomWindows[liveRoomKey] = newViewId;
@@ -177,10 +179,16 @@ namespace AllLive.UWP.Helper
                         //};
                     });
                     bool viewShown = await ApplicationViewSwitcher.TryShowAsStandaloneAsync(newViewId);
+                    if (!viewShown) LocalServiceManager.UnregisterView(newViewId);
                     if (!viewShown && !string.IsNullOrWhiteSpace(liveRoomKey))
                     {
                         OpenLiveRoomWindows.TryRemove(liveRoomKey, out _);
                     }
+                }
+                catch
+                {
+                    if (newViewId != 0) LocalServiceManager.UnregisterView(newViewId);
+                    throw;
                 }
                 finally
                 {
