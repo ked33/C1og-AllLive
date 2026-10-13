@@ -767,7 +767,7 @@ namespace AllLive.Core
         public async Task<bool> GetLiveStatus(object roomId)
         {
             var roomInfo = await GetRoomInfo(roomId.ToString());
-            return roomInfo["roomInfo"]["eLiveStatus"].ToInt32() == 2;
+            return LiveStatusParser.IsLive(roomInfo?["roomInfo"]?["eLiveStatus"], 2, 0, 1);
         }
         public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
         {

@@ -1175,7 +1175,7 @@ namespace AllLive.Core
             var id = roomId?.ToString();
             if (string.IsNullOrWhiteSpace(id))
             {
-                return false;
+                throw new ArgumentException("Room ID is required.", nameof(roomId));
             }
             if (id.Length <= 16)
             {
@@ -1184,7 +1184,7 @@ namespace AllLive.Core
 
             var roomData = await GetRoomDataByRoomID(id);
             var room = roomData?["data"]?["room"];
-            var status = room?["status"]?.ToObject<int>() ?? 0;
+            var status = LiveStatusParser.ReadRequiredNumber(room?["status"]);
             if (status == 4)
             {
                 var webRid = room?["owner"]?["web_rid"]?.ToString();
@@ -1193,7 +1193,7 @@ namespace AllLive.Core
                     return await GetLiveStatusByWebRid(webRid);
                 }
             }
-            return status == 2;
+            return LiveStatusParser.IsLive(room?["status"], 2, 4);
 
         }
         private async Task<bool> GetLiveStatusByWebRid(string webRid)
@@ -1202,7 +1202,7 @@ namespace AllLive.Core
             {
                 var data = await GetRoomDataApi(webRid);
                 var roomData = data?["data"]?[0];
-                return roomData?["status"]?.ToObject<int>() == 2;
+                return LiveStatusParser.IsLive(roomData?["status"], 2, 4);
             }
             catch (Exception ex)
             {
@@ -1211,7 +1211,7 @@ namespace AllLive.Core
 
             var roomDataHtml = await GetRoomDataHtml(webRid);
             var room = roomDataHtml?["roomStore"]?["roomInfo"]?["room"];
-            return room?["status"]?.ToObject<int>() == 2;
+            return LiveStatusParser.IsLive(room?["status"], 2, 4);
         }
         public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
         {

@@ -1817,7 +1817,7 @@ namespace AllLive.Core
         {
             var resp = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/get_info?room_id={roomId}", headers: await GetRequestHeader());
             var obj = JObject.Parse(resp);
-            return obj["data"]["live_status"].ToObject<int>() == 1;
+            return LiveStatusParser.IsLive(obj["data"]?["live_status"], 1, 0, 2);
         }
 
         public async Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)

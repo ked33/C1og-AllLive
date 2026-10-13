@@ -19,12 +19,14 @@ namespace AllLive.UWP.Helper
     }
     public class LogHelper
     {
-        public static bool Enabled { get; private set; } = true;
-        public static LoggingConfiguration config;
+        private static volatile bool enabled;
+        private static readonly object configurationLock = new object();
+        public static bool Enabled => enabled;
+        public static volatile LoggingConfiguration config;
         public static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
         public static void SetEnabled(bool enabled)
         {
-            Enabled = enabled;
+            LogHelper.enabled = enabled;
         }
         public static void LogDebug(string message)
         {
@@ -43,7 +45,9 @@ namespace AllLive.UWP.Helper
                 return;
             }
 
-            var message = messageFactory();
+            string message;
+            try { message = messageFactory(); }
+            catch { return; } // Diagnostics must never interrupt playback/cleanup.
             if (string.IsNullOrWhiteSpace(message))
             {
                 return;
@@ -58,40 +62,57 @@ namespace AllLive.UWP.Helper
             {
                 return;
             }
-            if (config == null)
+            try
             {
-                config = new NLog.Config.LoggingConfiguration();
-                Windows.Storage.StorageFolder storageFolder = Windows.Storage.ApplicationData.Current.LocalFolder;
-                var logfile = new NLog.Targets.FileTarget()
+                if (config == null)
                 {
-                    Name = "logfile",
-                    CreateDirs = true,
-                    FileName = storageFolder.Path + @"\log\" + DateTime.Now.ToString("yyyyMMdd") + ".log",
-                    Layout = "${longdate}|${level:uppercase=true}|${logger}|${threadid}|${message}|${exception:format=Message,StackTrace}"
-                };
-                config.AddRule(LogLevel.Info, LogLevel.Info, logfile);
-                config.AddRule(LogLevel.Debug, LogLevel.Debug, logfile);
-                config.AddRule(LogLevel.Error, LogLevel.Error, logfile);
-                config.AddRule(LogLevel.Fatal, LogLevel.Fatal, logfile);
-                NLog.LogManager.Configuration = config;
+                    lock (configurationLock)
+                    {
+                        if (config == null)
+                        {
+                            var logConfig = new LoggingConfiguration();
+                            var logDirectory = Windows.Storage.ApplicationData.Current.LocalFolder.Path + @"\log\";
+                            var logfile = new NLog.Targets.FileTarget()
+                            {
+                                Name = "logfile",
+                                CreateDirs = true,
+                                FileName = logDirectory + "AllLive.log",
+                                ArchiveFileName = logDirectory + "AllLive.{#}.log",
+                                ArchiveAboveSize = 5 * 1024 * 1024,
+                                ArchiveEvery = NLog.Targets.FileArchivePeriod.Day,
+                                ArchiveNumbering = NLog.Targets.ArchiveNumberingMode.Rolling,
+                                MaxArchiveFiles = 5,
+                                Layout = "${longdate}|${level:uppercase=true}|${logger}|${threadid}|${message}|${exception:format=Message,StackTrace}"
+                            };
+                            logConfig.AddRule(LogLevel.Debug, LogLevel.Fatal, logfile);
+                            NLog.LogManager.Configuration = logConfig;
+                            config = logConfig;
+                        }
+                    }
+                }
+                if (!Enabled) return;
+                Debug.WriteLine("[" + LogType.INFO.ToString() + "]" + message);
+                switch (type)
+                {
+                    case LogType.INFO:
+                        logger.Info(message);
+                        break;
+                    case LogType.DEBUG:
+                        logger.Debug(message);
+                        break;
+                    case LogType.ERROR:
+                        logger.Error(ex, message);
+                        break;
+                    case LogType.FATAL:
+                        logger.Fatal(ex, message);
+                        break;
+                    default:
+                        break;
+                }
             }
-            Debug.WriteLine("[" + LogType.INFO.ToString() + "]" + message);
-            switch (type)
+            catch
             {
-                case LogType.INFO:
-                    logger.Info(message);
-                    break;
-                case LogType.DEBUG:
-                    logger.Debug(message);
-                    break;
-                case LogType.ERROR:
-                    logger.Error(ex, message);
-                    break;
-                case LogType.FATAL:
-                    logger.Fatal(ex, message);
-                    break;
-                default:
-                    break;
+                // File/configuration failures must not affect recovery resource ownership.
             }
         }
         public static bool IsNetworkError(Exception ex)

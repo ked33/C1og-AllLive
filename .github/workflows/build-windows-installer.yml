@@ -19,6 +19,10 @@ jobs:
         with:
           ref: ${{ env.TARGET_BRANCH }}
 
+      - name: Check playback recovery guards and C# syntax
+        shell: pwsh
+        run: ./.github/scripts/Test-PlaybackRecovery.ps1
+
       - uses: actions/cache@v5
         with:
           path: ~/.nuget/packages

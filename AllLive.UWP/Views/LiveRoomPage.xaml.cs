@@ -72,17 +72,10 @@ namespace AllLive.UWP.Views
         private string lastMediaInfoSnapshot;
         private string diagnosticsSnapshot;
         private Task diagnosticsSnapshotTask;
-        private DateTimeOffset? lastHuyaRefreshUtc;
-        private static readonly TimeSpan HuyaRefreshCooldown = TimeSpan.FromSeconds(30);
         private MediaPlaybackState? lastPlaybackState;
         private DateTimeOffset? lastMediaOpenedUtc;
         private DateTimeOffset? lastPlaybackStartUtc;
         private string lastPlaybackUrl;
-        private string currentLineRetryUrl;
-        private int currentLineRetryCount;
-        private static readonly TimeSpan EarlyEndThreshold = TimeSpan.FromSeconds(8);
-        private static readonly TimeSpan CurrentLineRetryDelay = TimeSpan.FromSeconds(1);
-        private static readonly TimeSpan BilibiliRetryWindow = TimeSpan.FromSeconds(45);
         private static readonly TimeSpan BilibiliDirectFlvCreateSourceTimeout = TimeSpan.FromSeconds(6);
         private static readonly TimeSpan BilibiliLocalProxyCreateSourceTimeout = TimeSpan.FromSeconds(3);
         private static readonly TimeSpan BilibiliCreateSourceTimeout = TimeSpan.FromSeconds(12);
@@ -92,12 +85,9 @@ namespace AllLive.UWP.Views
 
         private System.Threading.CancellationTokenSource streamReconnectCts;
         private int streamReconnectAttempt;
-        private int streamReconnectLevel;
         private int streamReconnectInProgress;
         private bool isNetworkDown;
         private bool playbackRecoveryStopped;
-        private int automaticRecoveryActions;
-        private const int MaxAutomaticRecoveryActions = 12;
         private System.Threading.CancellationTokenSource stablePlaybackCts;
         private static readonly TimeSpan StablePlaybackDuration = TimeSpan.FromSeconds(30);
         private DispatcherTimer bufferingTimer;
@@ -204,14 +194,16 @@ namespace AllLive.UWP.Views
             public string Error { get; set; }
         }
 
-        // 保留原始 WinRT 操作，切线或关闭时既结束上层等待，也向底层发出取消。
+        // FFmpegInteropX 2.0 的建源不响应原生 I/O 取消。只取消 UI 等待，
+        // 原始操作完成并交接/释放结果后才归还并发配额。
         private sealed class MediaSourceCreateAttempt : IDisposable
         {
             private readonly System.Threading.CancellationTokenSource cancellationSource;
+            private readonly IDisposable operationLease;
             private int cancellationRequested;
             private int disposed;
 
-            public MediaSourceCreateAttempt(int version, IAsyncOperation<FFmpegMediaSource> operation)
+            public MediaSourceCreateAttempt(int version, IAsyncOperation<FFmpegMediaSource> operation, IDisposable operationLease)
             {
                 Version = version;
                 if (operation == null)
@@ -219,8 +211,9 @@ namespace AllLive.UWP.Views
                     throw new ArgumentNullException(nameof(operation));
                 }
                 Operation = operation;
+                this.operationLease = operationLease;
                 cancellationSource = new System.Threading.CancellationTokenSource();
-                CreateTask = operation.AsTask(cancellationSource.Token);
+                CreateTask = operation.AsTask();
             }
 
             public int Version { get; }
@@ -253,6 +246,7 @@ namespace AllLive.UWP.Views
                 try { cancellationSource.Cancel(); } catch { }
                 try { Operation.Close(); } catch { }
                 cancellationSource.Dispose();
+                operationLease.Dispose();
             }
         }
 
@@ -422,31 +416,7 @@ namespace AllLive.UWP.Views
                         LogHelper.Log(earlyProbe, LogType.DEBUG);
                     }
                 }
-                CancelStablePlaybackReset();
-                if (System.Threading.Volatile.Read(ref streamReconnectInProgress) != 0) return;
-                if (!TryBeginAutomaticRecovery()) return;
-                if (TryRefreshHuyaPlayUrls("播放结束"))
-                {
-                    return;
-                }
-                if (TryFallbackBilibiliCodec("播放结束"))
-                {
-                    return;
-                }
-                if (TryRetryCurrentLine("播放结束"))
-                {
-                    return;
-                }
-                var index = liveRoomVM.Lines.IndexOf(liveRoomVM.CurrentLine);
-                //尝试切换
-                if (index == liveRoomVM.Lines.Count - 1)
-                {
-                    StopPlaybackAfterFailure("直播已结束，请点击刷新重试");
-                }
-                else
-                {
-                    liveRoomVM.CurrentLine = liveRoomVM.Lines[index + 1];
-                }
+                TryScheduleStreamReconnect("MediaEnded");
             });
         }
 
@@ -601,6 +571,8 @@ namespace AllLive.UWP.Views
                         liveRoomVM.Living = true;
                         SetMediaInfo();
                         // 短暂 Playing 只结束当前调度，不清空累计失败次数。
+                        recoveryPlaybackResult?.TrySetResult(true);
+                        LogRecoveryEvent("Playing");
                         CancelStreamReconnect();
                         StopBufferingTimer();
                         liveRoomVM?.StartDeferredLiveExtras();
@@ -1036,68 +1008,8 @@ namespace AllLive.UWP.Views
 
         private void StartPlaybackStallProbe(string url, string sampleText, string reason, int attemptVersion)
         {
-            if (!IsDebugDiagnosticsEnabled() ||
-                string.IsNullOrWhiteSpace(url))
-            {
-                return;
-            }
-
-            _ = Task.Run(async () =>
-            {
-                if (!IsDebugDiagnosticsEnabled())
-                {
-                    return;
-                }
-
-                var probe = await ProbeUrlAsync(url);
-                string hlsProbe = null;
-                string throughputProbe = null;
-                string flvProbe = null;
-                if (IsHlsUrl(url))
-                {
-                    hlsProbe = await ProbeHlsAsync(url);
-                }
-                else if (IsFlvUrl(url))
-                {
-                    throughputProbe = await ProbeThroughputAsync(url);
-                    flvProbe = await ProbeFlvAsync(url);
-                }
-                else
-                {
-                    throughputProbe = await ProbeThroughputAsync(url);
-                }
-                var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                var correlation = BuildProbeCorrelationSummary(
-                    probe,
-                    throughputProbe,
-                    flvProbe,
-                    connectivityProbe,
-                    hlsProbe,
-                    reason);
-                if (!IsDebugDiagnosticsEnabled())
-                {
-                    return;
-                }
-                var merged = JoinNonEmpty(
-                    $"播放卡顿诊断 reason={reason} attempt={attemptVersion}",
-                    lastMediaInfoSnapshot,
-                    sampleText,
-                    BuildRecentPlaybackSamplesSnapshot(),
-                    BuildRecentPlaybackEventsSnapshot(),
-                    BuildUiHealthSnapshot(DateTimeOffset.UtcNow),
-                    BuildRuntimeResourceSnapshot(),
-                    BuildNetworkStateSnapshot(),
-                    correlation,
-                    probe,
-                    hlsProbe,
-                    throughputProbe,
-                    flvProbe,
-                    connectivityProbe);
-                if (!string.IsNullOrEmpty(merged))
-                {
-                    LogHelper.Log(merged, LogType.DEBUG);
-                }
-            });
+            if (!IsDebugDiagnosticsEnabled() || !IsMediaSourceAttemptCurrent(attemptVersion)) return;
+            LogRecoveryEvent("PlaybackStall", reason, attemptVersion);
         }
 
         private void CancelPlaybackSampling()
@@ -1602,7 +1514,11 @@ namespace AllLive.UWP.Views
                     if (!isNetworkDown)
                     {
                         isNetworkDown = true;
+                        LogRecoveryEvent("NetworkLost");
+                        recoveryElapsed?.Stop();
                         CancelStreamReconnect();
+                        liveRoomVM.PausePlaybackRequests();
+                        liveRoomVM.PauseLiveExtras();
                         ReleasePlaybackResources();
                         ReleaseDisplayRequestHold();
                         LogDebugIfEnabled("网络已断开");
@@ -1617,7 +1533,8 @@ namespace AllLive.UWP.Views
                     {
                         isNetworkDown = false;
                         LogDebugIfEnabled("网络已恢复，触发重连");
-                        TryScheduleStreamReconnect("NetworkRestored");
+                        if (!TryScheduleStreamReconnect("NetworkRestored"))
+                            PlayerLoadText.Text = "网络已恢复，请点击刷新加载直播间";
                     }
                 }
             });
@@ -1656,11 +1573,11 @@ namespace AllLive.UWP.Views
 
         private void ResetStreamReconnectState()
         {
+            recoveryGeneration++;
+            recoveryElapsed = null;
             playbackRecoveryStopped = false;
-            automaticRecoveryActions = 0;
             CancelStablePlaybackReset();
             streamReconnectAttempt = 0;
-            streamReconnectLevel = 0;
             CancelStreamReconnect();
             System.Threading.Interlocked.Exchange(ref streamReconnectInProgress, 0);
         }
@@ -1689,11 +1606,9 @@ namespace AllLive.UWP.Views
                     initialPosition.HasValue && position.HasValue &&
                     position.Value - initialPosition.Value >= TimeSpan.FromSeconds(15))
                 {
-                    automaticRecoveryActions = 0;
                     streamReconnectAttempt = 0;
-                    streamReconnectLevel = 0;
-                    currentLineRetryUrl = null;
-                    currentLineRetryCount = 0;
+                    recoveryElapsed = null;
+                    recoveryGeneration++;
                     LogDebugIfEnabled("连续稳定播放 30s，重置重连预算");
                 }
             }
@@ -1705,22 +1620,13 @@ namespace AllLive.UWP.Views
             }
         }
 
-        private bool TryBeginAutomaticRecovery()
-        {
-            if (isPageClosing || isNetworkDown || playbackRecoveryStopped) return false;
-            if (automaticRecoveryActions >= MaxAutomaticRecoveryActions)
-            {
-                StopPlaybackAfterFailure("自动恢复已达上限，请点击刷新重试");
-                return false;
-            }
-            automaticRecoveryActions++;
-            return true;
-        }
-
         private void StopPlaybackAfterFailure(string message)
         {
             playbackRecoveryStopped = true;
+            LogRecoveryEvent("Stopped", message);
             CancelStreamReconnect();
+            liveRoomVM.PausePlaybackRequests();
+            liveRoomVM.PauseLiveExtras();
             ReleasePlaybackResources();
             ReleaseDisplayRequestHold();
             liveRoomVM.Living = false;
@@ -1768,16 +1674,10 @@ namespace AllLive.UWP.Views
 
         private bool IsDuplicateSetPlayerRequest(string url, DateTimeOffset now, string source)
         {
-            var allowRetryOfActiveUrl =
-                string.Equals(source, "RetryCurrentLine", StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrEmpty(activeSetPlayerUrl) &&
-                string.Equals(activeSetPlayerUrl, url, StringComparison.OrdinalIgnoreCase) &&
-                string.IsNullOrWhiteSpace(pendingSetPlayerUrl);
-
             if (!string.IsNullOrEmpty(activeSetPlayerUrl) &&
                 string.Equals(activeSetPlayerUrl, url, StringComparison.OrdinalIgnoreCase) &&
                 (now - activeSetPlayerUtc) <= DuplicateSetPlayerWindow &&
-                !allowRetryOfActiveUrl)
+                source != "Recovery")
             {
                 return true;
             }
@@ -1854,6 +1754,7 @@ namespace AllLive.UWP.Views
         {
             var cts = streamReconnectCts;
             streamReconnectCts = null;
+            recoveryPlaybackResult = null;
             if (cts != null)
             {
                 try { cts.Cancel(); } catch { }
@@ -1886,6 +1787,7 @@ namespace AllLive.UWP.Views
 
         private void InvalidateMediaSourceAttempt()
         {
+            try { mediaSourceWaitCts?.Cancel(); } catch (ObjectDisposedException) { }
             CancelPlaybackSampling();
             MediaSourceCreateAttempt[] attempts;
             lock (mediaSourceCreateLock)
@@ -1919,9 +1821,10 @@ namespace AllLive.UWP.Views
 
         private MediaSourceCreateAttempt RegisterMediaSourceCreateAttempt(
             int attemptVersion,
-            IAsyncOperation<FFmpegMediaSource> operation)
+            IAsyncOperation<FFmpegMediaSource> operation,
+            IDisposable operationLease)
         {
-            var attempt = new MediaSourceCreateAttempt(attemptVersion, operation);
+            var attempt = new MediaSourceCreateAttempt(attemptVersion, operation, operationLease);
             bool registered;
             lock (mediaSourceCreateLock)
             {
@@ -1938,6 +1841,7 @@ namespace AllLive.UWP.Views
                 return attempt;
             }
 
+            LogRecoveryEvent("CreateStarted", sourceVersion: attemptVersion);
             return attempt;
         }
 
@@ -1952,14 +1856,14 @@ namespace AllLive.UWP.Views
             {
                 pendingMediaSourceCreateAttempts.Remove(attempt);
             }
+            LogRecoveryEvent("CreateOperationEnded", sourceVersion: attempt.Version);
         }
 
         private void CancelMediaSourceCreateAttempt(MediaSourceCreateAttempt attempt, string reason)
         {
             if (attempt != null && attempt.Cancel())
             {
-                LogDebugIfEnabled(() =>
-                    $"播放器建源取消 reason={reason} attempt={attempt.Version}");
+                LogRecoveryEvent("CreateWaitCanceled", reason, attempt.Version);
             }
         }
 
@@ -1975,120 +1879,6 @@ namespace AllLive.UWP.Views
             foreach (var attempt in attempts)
             {
                 CancelMediaSourceCreateAttempt(attempt, reason);
-            }
-        }
-
-        private bool TryScheduleStreamReconnect(string reason)
-        {
-            if (isPageClosing || isNetworkDown || playbackRecoveryStopped) return true;
-            if (liveRoomVM == null || liveRoomVM.Loading) return false;
-            if (liveRoomVM.CurrentLine == null || string.IsNullOrEmpty(liveRoomVM.CurrentLine.Url)) return false;
-            if (System.Threading.Interlocked.CompareExchange(ref streamReconnectInProgress, 1, 0) != 0)
-            {
-                return true;
-            }
-            _ = ReconnectStreamAsync(reason);
-            return true;
-        }
-
-        private async Task ReconnectStreamAsync(string reason)
-        {
-            CancelStreamReconnect();
-            System.Threading.Interlocked.Exchange(ref streamReconnectInProgress, 1);
-            var cts = new System.Threading.CancellationTokenSource();
-            streamReconnectCts = cts;
-            var token = cts.Token;
-
-            try
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    if (streamReconnectAttempt >= MaxStreamReconnectAttempts)
-                    {
-                        StopPlaybackAfterFailure("自动重连失败，请点击刷新重试");
-                        LogHelper.Log("流重连已达上限", LogType.ERROR);
-                        return;
-                    }
-
-                    var delay = StreamReconnectDelays[Math.Min(streamReconnectAttempt, StreamReconnectDelays.Length - 1)];
-                    streamReconnectAttempt++;
-                    var level = streamReconnectLevel;
-                    var levelText = level == 0 ? "重连当前线路" : level == 1 ? "刷新播放地址" : "重新加载直播间";
-                    PlayerLoading.Visibility = Visibility.Visible;
-                    PlayerLoadText.Text = $"直播流重连中 ({streamReconnectAttempt}/{MaxStreamReconnectAttempts})：{levelText}";
-                    LogDebugIfEnabled(() => $"流重连调度 reason={reason} attempt={streamReconnectAttempt} level={level} delay={delay.TotalSeconds}s");
-
-                    try { await Task.Delay(delay, token); }
-                    catch (TaskCanceledException) { return; }
-                    if (token.IsCancellationRequested) return;
-                    if (isNetworkDown || isPageClosing || playbackRecoveryStopped) return;
-
-                    if (!TryBeginAutomaticRecovery()) return;
-                    bool actionSucceeded = false;
-                    try
-                    {
-                        if (level == 0)
-                        {
-                            var url = liveRoomVM?.CurrentLine?.Url;
-                            if (!string.IsNullOrEmpty(url))
-                            {
-                                QueueSetPlayer(url, $"Reconnect/{reason}");
-                            }
-                        }
-                        else if (level == 1)
-                        {
-                            liveRoomVM.LoadPlayUrl();
-                        }
-                        else
-                        {
-                            if (pageArgs != null && !string.IsNullOrEmpty(liveRoomVM?.RoomID))
-                            {
-                                await liveRoomVM.StopAsync();
-                                if (token.IsCancellationRequested || isPageClosing || isNetworkDown) return;
-                                liveRoomVM.LoadData(pageArgs.Site, liveRoomVM.RoomID);
-                            }
-                        }
-
-                        // 每 2 次尝试升一级
-                        if (streamReconnectAttempt % 2 == 0 && streamReconnectLevel < 2)
-                        {
-                            streamReconnectLevel++;
-                        }
-                        actionSucceeded = true;
-                    }
-                    catch (Exception ex)
-                    {
-                        LogHelper.Log($"流重连第{streamReconnectAttempt}次失败", LogType.ERROR, ex);
-                    }
-
-                    if (actionSucceeded)
-                    {
-                        // 等待 10s 让 action 生效：进入 Playing 会 Cancel token 并退出；否则继续 while 进入下一轮
-                        try
-                        {
-                            await Task.Delay(TimeSpan.FromSeconds(10), token);
-                        }
-                        catch (TaskCanceledException)
-                        {
-                            return;
-                        }
-                        if (token.IsCancellationRequested) return;
-                        var curState = mediaPlayer?.PlaybackSession?.PlaybackState;
-                        if (curState == MediaPlaybackState.Playing)
-                        {
-                            return;
-                        }
-                    }
-                }
-            }
-            finally
-            {
-                if (streamReconnectCts == cts)
-                {
-                    streamReconnectCts = null;
-                    System.Threading.Interlocked.Exchange(ref streamReconnectInProgress, 0);
-                }
-                cts.Dispose();
             }
         }
 
@@ -2329,77 +2119,12 @@ namespace AllLive.UWP.Views
         }
         private string BuildEarlyEndProbe(MediaPlaybackSession session, string reason)
         {
-            if (!IsDebugDiagnosticsEnabled())
-            {
-                return null;
-            }
-
-            var url = liveRoomVM?.CurrentLine?.Url ?? lastPlaybackUrl;
-            if (string.IsNullOrEmpty(url))
-            {
-                return null;
-            }
-            TimeSpan? duration = null;
-            if (lastPlaybackStartUtc.HasValue)
-            {
-                duration = DateTimeOffset.UtcNow - lastPlaybackStartUtc.Value;
-            }
-            if (duration.HasValue && duration.Value > EarlyEndThreshold)
-            {
-                return null;
-            }
-            var reasonText = duration.HasValue ? $"{reason} duration={duration.Value.TotalSeconds:F2}s" : reason;
-            _ = Task.Run(async () =>
-            {
-                if (!IsDebugDiagnosticsEnabled())
-                {
-                    return;
-                }
-
-                var probe = await ProbeUrlAsync(url);
-                string hlsProbe = null;
-                string throughputProbe = null;
-                string flvProbe = null;
-                if (IsHlsUrl(url))
-                {
-                    hlsProbe = await ProbeHlsAsync(url);
-                }
-                else if (IsFlvUrl(url))
-                {
-                    throughputProbe = await ProbeThroughputAsync(url);
-                    flvProbe = await ProbeFlvAsync(url);
-                }
-                else
-                {
-                    throughputProbe = await ProbeThroughputAsync(url);
-                }
-                var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe, hlsProbe);
-                if (!IsDebugDiagnosticsEnabled())
-                {
-                    return;
-                }
-                var merged = JoinNonEmpty(
-                    $"短播放预检: {reasonText}",
-                    lastMediaInfoSnapshot,
-                    BuildRecentPlaybackSamplesSnapshot(),
-                    BuildRecentPlaybackEventsSnapshot(),
-                    BuildUiHealthSnapshot(DateTimeOffset.UtcNow),
-                    BuildRuntimeResourceSnapshot(),
-                    BuildNetworkStateSnapshot(),
-                    correlation,
-                    probe,
-                    hlsProbe,
-                    throughputProbe,
-                    flvProbe,
-                    connectivityProbe);
-                if (!string.IsNullOrEmpty(merged))
-                {
-                    LogHelper.Log(merged, LogType.DEBUG);
-                }
-            });
-            return $"短播放预检触发: {reasonText}";
+            if (!IsDebugDiagnosticsEnabled()) return null;
+            var duration = lastPlaybackStartUtc.HasValue
+                ? (DateTimeOffset.UtcNow - lastPlaybackStartUtc.Value).TotalSeconds : -1;
+            return $"播放结束: reason={reason} durationSec={duration:F2}（仅记录本地状态）";
         }
+
         private async Task<string> ProbeFlvAsync(string url)
         {
             if (!IsDebugDiagnosticsEnabled() ||
@@ -3547,82 +3272,6 @@ namespace AllLive.UWP.Views
             LogHelper.Log(message, LogType.ERROR, ex);
         }
 
-        private void StartMediaSourceFailureDiagnostics(string title, Exception ex, string url, string playbackContext, string configSnapshot, string urlAnalysis, string failureSummary)
-        {
-            if (!IsDebugDiagnosticsEnabled() || string.IsNullOrWhiteSpace(url))
-            {
-                return;
-            }
-
-            _ = LogMediaSourceFailureDiagnosticsAsync(title, ex, url, playbackContext, configSnapshot, urlAnalysis, failureSummary);
-        }
-
-        private async Task LogMediaSourceFailureDiagnosticsAsync(string title, Exception ex, string url, string playbackContext, string configSnapshot, string urlAnalysis, string failureSummary)
-        {
-            try
-            {
-                string throttleNote;
-                if (!TryAcquireFullFailureDiagnosticSlot(url, ex, out throttleNote))
-                {
-                    LogDebugIfEnabled(() => JoinNonEmpty(
-                        $"{title}后台网络诊断已节流",
-                        throttleNote,
-                        failureSummary,
-                        BuildExceptionSummary(ex),
-                        BuildUrlSummary(url)));
-                    return;
-                }
-
-                var probe = await ProbeUrlAsync(url);
-                string hlsProbe = null;
-                string throughputProbe = null;
-                string flvProbe = null;
-                if (IsHlsUrl(url))
-                {
-                    hlsProbe = await ProbeHlsAsync(url);
-                }
-                else if (IsFlvUrl(url))
-                {
-                    throughputProbe = await ProbeThroughputAsync(url);
-                    flvProbe = await ProbeFlvAsync(url);
-                }
-                else
-                {
-                    throughputProbe = await ProbeThroughputAsync(url);
-                }
-
-                var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe, hlsProbe);
-                if (!IsDebugDiagnosticsEnabled())
-                {
-                    return;
-                }
-
-                lastProbeSnapshot = JoinNonEmpty(correlation, probe, hlsProbe, throughputProbe, flvProbe, connectivityProbe);
-                var merged = JoinNonEmpty(
-                    $"{title}后台网络诊断（不阻塞切换线路）",
-                    playbackContext,
-                    configSnapshot,
-                    urlAnalysis,
-                    failureSummary,
-                    BuildExceptionDetail(ex),
-                    correlation,
-                    probe,
-                    hlsProbe,
-                    throughputProbe,
-                    flvProbe,
-                    connectivityProbe);
-                if (!string.IsNullOrEmpty(merged))
-                {
-                    LogHelper.Log(merged, LogType.DEBUG);
-                }
-            }
-            catch (Exception diagnosticEx)
-            {
-                LogDebugIfEnabled(() => $"播放器失败后台诊断异常: {diagnosticEx.GetType().FullName} 0x{diagnosticEx.HResult:X8} {diagnosticEx.Message}");
-            }
-        }
-
         private bool TryAcquireFullFailureDiagnosticSlot(string url, Exception ex, out string throttleNote)
         {
             throttleNote = null;
@@ -4326,6 +3975,8 @@ namespace AllLive.UWP.Views
         {
             var attemptVersion = 0;
             MediaSourceCreateAttempt createAttempt = null;
+            System.Threading.CancellationTokenSource waitCts = null;
+            IDisposable createLease = null;
             try
             {
                 if (isPageClosing || isNetworkDown || playbackRecoveryStopped)
@@ -4333,7 +3984,10 @@ namespace AllLive.UWP.Views
                     return;
                 }
                 attemptVersion = BeginMediaSourceAttempt();
-                AddPlaybackEventHistory($"BeginSetPlayer urlHash={url?.GetHashCode()}", mediaPlayer?.PlaybackSession);
+                waitCts = new System.Threading.CancellationTokenSource();
+                mediaSourceWaitCts = waitCts;
+                if (IsDebugDiagnosticsEnabled())
+                    AddPlaybackEventHistory($"BeginSetPlayer urlHash={url?.GetHashCode()}", mediaPlayer?.PlaybackSession);
                 PlayerLoading.Visibility = Visibility.Visible;
                 PlayerLoadText.Text = "加载中";
                 if (mediaPlayer != null)
@@ -4428,10 +4082,19 @@ namespace AllLive.UWP.Views
                 {
                     var createTimeout = GetMediaSourceCreateTimeout(url);
                     createTimeoutUsed = createTimeout;
+                    LogRecoveryEvent("WaitingForCreateSlot", sourceVersion: attemptVersion);
+                    createLease = await mediaSourceGate.EnterAsync(MediaSourceQueueTimeout, waitCts.Token);
+                    if (!IsMediaSourceAttemptCurrent(attemptVersion)) return;
+                    if (createLease == null)
+                    {
+                        StopPlaybackAfterFailure("上一次播放仍在结束，请稍后刷新重试");
+                        return;
+                    }
                     createStartedUtc = DateTimeOffset.UtcNow;
                     createAttempt = RegisterMediaSourceCreateAttempt(
                         attemptVersion,
-                        FFmpegMediaSource.CreateFromUriAsync(url, config));
+                        FFmpegMediaSource.CreateFromUriAsync(url, config), createLease);
+                    createLease = null;
                     ScheduleMediaSourceCreateProgressLog(
                         createAttempt,
                         url,
@@ -4439,12 +4102,9 @@ namespace AllLive.UWP.Views
                         createStartedUtc,
                         createTimeout);
                     var createTask = createAttempt.CreateTask;
-                    var cancellationTask = Task.Delay(
-                        System.Threading.Timeout.InfiniteTimeSpan,
-                        createAttempt.CancellationToken);
-                    var timeoutTask = Task.Delay(createTimeout);
-                    var completedTask = await Task.WhenAny(createTask, timeoutTask, cancellationTask);
-                    if (completedTask == cancellationTask || !IsMediaSourceAttemptCurrent(attemptVersion))
+                    var timeoutTask = Task.Delay(createTimeout, createAttempt.CancellationToken);
+                    var completedTask = await Task.WhenAny(createTask, timeoutTask);
+                    if (createAttempt.CancellationToken.IsCancellationRequested || !IsMediaSourceAttemptCurrent(attemptVersion))
                     {
                         CancelMediaSourceCreateAttempt(createAttempt, "播放请求已失效");
                         _ = DisposeLateMediaSourceAsync(createAttempt, url, attemptVersion);
@@ -4456,20 +4116,14 @@ namespace AllLive.UWP.Views
                         CancelMediaSourceCreateAttempt(createAttempt, "播放器建源超时");
                         _ = DisposeLateMediaSourceAsync(createAttempt, url, attemptVersion);
                         createAttempt = null;
-                        var timeoutException = new TimeoutException($"FFmpegMediaSource.CreateFromUriAsync 超时 {createTimeout.TotalSeconds:F0}s");
-                        var playbackContext = IsDebugDiagnosticsEnabled() ? BuildPlaybackContext() : null;
-                        var elapsedMs = (DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds;
-                        var timeoutSummary = BuildMediaSourceCreateFailureSummary(
-                            timeoutException,
-                            elapsedMs,
-                            createTimeout,
-                            url);
                         if (IsDebugDiagnosticsEnabled())
                         {
-                            LogPlayError("播放器初始化超时，立即切换下一线路", timeoutException,
-                                JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, timeoutSummary, "详细网络诊断已转入后台"));
-                            StartMediaSourceFailureDiagnostics("播放器初始化超时", timeoutException, url,
-                                playbackContext, lastConfigSnapshot, lastUrlAnalysis, timeoutSummary);
+                            var timeoutException = new TimeoutException($"FFmpegMediaSource.CreateFromUriAsync 超时 {createTimeout.TotalSeconds:F0}s");
+                            var elapsedMs = (DateTimeOffset.UtcNow - createStartedUtc).TotalMilliseconds;
+                            var timeoutSummary = BuildMediaSourceCreateFailureSummary(timeoutException, elapsedMs, createTimeout, url);
+                            LogPlayError("播放器初始化超时，进入有限恢复", timeoutException,
+                                JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, timeoutSummary));
+                            LogRecoveryEvent("SourceFailure", "CreateTimeout", attemptVersion);
                         }
                         PlayError();
                         return;
@@ -4493,17 +4147,8 @@ namespace AllLive.UWP.Views
                 {
                     if (createAttempt != null)
                     {
-                        if (!createAttempt.CreateTask.IsCompleted)
-                        {
-                            CancelMediaSourceCreateAttempt(createAttempt, "播放器建源等待异常");
-                            _ = DisposeLateMediaSourceAsync(createAttempt, url, attemptVersion);
-                            createAttempt = null;
-                        }
-                    }
-                    if (createAttempt != null)
-                    {
-                        DetachMediaSourceCreateAttempt(createAttempt);
-                        createAttempt.Dispose();
+                        CancelMediaSourceCreateAttempt(createAttempt, "播放器建源等待结束");
+                        _ = DisposeLateMediaSourceAsync(createAttempt, url, attemptVersion);
                         createAttempt = null;
                     }
                     if (!IsMediaSourceAttemptCurrent(attemptVersion))
@@ -4518,11 +4163,9 @@ namespace AllLive.UWP.Views
                             elapsedMs,
                             createTimeoutUsed,
                             url);
-                        var playbackContext = BuildPlaybackContext();
-                        LogPlayError("播放器初始化失败，立即切换下一线路", ex,
-                            JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, failureSummary, "详细网络诊断已转入后台"));
-                        StartMediaSourceFailureDiagnostics("播放器初始化失败", ex, url,
-                            playbackContext, lastConfigSnapshot, lastUrlAnalysis, failureSummary);
+                        LogPlayError("播放器初始化失败，进入有限恢复", ex,
+                            JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, failureSummary, "仅记录本地故障状态，不额外探测播放地址"));
+                        LogRecoveryEvent("SourceFailure", ex.GetType().Name, attemptVersion);
                     }
                     PlayError();
                     return;
@@ -4547,49 +4190,22 @@ namespace AllLive.UWP.Views
                 {
                     return;
                 }
-                string mergedExtra = null;
                 if (IsDebugDiagnosticsEnabled())
                 {
-                    var probe = await ProbeUrlAsync(url);
-                    string hlsProbe = null;
-                    string throughputProbe = null;
-                    string flvProbe = null;
-                    if (IsHlsUrl(url))
-                    {
-                        hlsProbe = await ProbeHlsAsync(url);
-                    }
-                    else if (IsFlvUrl(url))
-                    {
-                        throughputProbe = await ProbeThroughputAsync(url);
-                        flvProbe = await ProbeFlvAsync(url);
-                    }
-                    var connectivityProbe = await ProbeConnectivityBaselineAsync();
-                    var correlation = BuildProbeCorrelationSummary(probe, throughputProbe, flvProbe, connectivityProbe, hlsProbe);
-                    lastProbeSnapshot = JoinNonEmpty(correlation, probe, hlsProbe, throughputProbe, flvProbe, connectivityProbe);
-                    mergedExtra = JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, correlation, probe, hlsProbe, throughputProbe, flvProbe, connectivityProbe);
-                }
-                if (IsDebugDiagnosticsEnabled())
-                {
-                    LogPlayError("播放失败", ex, mergedExtra);
+                    LogPlayError("播放失败", ex, JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis));
                 }
                 if (!IsMediaSourceAttemptCurrent(attemptVersion)) return;
                 PlayError();
             }
             finally
             {
+                createLease?.Dispose();
+                if (mediaSourceWaitCts == waitCts) mediaSourceWaitCts = null;
+                waitCts?.Dispose();
                 if (createAttempt != null)
                 {
-                    if (createAttempt.CreateTask.IsCompleted)
-                    {
-                        DetachMediaSourceCreateAttempt(createAttempt);
-                        createAttempt.Dispose();
-                    }
-                    else
-                    {
-                        CancelMediaSourceCreateAttempt(createAttempt, "播放器建源提前结束");
-                        _ = DisposeLateMediaSourceAsync(createAttempt, url, attemptVersion);
-                    }
-                    createAttempt = null;
+                    CancelMediaSourceCreateAttempt(createAttempt, "播放器建源提前结束");
+                    _ = DisposeLateMediaSourceAsync(createAttempt, url, attemptVersion);
                 }
             }
 
@@ -4602,7 +4218,7 @@ namespace AllLive.UWP.Views
         {
             try
             {
-                var mediaSource = await attempt.CreateTask;
+                var mediaSource = await attempt.CreateTask.ConfigureAwait(false);
                 mediaSource?.Dispose();
                 if (isPageClosing)
                 {
@@ -4620,77 +4236,8 @@ namespace AllLive.UWP.Views
             {
                 DetachMediaSourceCreateAttempt(attempt);
                 attempt.Dispose();
+                LogRecoveryEvent("LateSourceDisposed", sourceVersion: attemptVersion);
             }
-        }
-
-        private async void PlayError()
-        {
-            if (isPageClosing || isNetworkDown || playbackRecoveryStopped) return;
-            // 已有退避调度时不并行启动换线/重试链。
-            if (System.Threading.Volatile.Read(ref streamReconnectInProgress) != 0) return;
-            if (liveRoomVM.CurrentLine == null)
-            {
-                return;
-            }
-            CancelStablePlaybackReset();
-            if (!TryBeginAutomaticRecovery()) return;
-            if (TryRefreshHuyaPlayUrls("播放失败"))
-            {
-                return;
-            }
-            if (TryFallbackBilibiliCodec("播放失败"))
-            {
-                return;
-            }
-            if (TryRetryCurrentLine("播放失败"))
-            {
-                return;
-            }
-            // 当前线路播放失败，尝试下一个线路
-            var index = liveRoomVM.Lines.IndexOf(liveRoomVM.CurrentLine);
-            if (index == liveRoomVM.Lines.Count - 1)
-            {
-                PlayerLoading.Visibility = Visibility.Collapsed;
-                if (IsDebugDiagnosticsEnabled())
-                {
-                    LogPlayError("直播加载失败", null, JoinNonEmpty(lastConfigSnapshot, lastUrlAnalysis, lastProbeSnapshot));
-                }
-                StopPlaybackAfterFailure("播放失败，请点击刷新重试");
-                var failDialog = ThemeHelper.CreateContentDialog();
-                failDialog.Title = "播放失败";
-                failDialog.Content = new TextBlock
-                {
-                    Text = "播放已停止，请点击底部刷新按钮重试。也可以调整解码设置后刷新直播间。",
-                    TextWrapping = TextWrapping.Wrap
-                };
-                failDialog.PrimaryButtonText = "确定";
-                await failDialog.ShowAsync();
-            }
-            else
-            {
-                liveRoomVM.CurrentLine = liveRoomVM.Lines[index + 1];
-            }
-        }
-
-        private bool TryRefreshHuyaPlayUrls(string reason)
-        {
-            if (liveRoomVM == null || liveRoomVM.SiteName != "虎牙直播")
-            {
-                return false;
-            }
-            if (liveRoomVM.CurrentQuality == null)
-            {
-                return false;
-            }
-            var now = DateTimeOffset.UtcNow;
-            if (lastHuyaRefreshUtc.HasValue && (now - lastHuyaRefreshUtc.Value) < HuyaRefreshCooldown)
-            {
-                return false;
-            }
-            lastHuyaRefreshUtc = now;
-            LogDebugIfEnabled(() => $"虎牙播放异常，尝试刷新播放地址。原因: {reason}");
-            liveRoomVM.LoadPlayUrl();
-            return true;
         }
 
         private bool TryFallbackBilibiliCodec(string reason)
@@ -4751,79 +4298,6 @@ namespace AllLive.UWP.Views
             return DefaultMediaSourceCreateTimeout;
         }
 
-        private bool TryRetryCurrentLine(string reason)
-        {
-            var url = liveRoomVM?.CurrentLine?.Url;
-            if (!ShouldRetryCurrentLine(url))
-            {
-                return false;
-            }
-
-            if (!string.Equals(currentLineRetryUrl, url, StringComparison.OrdinalIgnoreCase))
-            {
-                currentLineRetryUrl = url;
-                currentLineRetryCount = 0;
-            }
-
-            if (currentLineRetryCount >= 2)
-            {
-                return false;
-            }
-
-            currentLineRetryCount++;
-            var delay = currentLineRetryCount > 1 ? CurrentLineRetryDelay : TimeSpan.Zero;
-            LogDebugIfEnabled(() => $"哔哩哔哩直播播放异常，重试当前线路。原因: {reason} 次数: {currentLineRetryCount}/2 线路: {liveRoomVM?.CurrentLine?.Name}");
-            _ = RetryCurrentLineAsync(url, delay);
-            return true;
-        }
-
-        private bool ShouldRetryCurrentLine(string url)
-        {
-            if (liveRoomVM?.SiteName != "哔哩哔哩直播" || string.IsNullOrWhiteSpace(url))
-            {
-                return false;
-            }
-
-            if (url.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) < 0)
-            {
-                return false;
-            }
-
-            if (!lastPlaybackStartUtc.HasValue)
-            {
-                // 首次建源从未进入 Playing，说明当前 CDN/编码不能及时完成初始化。
-                // 重试同一个签名 URL 通常只会再次等满建源超时；直接切换下一线路。
-                LogDebugIfEnabled(() => $"哔哩哔哩直播首次建源未进入Playing，跳过同线路重试。线路: {liveRoomVM?.CurrentLine?.Name}");
-                return false;
-            }
-
-            return (DateTimeOffset.UtcNow - lastPlaybackStartUtc.Value) <= BilibiliRetryWindow;
-        }
-
-        private async Task RetryCurrentLineAsync(string url, TimeSpan delay)
-        {
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                return;
-            }
-
-            var version = System.Threading.Volatile.Read(ref mediaSourceAttemptVersion);
-            if (delay > TimeSpan.Zero)
-            {
-                await Task.Delay(delay);
-            }
-
-            await this.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
-            {
-                if (!IsMediaSourceAttemptCurrent(version) ||
-                    !string.Equals(liveRoomVM?.CurrentLine?.Url, url, StringComparison.OrdinalIgnoreCase))
-                {
-                    return;
-                }
-                QueueSetPlayer(url, "RetryCurrentLine");
-            });
-        }
-
         private async Task StopPlayAsync()
         {
             ResetStreamReconnectState();
@@ -4849,8 +4323,6 @@ namespace AllLive.UWP.Views
             InvalidateMediaSourceAttempt();
             StopBufferingTimer();
             ResetSetPlayerQueue();
-            currentLineRetryUrl = null;
-            currentLineRetryCount = 0;
             lastPlaybackState = null;
             lastMediaOpenedUtc = null;
             lastPlaybackStartUtc = null;
@@ -6232,8 +5704,6 @@ namespace AllLive.UWP.Views
         private async void BottomBtnRefresh_Click(object sender, RoutedEventArgs e)
         {
             if (liveRoomVM.Loading) return;
-            currentLineRetryUrl = null;
-            currentLineRetryCount = 0;
             ResetStreamReconnectState();
             ReleasePlaybackResources();
 

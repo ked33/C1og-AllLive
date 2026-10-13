@@ -221,7 +221,7 @@ namespace AllLive.Core
         {
             var channel = NormalizeChannel(roomId);
             var user = await GetChannelUserAsync(channel);
-            return user?["stream"] is JObject;
+            return LiveStatusParser.IsTwitchLive(user?["stream"]);
         }
 
         private static HttpClient CreateHttpClient()

@@ -524,7 +524,10 @@ namespace AllLive.Core
         public async Task<bool> GetLiveStatus(object roomId)
         {
             var roomInfo = await GetRoomInfo(roomId.ToString());
-            return roomInfo["show_status"].ToInt32() == 1 && roomInfo["videoLoop"].ToInt32() != 1;
+            var live = LiveStatusParser.IsLive(roomInfo?["show_status"], 1, 0, 2);
+            if (!live) return false;
+            var loop = roomInfo?["videoLoop"];
+            return loop == null || loop.Type == JTokenType.Null || LiveStatusParser.ReadRequiredNumber(loop) != 1;
         }
         public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
         {

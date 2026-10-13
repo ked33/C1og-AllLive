@@ -20,7 +20,7 @@ using System.Reflection;
 
 namespace AllLive.UWP.ViewModels
 {
-    public class LiveRoomVM : BaseViewModel
+    public partial class LiveRoomVM : BaseViewModel
     {
         SettingVM settingVM;
         public event EventHandler<string> ChangedPlayUrl;
@@ -348,7 +348,7 @@ namespace AllLive.UWP.ViewModels
                 }
                 currentQuality = value;
                 DoPropertyChanged("CurrentQuality");
-                if (value != null)
+                if (value != null && !applyingPlayInfo)
                 {
                     LoadPlayUrl();
                 }
@@ -375,6 +375,7 @@ namespace AllLive.UWP.ViewModels
                 {
                     return;
                 }
+                if (!applyingPlayInfo) InvalidatePlayUrlRequests();
                 currentLine = value;
                 DoPropertyChanged("CurrentLine");
                 if (value != null)
@@ -460,10 +461,15 @@ namespace AllLive.UWP.ViewModels
 
         public async void LoadData(ILiveSite site, object roomId)
         {
+            var version = ++roomLoadVersion;
+            InvalidatePlayUrlRequests();
+            var acquired = false;
             try
             {
                 Loading = true;
                 isActive = true;
+                liveExtrasPaused = false;
+                CancelDanmakuStableReset();
                 danmakuReconnectAttempt = 0;
                 System.Threading.Interlocked.Exchange(ref reconnectInProgress, 0);
                 System.Threading.Interlocked.Exchange(ref deferredLiveExtrasStartState, 0);
@@ -472,8 +478,17 @@ namespace AllLive.UWP.ViewModels
 
                 RoomId = roomId;
                 var sourceRoomId = roomId?.ToString();
-                var result = await Site.GetRoomDetail(roomId);
-                if (!isActive)
+                await CleanupOldDanmakuAsync();
+                if (!IsRoomLoadCurrent(version)) return;
+                acquired = await playInfoGate.WaitAsync(TimeSpan.FromSeconds(30));
+                if (!IsRoomLoadCurrent(version)) return;
+                if (!acquired)
+                {
+                    Utils.ShowMessageToast("上一次播放信息请求仍在结束，请稍后刷新");
+                    return;
+                }
+                var result = await site.GetRoomDetail(roomId);
+                if (!IsRoomLoadCurrent(version))
                 {
                     return;
                 }
@@ -512,7 +527,7 @@ namespace AllLive.UWP.ViewModels
                     MessageCenter.UpdateFavoriteLiveInfo(Site.Name, RoomID, sourceRoomId, Title, Living);
                 }
 
-                if (!isActive)
+                if (!IsRoomLoadCurrent(version))
                 {
                     return;
                 }
@@ -523,49 +538,21 @@ namespace AllLive.UWP.ViewModels
                 {
                     LogHelper.LogDebug(() => $"[{Site?.Name}] 严格首帧优先，等待Playing后启动弹幕和附加统计。房间={RoomID}");
                 }
-                else
-                {
-                    LiveDanmaku = Site.GetDanmaku();
-                    Messages.Add(new LiveMessage()
-                    {
-                        Type = LiveMessageType.Chat,
-                        UserName = "系统",
-                        Message = "开始接收弹幕"
-                    });
-
-                    LiveDanmaku.NewMessage += LiveDanmaku_NewMessage;
-                    LiveDanmaku.OnClose += LiveDanmaku_OnClose;
-                    try
-                    {
-                        await LiveDanmaku.Start(result.DanmakuData);
-                    }
-                    catch (Exception ex)
-                    {
-                        LogHelper.Log($"弹幕启动失败，继续加载播放。站点:{Site?.Name} 房间ID:{RoomID}", LogType.ERROR, ex);
-                        Messages.Add(new LiveMessage()
-                        {
-                            Type = LiveMessageType.Chat,
-                            UserName = "系统",
-                            Message = "弹幕启动失败，已继续加载播放"
-                        });
-                        StartDanmakuReconnect(useInitialFailureMessage: true);
-                    }
-                }
                 if (detail.Status)
                 {
-                    if (!isActive)
+                    if (!IsRoomLoadCurrent(version))
                     {
                         return;
                     }
                     var qualities = await Site.GetPlayQuality(result);
-                    if (!isActive)
+                    if (!IsRoomLoadCurrent(version))
                     {
                         return;
                     }
                     if (Site.Name == "虎牙直播")
                     {
                         //HDR无法播放
-                        qualities = qualities.Where(x => !x.Quality.Contains("HDR")).ToList();
+                        qualities = qualities?.Where(x => x != null && x.Quality?.Contains("HDR") != true).ToList();
                     }
                     if (qualities == null || qualities.Count == 0)
                     {
@@ -588,7 +575,7 @@ namespace AllLive.UWP.ViewModels
                     // var u = await Site.GetPlayUrls(result, q[0]);
                     //ChangedPlayUrl?.Invoke(this, u[0]);
                 }
-                else if (!isActive)
+                else if (!IsRoomLoadCurrent(version))
                 {
                     return;
                 }
@@ -603,16 +590,18 @@ namespace AllLive.UWP.ViewModels
             }
             catch (DouyinRoomDataBlockedException ex)
             {
+                if (!IsRoomLoadCurrent(version)) return;
                 LogHelper.Log(ex.Message, LogType.ERROR, ex);
                 Utils.ShowMessageToast(DouyinRoomDataBlockedException.UserMessage);
             }
             catch (Exception ex)
             {
-                HandleError(ex);
+                if (IsRoomLoadCurrent(version)) HandleError(ex);
             }
             finally
             {
-                Loading = false;
+                if (acquired) playInfoGate.Release();
+                if (IsRoomLoadCurrent(version)) Loading = false;
             }
         }
 
@@ -722,58 +711,6 @@ namespace AllLive.UWP.ViewModels
             DatabaseHelper.DeleteFavorite(FavoriteID.Value);
             IsFavorite = false;
             MessageCenter.UpdateFavorite();
-        }
-
-        public async void LoadPlayUrl()
-        {
-            try
-            {
-                if (!isActive)
-                {
-                    return;
-                }
-                var data = await Site.GetPlayUrls(detail, CurrentQuality);
-                if (!isActive)
-                {
-                    return;
-                }
-                if (data.Count == 0)
-                {
-                    LogHelper.Log($"加载播放地址失败: 返回空列表。站点:{Site?.Name} 房间ID:{RoomID} 清晰度:{CurrentQuality?.Quality}", LogType.ERROR);
-                    Utils.ShowMessageToast("加载播放地址失败");
-                    return;
-                }
-                if (LogHelper.Enabled)
-                {
-                    var debugSnapshot = BuildPlayUrlDebug(data);
-                    if (!string.IsNullOrEmpty(debugSnapshot))
-                    {
-                        LogHelper.Log(debugSnapshot, LogType.DEBUG);
-                    }
-                }
-                List<PlayurlLine> ls = new List<PlayurlLine>();
-                for (int i = 0; i < data.Count; i++)
-                {
-                    ls.Add(new PlayurlLine()
-                    {
-                        Name = $"线路{i + 1}",
-                        Url = data[i],
-                        Codec = DetectCodecLabel(data[i], Site?.Name)
-                    });
-                }
-
-                allLines = ls;
-                UpdateAvailableCodecs();
-            }
-            catch (Exception ex)
-            {
-                LogHelper.Log($"加载播放地址失败。站点:{Site?.Name} 房间ID:{RoomID} 清晰度:{CurrentQuality?.Quality}", LogType.ERROR, ex);
-                Utils.ShowMessageToast("加载播放地址失败");
-            }
-
-
-
-
         }
 
         private string BuildPlayUrlDebug(List<string> urls)
@@ -912,7 +849,9 @@ namespace AllLive.UWP.ViewModels
 
             if (!hasSelected || string.Equals(SelectedCodec, "全部", StringComparison.OrdinalIgnoreCase))
             {
-                SelectedCodec = GetDefaultCodecSelection(newList);
+                var selection = GetDefaultCodecSelection(newList);
+                if (selection == SelectedCodec) ApplyCodecFilter();
+                else SelectedCodec = selection;
                 return;
             }
 
@@ -1090,14 +1029,15 @@ namespace AllLive.UWP.ViewModels
 
         public async void LoadSuperChat()
         {
+            var version = roomLoadVersion;
             try
             {
-                if (!isActive || Site == null)
+                if (!IsRoomLoadCurrent(version) || liveExtrasPaused || Site == null)
                 {
                     return;
                 }
                 var data = await Site.GetSuperChatMessages(RoomID);
-                if (!isActive)
+                if (!IsRoomLoadCurrent(version) || liveExtrasPaused)
                 {
                     return;
                 }
@@ -1111,71 +1051,15 @@ namespace AllLive.UWP.ViewModels
             }
             catch (Exception ex)
             {
+                if (!IsRoomLoadCurrent(version) || liveExtrasPaused) return;
                 LogHelper.Log("加载SC失败", LogType.ERROR, ex);
                 Utils.ShowMessageToast("加载SC失败");
             }
 
         }
-        public void StartDeferredLiveExtras()
-        {
-            if (!isActive || Site == null || detail == null || !detail.Status || danmakuArgs == null || LiveDanmaku != null)
-            {
-                return;
-            }
-
-            if (System.Threading.Interlocked.CompareExchange(ref deferredLiveExtrasStartState, 1, 0) != 0)
-            {
-                return;
-            }
-
-            LogHelper.LogDebug(() => $"[{Site.Name}] 首次Playing，开始启动弹幕和附加统计。房间={RoomID}");
-            LoadSuperChat();
-            _ = StartDeferredDanmakuAsync();
-            _ = LoadDeferredAudienceMetricsAsync();
-        }
-
-        private async Task StartDeferredDanmakuAsync()
-        {
-            try
-            {
-                if (!isActive || Site == null)
-                {
-                    return;
-                }
-
-                var newDanmaku = Site.GetDanmaku();
-                newDanmaku.NewMessage += LiveDanmaku_NewMessage;
-                newDanmaku.OnClose += LiveDanmaku_OnClose;
-                LiveDanmaku = newDanmaku;
-                Messages.Add(new LiveMessage()
-                {
-                    Type = LiveMessageType.Chat,
-                    UserName = "系统",
-                    Message = "开始接收弹幕"
-                });
-
-                await newDanmaku.Start(danmakuArgs);
-            }
-            catch (Exception ex)
-            {
-                if (!isActive)
-                {
-                    return;
-                }
-
-                LogHelper.Log($"Playing后弹幕启动失败，播放不受影响。站点:{Site?.Name} 房间ID:{RoomID}", LogType.ERROR, ex);
-                Messages.Add(new LiveMessage()
-                {
-                    Type = LiveMessageType.Chat,
-                    UserName = "系统",
-                    Message = "弹幕启动失败，播放不受影响"
-                });
-                StartDanmakuReconnect(useInitialFailureMessage: true);
-            }
-        }
-
         private async Task LoadDeferredAudienceMetricsAsync()
         {
+            var version = roomLoadVersion;
             var metricSite = Site as IDeferredAudienceMetricSite;
             var roomDetail = detail;
             var site = Site;
@@ -1188,7 +1072,7 @@ namespace AllLive.UWP.ViewModels
             try
             {
                 var metrics = await metricSite.GetDeferredAudienceMetrics(roomDetail);
-                if (!isActive || metrics == null || !ReferenceEquals(Site, site)
+                if (!IsRoomLoadCurrent(version) || liveExtrasPaused || metrics == null || !ReferenceEquals(Site, site)
                     || !ReferenceEquals(detail, roomDetail)
                     || !string.Equals(RoomID, roomId, StringComparison.OrdinalIgnoreCase))
                 {
@@ -1205,7 +1089,7 @@ namespace AllLive.UWP.ViewModels
             }
             catch (Exception ex)
             {
-                if (!isActive || !ReferenceEquals(Site, site) || !ReferenceEquals(detail, roomDetail)
+                if (!IsRoomLoadCurrent(version) || liveExtrasPaused || !ReferenceEquals(Site, site) || !ReferenceEquals(detail, roomDetail)
                     || !string.Equals(RoomID, roomId, StringComparison.OrdinalIgnoreCase))
                 {
                     return;
@@ -1215,194 +1099,6 @@ namespace AllLive.UWP.ViewModels
                 roomDetail.AllowPopularityFallback = true;
                 ApplyAudienceMetrics(roomDetail);
                 LogHelper.Log($"Playing后观众统计加载失败，播放不受影响。站点:{site.Name} 房间ID:{roomId}", LogType.ERROR, ex);
-            }
-        }
-
-        private async void LiveDanmaku_OnClose(object sender, string e)
-        {
-            var dispatcher = Dispatcher;
-            if (!isActive || dispatcher == null)
-            {
-                return;
-            }
-
-            await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
-            {
-                if (!isActive)
-                {
-                    return;
-                }
-                Messages.Add(new LiveMessage()
-                {
-                    Type = LiveMessageType.Chat,
-                    UserName = "系统",
-                    Message = string.IsNullOrEmpty(e) ? "弹幕连接已断开" : $"弹幕连接已断开: {e}"
-                });
-            });
-
-            if (!isActive)
-            {
-                return;
-            }
-
-            StartDanmakuReconnect(useInitialFailureMessage: false);
-        }
-
-        private void StartDanmakuReconnect(bool useInitialFailureMessage)
-        {
-            if (!isActive || Dispatcher == null)
-            {
-                return;
-            }
-
-            if (System.Threading.Interlocked.CompareExchange(ref reconnectInProgress, 1, 0) != 0)
-            {
-                return;
-            }
-
-            _ = ReconnectDanmakuAsync(useInitialFailureMessage);
-        }
-
-        private async Task ReconnectDanmakuAsync(bool useInitialFailureMessage)
-        {
-            CancelDanmakuReconnect();
-            var cts = new System.Threading.CancellationTokenSource();
-            danmakuReconnectCts = cts;
-            var token = cts.Token;
-
-            try
-            {
-                while (isActive && !token.IsCancellationRequested)
-                {
-                    if (danmakuReconnectAttempt >= MaxDanmakuReconnectAttempts)
-                    {
-                        var dispatcher = Dispatcher;
-                        if (dispatcher == null)
-                        {
-                            return;
-                        }
-                        await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
-                        {
-                            if (!isActive)
-                            {
-                                return;
-                            }
-                            Messages.Add(new LiveMessage()
-                            {
-                                Type = LiveMessageType.Chat,
-                                UserName = "系统",
-                                Message = "弹幕重连已达上限，请手动刷新"
-                            });
-                        });
-                        RaiseReconnectStatus("弹幕", false, danmakuReconnectAttempt, MaxDanmakuReconnectAttempts, "弹幕重连失败");
-                        return;
-                    }
-
-                    var delay = DanmakuReconnectDelays[Math.Min(danmakuReconnectAttempt, DanmakuReconnectDelays.Length - 1)];
-                    danmakuReconnectAttempt++;
-                    var reconnectMessage = useInitialFailureMessage
-                        ? $"弹幕启动失败，{delay.TotalSeconds:F0}s 后重试连接 ({danmakuReconnectAttempt}/{MaxDanmakuReconnectAttempts})"
-                        : $"弹幕连接异常，{delay.TotalSeconds:F0}s 后重连 ({danmakuReconnectAttempt}/{MaxDanmakuReconnectAttempts})";
-                    RaiseReconnectStatus("弹幕", true, danmakuReconnectAttempt, MaxDanmakuReconnectAttempts,
-                        reconnectMessage);
-                    try
-                    {
-                        await Task.Delay(delay, token);
-                    }
-                    catch (TaskCanceledException)
-                    {
-                        return;
-                    }
-                    if (!isActive || token.IsCancellationRequested)
-                    {
-                        return;
-                    }
-
-                    try
-                    {
-                        await CleanupOldDanmakuAsync();
-                        if (!isActive || token.IsCancellationRequested)
-                        {
-                            return;
-                        }
-
-                        LogHelper.LogDebug(() => $"弹幕重连: 站点={Site?.Name} 房间={RoomID} 第{danmakuReconnectAttempt}次");
-                        var newDanmaku = Site.GetDanmaku();
-                        newDanmaku.NewMessage += LiveDanmaku_NewMessage;
-                        newDanmaku.OnClose += LiveDanmaku_OnClose;
-                        LiveDanmaku = newDanmaku;
-                        await newDanmaku.Start(danmakuArgs);
-
-                        danmakuReconnectAttempt = 0;
-                        System.Threading.Interlocked.Exchange(ref reconnectInProgress, 0);
-                        var dispatcher = Dispatcher;
-                        if (dispatcher == null)
-                        {
-                            return;
-                        }
-                        await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
-                        {
-                            if (!isActive)
-                            {
-                                return;
-                            }
-                            Messages.Add(new LiveMessage()
-                            {
-                                Type = LiveMessageType.Chat,
-                                UserName = "系统",
-                                Message = "弹幕已重新连接"
-                            });
-                        });
-                        RaiseReconnectStatus("弹幕", false, 0, MaxDanmakuReconnectAttempts, "弹幕已重连");
-                        return;
-                    }
-                    catch (Exception ex)
-                    {
-                        LogHelper.Log($"弹幕重连失败(第{danmakuReconnectAttempt}次)", LogType.ERROR, ex);
-                    }
-                }
-            }
-            finally
-            {
-                if (danmakuReconnectCts == cts)
-                {
-                    danmakuReconnectCts = null;
-                }
-                cts.Dispose();
-                if (!isActive || token.IsCancellationRequested || danmakuReconnectAttempt >= MaxDanmakuReconnectAttempts)
-                {
-                    System.Threading.Interlocked.Exchange(ref reconnectInProgress, 0);
-                }
-            }
-        }
-
-        private async Task CleanupOldDanmakuAsync()
-        {
-            var old = LiveDanmaku;
-            if (old == null)
-            {
-                return;
-            }
-            old.NewMessage -= LiveDanmaku_NewMessage;
-            old.OnClose -= LiveDanmaku_OnClose;
-            LiveDanmaku = null;
-            try
-            {
-                await old.Stop();
-            }
-            catch
-            {
-            }
-        }
-
-        private void CancelDanmakuReconnect()
-        {
-            var cts = danmakuReconnectCts;
-            danmakuReconnectCts = null;
-            if (cts != null)
-            {
-                try { cts.Cancel(); } catch { }
-                try { cts.Dispose(); } catch { }
             }
         }
 
@@ -1434,13 +1130,13 @@ namespace AllLive.UWP.ViewModels
         private async void LiveDanmaku_NewMessage(object sender, LiveMessage e)
         {
             var dispatcher = Dispatcher;
-            if (e == null || !isActive || dispatcher == null)
+            if (e == null || !isActive || liveExtrasPaused || !ReferenceEquals(sender, LiveDanmaku) || dispatcher == null)
             {
                 return;
             }
             await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
             {
-                if (!isActive)
+                if (!isActive || liveExtrasPaused || !ReferenceEquals(sender, LiveDanmaku))
                 {
                     return;
                 }
@@ -1685,6 +1381,10 @@ namespace AllLive.UWP.ViewModels
         public async Task StopAsync()
         {
             isActive = false;
+            roomLoadVersion++;
+            InvalidatePlayUrlRequests();
+            liveExtrasPaused = true;
+            CancelDanmakuStableReset();
             CancelDanmakuReconnect();
             System.Threading.Interlocked.Exchange(ref reconnectInProgress, 0);
             System.Threading.Interlocked.Exchange(ref deferredLiveExtrasStartState, 0);
@@ -1692,19 +1392,7 @@ namespace AllLive.UWP.ViewModels
             StopSCTimer();
             Messages.Clear();
             SuperChatMessages.Clear();
-            if (LiveDanmaku != null)
-            {
-                LiveDanmaku.NewMessage -= LiveDanmaku_NewMessage;
-                LiveDanmaku.OnClose -= LiveDanmaku_OnClose;
-                try
-                {
-                    await LiveDanmaku.Stop();
-                }
-                catch
-                {
-                }
-                LiveDanmaku = null;
-            }
+            var cleanup = CleanupOldDanmakuAsync();
 
             allLines = null;
             Lines = null;
@@ -1727,6 +1415,8 @@ namespace AllLive.UWP.ViewModels
             Popularity = null;
             allowPopularityFallback = true;
             Loading = false;
+            danmakuArgs = null;
+            await cleanup;
 
         }
 
