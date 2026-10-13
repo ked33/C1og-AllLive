@@ -930,14 +930,6 @@
                         </AppBarButton.Icon>
                     </AppBarButton>
                     <AppBarButton
-                        x:Name="BottomBtnRefresh"
-                        Click="BottomBtnRefresh_Click"
-                        Label="刷新">
-                        <AppBarButton.Icon>
-                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE72C;" />
-                        </AppBarButton.Icon>
-                    </AppBarButton>
-                    <AppBarButton
                         x:Name="PlayBtnVolume"
                         Label="音量"
                         Click="PlayBtnVolume_Click"
@@ -970,6 +962,14 @@
                                 </StackPanel>
                             </Flyout>
                         </FlyoutBase.AttachedFlyout>
+                    </AppBarButton>
+                    <AppBarButton
+                        x:Name="BottomBtnRefresh"
+                        Click="BottomBtnRefresh_Click"
+                        Label="刷新">
+                        <AppBarButton.Icon>
+                            <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE72C;" />
+                        </AppBarButton.Icon>
                     </AppBarButton>
                 </CommandBar>
                 <!--<StackPanel HorizontalAlignment="Left" Orientation="Horizontal">
@@ -1006,6 +1006,16 @@
                         Label="浏览器">
                         <AppBarButton.Icon>
                             <FontIcon FontFamily="{StaticResource SegoeFluent}" Glyph="&#xEB41;" />
+                        </AppBarButton.Icon>
+                    </AppBarButton>
+                    <AppBarButton
+                        x:Name="BottomBtnMaximize"
+                        Click="BottomBtnMaximize_Click"
+                        Label="最大化"
+                        ToolTipService.ToolTip="最大化窗口"
+                        Visibility="Collapsed">
+                        <AppBarButton.Icon>
+                            <FontIcon x:Name="MaximizeIcon" FontFamily="{StaticResource SegoeFluent}" Glyph="&#xE922;" />
                         </AppBarButton.Icon>
                     </AppBarButton>
                 </CommandBar>
@@ -1090,36 +1100,59 @@
                             <PivotItem.Header>
                                 <TextBlock FontSize="15">互动</TextBlock>
                             </PivotItem.Header>
-                            <ListView
-                                x:Name="LiveMessageList"
-                                IsItemClickEnabled="False"
-                                ItemsSource="{x:Bind Path=liveRoomVM.Messages}"
-                                SelectionMode="None">
-                                <ListView.ItemTemplate>
-                                    <DataTemplate x:DataType="models:LiveMessage">
-                                        <TextBlock
-                                            Margin="4,0"
-                                            FontSize="{Binding ElementName=numFontsize, Path=Value, Mode=OneWay}"
-                                            IsTextSelectionEnabled="True"
-                                            LineHeight="24"
-                                            TextWrapping="Wrap"
-                                            Foreground="{ThemeResource TextFillColorPrimaryBrush}"><Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding UserName}" /><Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="：" /><Run Foreground="{ThemeResource TextFillColorPrimaryBrush}" Text="{Binding Message}" /></TextBlock>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                                <ListView.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <ItemsStackPanel ItemsUpdatingScrollMode="KeepLastItemInView" />
-                                    </ItemsPanelTemplate>
-                                </ListView.ItemsPanel>
-                                <ListView.ItemContainerStyle>
-                                    <Style TargetType="ListViewItem">
-                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                        <Setter Property="MinHeight" Value="0" />
-                                        <Setter Property="Margin" Value="0" />
-                                        <Setter Property="Padding" Value="8,2" />
-                                    </Style>
-                                </ListView.ItemContainerStyle>
-                            </ListView>
+                            <Grid>
+                                <ListView
+                                    x:Name="LiveMessageList"
+                                    Loaded="LiveMessageList_Loaded"
+                                    Unloaded="LiveMessageList_Unloaded"
+                                    IsItemClickEnabled="False"
+                                    ItemsSource="{x:Bind Path=liveRoomVM.Messages}"
+                                    SelectionMode="None">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate x:DataType="models:LiveMessage">
+                                            <TextBlock
+                                                Margin="4,0"
+                                                FontSize="{Binding ElementName=numFontsize, Path=Value, Mode=OneWay}"
+                                                IsTextSelectionEnabled="True"
+                                                LineHeight="24"
+                                                TextWrapping="Wrap"
+                                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"><Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding UserName}" /><Run Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="：" /><Run Foreground="{ThemeResource TextFillColorPrimaryBrush}" Text="{Binding Message}" /></TextBlock>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                    <ListView.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <ItemsStackPanel ItemsUpdatingScrollMode="KeepLastItemInView" />
+                                        </ItemsPanelTemplate>
+                                    </ListView.ItemsPanel>
+                                    <ListView.ItemContainerStyle>
+                                        <Style TargetType="ListViewItem">
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                            <Setter Property="MinHeight" Value="0" />
+                                            <Setter Property="Margin" Value="0" />
+                                            <Setter Property="Padding" Value="8,2" />
+                                        </Style>
+                                    </ListView.ItemContainerStyle>
+                                </ListView>
+                                <Button
+                                    x:Name="ScrollMessagesToBottomButton"
+                                    Width="40"
+                                    Height="40"
+                                    Margin="0,0,20,12"
+                                    Padding="0"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Bottom"
+                                    AutomationProperties.Name="滚动到底部"
+                                    Background="#4B5567"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    Click="ScrollMessagesToBottomButton_Click"
+                                    CornerRadius="20"
+                                    Foreground="White"
+                                    ToolTipService.ToolTip="滚动到底部"
+                                    Visibility="Collapsed">
+                                    <FontIcon FontFamily="{StaticResource SegoeFluent}" FontSize="16" Glyph="&#xE70D;" />
+                                </Button>
+                            </Grid>
                         </PivotItem>
                         <PivotItem Margin="0">
                             <PivotItem.Header>

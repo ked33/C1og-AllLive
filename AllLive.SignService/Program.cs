@@ -65,6 +65,17 @@ app.Use(async (context, next) =>
 });
 app.MapGet("/health", () => Results.Ok(new { status = "ok", protocol = 1 }));
 
+app.MapPost("/api/window/{operation}", (string operation, WindowControlRequest payload) =>
+{
+    // Never expose desktop control through the legacy standalone signing server.
+    if (owner == null || owner.Token.IsCancellationRequested
+        || (operation != "state" && operation != "toggle-maximize")) return Results.NotFound();
+    if (!DesktopWindowControl.TryExecute(payload.Handle, owner.ParentProcessId,
+        operation == "toggle-maximize", out var maximized))
+        return Results.Conflict(new { message = "Window is unavailable." });
+    return Results.Ok(new { maximized });
+});
+
 app.MapPost("/api/bilibili/stream", async (HttpRequest request) =>
 {
     if (!IsBilibiliProxyRequest(request, managed)) return Results.NotFound();

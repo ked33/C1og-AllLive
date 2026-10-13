@@ -19,6 +19,7 @@ internal sealed class ManagedServiceOwner : IDisposable
     private readonly Task monitor;
     private int stopRequested;
     public string SessionId { get; }
+    public int ParentProcessId => parent.Id;
     public CancellationToken Token => stopped.Token;
 
     internal ManagedServiceOwner(string directory, OwnerState owner, Process parent, Mutex instance)

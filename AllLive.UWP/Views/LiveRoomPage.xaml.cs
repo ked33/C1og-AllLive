@@ -66,6 +66,9 @@ namespace AllLive.UWP.Views
         private bool isMini = false;
         DispatcherTimer timer_focus;
         DispatcherTimer controlTimer;
+        private DesktopWindowController desktopWindowController;
+        private ScrollViewer messageScrollViewer;
+        private long messageScrollableHeightToken;
         private string lastConfigSnapshot;
         private string lastUrlAnalysis;
         private string lastProbeSnapshot;
@@ -286,6 +289,7 @@ namespace AllLive.UWP.Views
             this.InitializeComponent();
             // 新窗口 / 当前页跟随显示模式（含自定义调色板）
             ThemeHelper.Apply(this);
+            InitializeDesktopWindowControl();
 
             settingVM = new SettingVM();
             liveRoomVM = new LiveRoomVM(settingVM);
@@ -4455,6 +4459,9 @@ namespace AllLive.UWP.Views
             }
             liveRoomCleaned = true;
             isPageClosing = true;
+            desktopWindowController?.Dispose();
+            desktopWindowController = null;
+            DetachMessageScrollViewer();
             CancelPendingMediaSourceCreates("直播间关闭");
             if (pendingRightDetailWidth.HasValue)
             {
@@ -5672,6 +5679,113 @@ namespace AllLive.UWP.Views
 
 
         #endregion
+
+        private void LiveMessageList_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (isPageClosing || messageScrollViewer != null) return;
+            messageScrollViewer = FindMessageScrollViewer(LiveMessageList);
+            if (messageScrollViewer == null) return;
+            messageScrollViewer.ViewChanged += MessageScrollViewer_ViewChanged;
+            messageScrollViewer.SizeChanged += MessageScrollViewer_SizeChanged;
+            messageScrollableHeightToken = messageScrollViewer.RegisterPropertyChangedCallback(
+                ScrollViewer.ScrollableHeightProperty, MessageScrollViewer_ExtentChanged);
+            UpdateScrollMessagesToBottomButton();
+        }
+
+        private void LiveMessageList_Unloaded(object sender, RoutedEventArgs e)
+        {
+            DetachMessageScrollViewer();
+        }
+
+        private static ScrollViewer FindMessageScrollViewer(DependencyObject root)
+        {
+            var viewer = root as ScrollViewer;
+            if (viewer != null) return viewer;
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                viewer = FindMessageScrollViewer(VisualTreeHelper.GetChild(root, i));
+                if (viewer != null) return viewer;
+            }
+            return null;
+        }
+
+        private void DetachMessageScrollViewer()
+        {
+            if (messageScrollViewer != null)
+            {
+                messageScrollViewer.ViewChanged -= MessageScrollViewer_ViewChanged;
+                messageScrollViewer.SizeChanged -= MessageScrollViewer_SizeChanged;
+                messageScrollViewer.UnregisterPropertyChangedCallback(
+                    ScrollViewer.ScrollableHeightProperty, messageScrollableHeightToken);
+                messageScrollViewer = null;
+            }
+            ScrollMessagesToBottomButton.Visibility = Visibility.Collapsed;
+        }
+
+        private void MessageScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
+        {
+            UpdateScrollMessagesToBottomButton();
+        }
+
+        private void MessageScrollViewer_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            UpdateScrollMessagesToBottomButton();
+        }
+
+        private void MessageScrollViewer_ExtentChanged(DependencyObject sender, DependencyProperty property)
+        {
+            UpdateScrollMessagesToBottomButton();
+        }
+
+        private void UpdateScrollMessagesToBottomButton()
+        {
+            // A one-DIP tolerance avoids fractional layout offsets flashing the button at the bottom.
+            var show = !isPageClosing && messageScrollViewer != null && messageScrollViewer.ViewportHeight > 0
+                && messageScrollViewer.ScrollableHeight - messageScrollViewer.VerticalOffset > 1;
+            ScrollMessagesToBottomButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void ScrollMessagesToBottomButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (isPageClosing || messageScrollViewer == null || LiveMessageList.Items.Count == 0) return;
+            // Realize the last virtualized item first, then align its bottom (including long comments).
+            LiveMessageList.ScrollIntoView(LiveMessageList.Items[LiveMessageList.Items.Count - 1]);
+            LiveMessageList.UpdateLayout();
+            messageScrollViewer.ChangeView(null, messageScrollViewer.ScrollableHeight, null, true);
+        }
+
+        private void InitializeDesktopWindowControl()
+        {
+            if (!LocalServiceManager.IsSupported) return;
+            try
+            {
+                desktopWindowController = new DesktopWindowController(maximized =>
+                {
+                    BottomBtnMaximize.Label = maximized ? "还原" : "最大化";
+                    MaximizeIcon.Glyph = maximized ? "\uE923" : "\uE922";
+                    ToolTipService.SetToolTip(BottomBtnMaximize, maximized ? "还原窗口" : "最大化窗口");
+                });
+                BottomBtnMaximize.Visibility = Visibility.Visible;
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogDebug(() => "[Window] Control unavailable: " + ex.GetType().Name);
+            }
+        }
+
+        private async void BottomBtnMaximize_Click(object sender, RoutedEventArgs e)
+        {
+            if (desktopWindowController == null || isPageClosing) return;
+            BottomBtnMaximize.IsEnabled = false;
+            try { await desktopWindowController.ToggleAsync(); }
+            catch (OperationCanceledException) when (isPageClosing) { }
+            catch (Exception ex)
+            {
+                LogHelper.LogDebug(() => "[Window] Toggle failed: " + ex.GetType().Name);
+                if (!isPageClosing) Utils.ShowMessageToast("窗口操作未完成，请重试或使用标题栏按钮");
+            }
+            finally { if (!isPageClosing) BottomBtnMaximize.IsEnabled = true; }
+        }
 
         private async void BottomBtnOpenBrowser_Click(object sender, RoutedEventArgs e)
         {

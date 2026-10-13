@@ -19,6 +19,7 @@ sealed class Tests
     public async Task RunAsync()
     {
         TestRoutes();
+        DesktopWindowControlTests.Run();
         TestRegistry();
         TestScripts();
         await TestTransferAsync();

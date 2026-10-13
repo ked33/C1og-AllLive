@@ -416,6 +416,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Helper\LocalServiceManager.cs" />
+    <Compile Include="Helper\DesktopWindowController.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(IncludeLocalService)' == 'true'">
     <SDKReference Include="WindowsDesktop, Version=$(TargetPlatformVersion)" />

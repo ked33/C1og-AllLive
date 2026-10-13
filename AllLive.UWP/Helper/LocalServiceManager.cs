@@ -34,6 +34,8 @@ namespace AllLive.UWP.Helper
         private static bool initialized;
         private static bool supported;
 
+        public static bool IsSupported => supported;
+
         public static void Initialize()
         {
             lock (sync)
