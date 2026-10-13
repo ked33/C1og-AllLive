@@ -237,15 +237,6 @@ jobs:
           compression-level: 9
           if-no-files-found: error
 
-      - name: Upload debugging symbols
-        uses: actions/upload-artifact@v6
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-        with:
-          name: AllLive-UWP-Symbols-x64
-          path: ${{ runner.temp }}/AllLive-Artifacts/Symbols/
-          compression-level: 9
-          if-no-files-found: error
-
       - name: Generate Commit SHA
         if: github.event_name == 'workflow_dispatch'
         id: sha

@@ -31,10 +31,6 @@ $dependencies = @(Get-ChildItem -LiteralPath $dependencyDirectory -File -Filter 
 if ($dependencies.Count -eq 0) {
     throw 'No x64 framework dependencies were produced.'
 }
-$symbols = @(Get-ChildItem -LiteralPath $bundle.DirectoryName -File -Filter '*.appxsym')
-if ($symbols.Count -eq 0) {
-    throw 'No symbol package was produced.'
-}
 
 # Refuse to reuse an output directory: stale files must never enter an artifact.
 if (Test-Path -LiteralPath $OutputDirectory) {
@@ -42,8 +38,7 @@ if (Test-Path -LiteralPath $OutputDirectory) {
 }
 $installerDirectory = Join-Path $OutputDirectory 'Installer'
 $dependencyOutputDirectory = Join-Path $OutputDirectory 'Dependencies/x64'
-$symbolDirectory = Join-Path $OutputDirectory 'Symbols'
-foreach ($directory in @($installerDirectory, $dependencyOutputDirectory, $symbolDirectory)) {
+foreach ($directory in @($installerDirectory, $dependencyOutputDirectory)) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
 }
 
@@ -51,9 +46,6 @@ Copy-Item -LiteralPath $bundle.FullName -Destination $installerDirectory
 Copy-Item -LiteralPath $certificate -Destination $installerDirectory
 foreach ($dependency in $dependencies) {
     Copy-Item -LiteralPath $dependency.FullName -Destination $dependencyOutputDirectory
-}
-foreach ($symbol in $symbols) {
-    Copy-Item -LiteralPath $symbol.FullName -Destination $symbolDirectory
 }
 
 $rows = @(
@@ -63,7 +55,6 @@ $rows = @(
 foreach ($artifact in @(
     @{ Name = 'AllLive-UWP-Packages'; Path = $installerDirectory; Contents = 'AllLive.cer + MSIX bundle' }
     @{ Name = 'AllLive-UWP-Dependencies-x64'; Path = (Join-Path $OutputDirectory 'Dependencies'); Contents = 'x64 framework packages (first install / offline)' }
-    @{ Name = 'AllLive-UWP-Symbols-x64'; Path = $symbolDirectory; Contents = 'Debugging symbols only' }
 )) {
     $files = @(Get-ChildItem -LiteralPath $artifact.Path -Recurse -File)
     $size = ($files | Measure-Object -Property Length -Sum).Sum / 1MB
