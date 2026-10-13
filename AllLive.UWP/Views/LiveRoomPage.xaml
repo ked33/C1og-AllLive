@@ -634,6 +634,7 @@
                                         Background="Transparent"
                                         BorderThickness="0"
                                         Click="PlayBtnVolume_Click"
+                                        DoubleTapped="PlayBtnVolume_DoubleTapped"
                                         PointerEntered="PlayBtnVolume_PointerEntered"
                                         PointerExited="PlayBtnVolume_PointerExited"
                                         ToolTipService.ToolTip="静音">

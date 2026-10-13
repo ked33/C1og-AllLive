@@ -5053,6 +5053,12 @@ namespace AllLive.UWP.Views
             SetPlayerVolume(mediaPlayer.Volume > 0 ? 0 : lastNonZeroVolume);
         }
 
+        private void PlayBtnVolume_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+        {
+            // 音量按钮的双击只由 Click 处理音量，不能冒泡到播放器的全屏手势。
+            e.Handled = true;
+        }
+
         private void PlayBtnVolume_PointerEntered(object sender, PointerRoutedEventArgs e)
         {
             if (!IsVolumeHoverPointer(e))
