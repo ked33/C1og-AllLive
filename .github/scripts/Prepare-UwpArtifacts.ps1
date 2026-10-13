@@ -26,6 +26,10 @@ $certificate = Join-Path $source 'AllLive.cer'
 if (-not (Test-Path -LiteralPath $certificate -PathType Leaf)) {
     throw 'AllLive.cer is missing from AppPackages.'
 }
+$certificateInstaller = Join-Path $PSScriptRoot 'Install-AllLive-Certificate.cmd'
+if (-not (Test-Path -LiteralPath $certificateInstaller -PathType Leaf)) {
+    throw 'Install-AllLive-Certificate.cmd is missing from the packaging scripts.'
+}
 $dependencyDirectory = Join-Path $bundle.DirectoryName 'Dependencies/x64'
 $dependencies = @(Get-ChildItem -LiteralPath $dependencyDirectory -File -Filter '*.appx')
 if ($dependencies.Count -eq 0) {
@@ -44,6 +48,7 @@ foreach ($directory in @($installerDirectory, $dependencyOutputDirectory)) {
 
 Copy-Item -LiteralPath $bundle.FullName -Destination $installerDirectory
 Copy-Item -LiteralPath $certificate -Destination $installerDirectory
+Copy-Item -LiteralPath $certificateInstaller -Destination $installerDirectory
 foreach ($dependency in $dependencies) {
     Copy-Item -LiteralPath $dependency.FullName -Destination $dependencyOutputDirectory
 }
@@ -53,7 +58,7 @@ $rows = @(
     '| --- | --- | ---: |'
 )
 foreach ($artifact in @(
-    @{ Name = 'AllLive-UWP-Packages'; Path = $installerDirectory; Contents = 'AllLive.cer + MSIX bundle' }
+    @{ Name = 'AllLive-UWP-Packages'; Path = $installerDirectory; Contents = 'AllLive.cer + Install-AllLive-Certificate.cmd + MSIX bundle' }
     @{ Name = 'AllLive-UWP-Dependencies-x64'; Path = (Join-Path $OutputDirectory 'Dependencies'); Contents = 'x64 framework packages (first install / offline)' }
 )) {
     $files = @(Get-ChildItem -LiteralPath $artifact.Path -Recurse -File)
