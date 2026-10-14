@@ -17,10 +17,48 @@ namespace AllLive.Tests
         {
             await CheckPageAndProcessLimitsAsync();
             await CheckCancellationAsync();
+            await CheckManualRefreshIsolationAsync();
             await CheckConcurrentOpensAsync();
             CheckStatusParsing();
             Assert(PlaybackOperationGate.ReservedProcessSlots == 0, "Leaked process slots.");
-            return "PASS: native open limits, cancellation, timeout, lease lifetime, concurrency and live status parsing.";
+            return "PASS: native open limits, cancellation, timeout, lease lifetime, manual refresh isolation, concurrency and live status parsing.";
+        }
+
+        private static async Task CheckManualRefreshIsolationAsync()
+        {
+            var oldPage = new PlaybackOperationGate();
+            var refreshedPage = new PlaybackOperationGate();
+            var refreshedAgain = new PlaybackOperationGate();
+            var oldOpen = await oldPage.EnterAsync(NormalWait, CancellationToken.None);
+            IDisposable freshOpen = null;
+            try
+            {
+                // A canceled UI wait does not stop the underlying native open. Manual
+                // refresh gets a new page slot, but must still obey the process limit.
+                using (var canceled = new CancellationTokenSource())
+                {
+                    var oldWait = oldPage.EnterAsync(NormalWait, canceled.Token);
+                    canceled.Cancel();
+                    await ExpectCancellationAsync(oldWait);
+                }
+                freshOpen = await refreshedPage.EnterAsync(NormalWait, CancellationToken.None);
+                Assert(freshOpen != null, "An old page's pending open blocked manual refresh.");
+                Assert(await refreshedAgain.EnterAsync(ShortWait, CancellationToken.None) == null,
+                    "Repeated refresh bypassed the process limit.");
+
+                // Late cleanup belongs only to the retired session, never its replacement.
+                oldOpen.Dispose();
+                Assert(PlaybackOperationGate.ReservedProcessSlots == 1, "Old cleanup released the replacement's lease.");
+                Assert(await refreshedPage.EnterAsync(ShortWait, CancellationToken.None) == null,
+                    "Old cleanup allowed overlapping opens on the replacement page.");
+                using (var next = await refreshedAgain.EnterAsync(NormalWait, CancellationToken.None))
+                    Assert(next != null, "A late native completion did not release its process slot.");
+            }
+            finally
+            {
+                oldOpen?.Dispose();
+                freshOpen?.Dispose();
+            }
         }
 
         private static async Task CheckPageAndProcessLimitsAsync()

@@ -68,6 +68,7 @@ namespace AllLive.UWP.Views
         DispatcherTimer controlTimer;
         private DesktopWindowController desktopWindowController;
         private ScrollViewer messageScrollViewer;
+        private Windows.UI.Input.PointerUpdateKind lastMessagePointerPress;
         private ScrollBar messageVerticalScrollBar;
         private long messageScrollableHeightToken;
         private string lastConfigSnapshot;
@@ -288,6 +289,12 @@ namespace AllLive.UWP.Views
         public LiveRoomPage()
         {
             this.InitializeComponent();
+            // Text selection and list items can consume pointer/tap events. Observe
+            // handled events too so double-clicking comment text still scrolls down.
+            LiveMessageList.AddHandler(UIElement.PointerPressedEvent,
+                new PointerEventHandler(LiveMessageList_PointerPressed), true);
+            LiveMessageList.AddHandler(UIElement.DoubleTappedEvent,
+                new DoubleTappedEventHandler(LiveMessageList_DoubleTapped), true);
             // 新窗口 / 当前页跟随显示模式（含自定义调色板）
             ThemeHelper.Apply(this);
             InitializeDesktopWindowControl();
@@ -1468,6 +1475,7 @@ namespace AllLive.UWP.Views
 
         private async void LiveRoomVM_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
+            if (isPageClosing) return;
             if (string.Equals(e?.PropertyName, "CurrentQuality", StringComparison.Ordinal))
             {
                 // 用户手动切换清晰度：重置卡顿自愈预算（不自动改画质，仅响应用户操作）。
@@ -1482,6 +1490,7 @@ namespace AllLive.UWP.Views
 
             await this.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
             {
+                if (isPageClosing) return;
                 LoadDecoderSetting();
             });
         }
@@ -4303,7 +4312,7 @@ namespace AllLive.UWP.Views
             return DefaultMediaSourceCreateTimeout;
         }
 
-        private async Task StopPlayAsync()
+        private Task StopPlayAsync()
         {
             ResetStreamReconnectState();
             ReleasePlaybackResources();
@@ -4312,14 +4321,15 @@ namespace AllLive.UWP.Views
             controlTimer?.Stop();
             Window.Current.CoreWindow.PointerCursor = new Windows.UI.Core.CoreCursor(Windows.UI.Core.CoreCursorType.Arrow, 0);
 
-            if (liveRoomVM != null)
+            var stopTask = liveRoomVM?.StopAsync() ?? Task.CompletedTask;
+            // Complete all window changes before a replacement page starts using this view.
+            if (!isRefreshingLiveRoom)
             {
-                await liveRoomVM.StopAsync();
+                SetFullScreen(false);
+                MiniWidnows(false);
             }
-
-            SetFullScreen(false);
-            MiniWidnows(false);
             ReleaseDisplayRequest();
+            return stopTask;
         }
 
         private void ReleasePlaybackResources()
@@ -4480,8 +4490,9 @@ namespace AllLive.UWP.Views
             Window.Current.CoreWindow.KeyDown -= CoreWindow_KeyDown;
             ApplicationView.GetForCurrentView().Consolidated -= LiveRoomPage_Consolidated;
 
-            await StopPlayAsync();
-            LogLiveRoomMemory("直播间播放与VM清理完成");
+            var stopTask = StopPlayAsync();
+            // Detach and dispose now: an old danmaku Stop must not hold the player,
+            // title bar or view references alive while the replacement page is playing.
             DetachControlEvents();
             DetachMediaPlayerEvents();
             ClearControlReferences();
@@ -4498,6 +4509,8 @@ namespace AllLive.UWP.Views
                 liveRoomWindowRegistered = false;
                 MessageCenter.UnregisterLiveRoomWindow();
             }
+            await stopTask;
+            LogLiveRoomMemory("直播间播放与VM清理完成");
         }
 
         private void CleanupLiveRoomPage()
@@ -4512,6 +4525,10 @@ namespace AllLive.UWP.Views
                 return;
             }
             controlEventsDetached = true;
+            LiveMessageList.RemoveHandler(UIElement.PointerPressedEvent,
+                new PointerEventHandler(LiveMessageList_PointerPressed));
+            LiveMessageList.RemoveHandler(UIElement.DoubleTappedEvent,
+                new DoubleTappedEventHandler(LiveMessageList_DoubleTapped));
             liveRoomVM.PropertyChanged -= LiveRoomVM_PropertyChanged;
             GridRight.SizeChanged -= GridRight_SizeChanged;
             PlayDecoder.SelectionChanged -= PlayDecoder_SelectionChanged;
@@ -4662,8 +4679,13 @@ namespace AllLive.UWP.Views
                 liveRoomVM.LoadData(pageArgs.Site, data.RoomID);
                 ResetStallTipState();
 
+                var refreshArgs = pageArgs as LiveRoomRefreshArgs;
+                if (refreshArgs != null)
+                {
+                    RestoreRefreshWindowMode(refreshArgs);
+                }
                 // 如果是XBOX，自动进入全屏
-                if (Utils.IsXbox)
+                else if (Utils.IsXbox)
                 {
                     SetFullScreen(true);
                 }
@@ -5063,7 +5085,7 @@ namespace AllLive.UWP.Views
 
         private void PlayBtnVolume_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
         {
-            // 音量按钮的双击只由 Click 处理音量，不能冒泡到播放器的全屏手势。
+            // 音量按钮的双击只由 Click 处理音量，不能冒泡到播放器的窗口切换手势。
             e.Handled = true;
         }
 
@@ -5369,6 +5391,7 @@ namespace AllLive.UWP.Views
         #region 手势
         int showControlsFlag = 0;
         bool pointer_in_player = false;
+        private Windows.UI.Input.PointerUpdateKind lastPlayerPointerPress;
 
         private void Grid_Tapped(object sender, TappedRoutedEventArgs e)
         {
@@ -5399,11 +5422,25 @@ namespace AllLive.UWP.Views
             }
             runing = false;
         }
+        private void Grid_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            // DoubleTapped 不提供鼠标按键，记录本次按下的按键用于区分左右键和中键。
+            lastPlayerPointerPress = e.GetCurrentPoint(sender as UIElement).Properties.PointerUpdateKind;
+        }
+
         private void Grid_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
         {
             if (isMini)
             {
                 MiniWidnows(false);
+                return;
+            }
+
+            if (e.PointerDeviceType == Windows.Devices.Input.PointerDeviceType.Mouse
+                && lastPlayerPointerPress == Windows.UI.Input.PointerUpdateKind.LeftButtonPressed)
+            {
+                e.Handled = true;
+                BottomBtnMaximize_Click(sender, null);
                 return;
             }
 
@@ -5681,6 +5718,19 @@ namespace AllLive.UWP.Views
 
         #endregion
 
+        private void LiveMessageList_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            lastMessagePointerPress = e.GetCurrentPoint(LiveMessageList).Properties.PointerUpdateKind;
+        }
+
+        private void LiveMessageList_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+        {
+            if (isPageClosing || e.PointerDeviceType != Windows.Devices.Input.PointerDeviceType.Mouse ||
+                lastMessagePointerPress != Windows.UI.Input.PointerUpdateKind.LeftButtonPressed) return;
+            e.Handled = true;
+            ScrollMessagesToBottomButton_Click(sender, null);
+        }
+
         private void LiveMessageList_Loaded(object sender, RoutedEventArgs e)
         {
             if (isPageClosing || messageScrollViewer != null) return;
@@ -5808,7 +5858,7 @@ namespace AllLive.UWP.Views
 
         private async void BottomBtnMaximize_Click(object sender, RoutedEventArgs e)
         {
-            if (desktopWindowController == null || isPageClosing) return;
+            if (desktopWindowController == null || isPageClosing || !BottomBtnMaximize.IsEnabled) return;
             BottomBtnMaximize.IsEnabled = false;
             try { await desktopWindowController.ToggleAsync(); }
             catch (OperationCanceledException) when (isPageClosing) { }
@@ -5829,15 +5879,9 @@ namespace AllLive.UWP.Views
             await Windows.System.Launcher.LaunchUriAsync(new Uri(liveRoomVM.detail.Url));
         }
 
-        private async void BottomBtnRefresh_Click(object sender, RoutedEventArgs e)
+        private void BottomBtnRefresh_Click(object sender, RoutedEventArgs e)
         {
-            if (liveRoomVM.Loading) return;
-            ResetStreamReconnectState();
-            ReleasePlaybackResources();
-
-            await liveRoomVM.StopAsync();
-            if (isPageClosing) return;
-            liveRoomVM.LoadData(pageArgs.Site, liveRoomVM.RoomID);
+            RefreshLiveRoom();
         }
 
         private void XboxSuperChat_ItemClick(object sender, ItemClickEventArgs e)

@@ -1,14 +1,83 @@
 using AllLive.UWP.Helper;
+using AllLive.UWP.Models;
 using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.UI.Xaml;
+using Windows.UI.Xaml.Media.Animation;
+using Windows.UI.Xaml.Navigation;
 
 namespace AllLive.UWP.Views
 {
     public sealed partial class LiveRoomPage
     {
+        private bool isRefreshingLiveRoom;
+
+        private sealed class LiveRoomRefreshArgs : PageArgs
+        {
+            public bool FullScreen { get; set; }
+            public bool FullWindow { get; set; }
+            public bool Mini { get; set; }
+        }
+
+        private void RefreshLiveRoom()
+        {
+            var frame = Frame;
+            if (isPageClosing || isRefreshingLiveRoom || frame == null ||
+                !ReferenceEquals(frame.Content, this) || pageArgs?.Site == null || pageArgs.Data == null) return;
+
+            // Manual refresh replaces the whole playback session, just like reopening a room.
+            // A stuck Loading flag, API gate or MediaPlayer must not survive the refresh.
+            var args = new LiveRoomRefreshArgs
+            {
+                Site = pageArgs.Site,
+                Data = pageArgs.Data,
+                FullScreen = Windows.UI.ViewManagement.ApplicationView.GetForCurrentView().IsFullScreenMode,
+                FullWindow = PlayBtnExitFullWindow.Visibility == Visibility.Visible,
+                Mini = isMini
+            };
+            isRefreshingLiveRoom = true;
+            BottomBtnRefresh.IsEnabled = false;
+            LogRecoveryEvent("ManualRefresh");
+            try
+            {
+                // Keep the same window and navigation history. The old page's cleanup
+                // invalidates its callbacks; process-wide native-open leases stay bounded.
+                if (!frame.NavigateToType(typeof(LiveRoomPage), args, new FrameNavigationOptions
+                {
+                    IsNavigationStackEnabled = false,
+                    TransitionInfoOverride = new SuppressNavigationTransitionInfo()
+                }))
+                    Utils.ShowMessageToast("刷新直播间失败，请重试");
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogDebug(() => "[PlaybackRecovery] event=ManualRefreshFailed error=" + ex.GetType().Name);
+                Utils.ShowMessageToast("刷新直播间失败，请重试");
+            }
+            finally
+            {
+                if (!isPageClosing)
+                {
+                    isRefreshingLiveRoom = false;
+                    BottomBtnRefresh.IsEnabled = true;
+                }
+            }
+        }
+
+        private void RestoreRefreshWindowMode(LiveRoomRefreshArgs args)
+        {
+            if (args.Mini)
+            {
+                MiniWidnows(true);
+                return;
+            }
+            HideTitleBar(false);
+            SetFullWindow(args.FullWindow);
+            if (args.FullScreen) SetFullScreen(true);
+        }
+
         private readonly PlaybackOperationGate mediaSourceGate = new PlaybackOperationGate();
         private readonly Random recoveryRandom = new Random(Guid.NewGuid().GetHashCode());
         private CancellationTokenSource mediaSourceWaitCts;

@@ -437,6 +437,7 @@
                     PointerEntered="Grid_PointerEntered"
                     PointerExited="Grid_PointerExited"
                     PointerMoved="Grid_PointerMoved"
+                    PointerPressed="Grid_PointerPressed"
                     RequestedTheme="Dark">
                     <Grid.ContextFlyout>
                         <Flyout>
