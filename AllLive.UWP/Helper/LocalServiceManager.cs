@@ -27,12 +27,11 @@ namespace AllLive.UWP.Helper
         private static string directory;
         private static string sessionId;
         private static uint parentProcessId;
-        private static CancellationTokenSource lifetime;
-        private static Task<LocalServiceConnection> startup;
-        private static int attempts;
+        private static LocalServiceStartup startup;
         private static int openingViews;
         private static bool initialized;
         private static bool supported;
+        private static bool ownerStopped = true;
 
         public static bool IsSupported => supported;
 
@@ -90,27 +89,27 @@ namespace AllLive.UWP.Helper
 
         private static void StopIfNoViews()
         {
-            if (views.Count != 0 || openingViews != 0 || lifetime == null) return;
-            lifetime.Cancel();
+            if (views.Count != 0 || openingViews != 0 || startup == null) return;
+            startup.Dispose();
             // This tiny synchronous write completes inside Consolidated, before UWP can suspend.
             // The service also watches the actual process handle for crash/Task Manager termination.
             WriteOwner(true);
-            lifetime = null;
             startup = null;
-            attempts = 0;
+            sessionId = null;
         }
 
         public static void UpdateLogging()
         {
             lock (sync)
             {
-                try { if (supported && lifetime != null && !lifetime.IsCancellationRequested) WriteOwner(false); }
+                try { if (supported && startup != null && sessionId != null && !ownerStopped) WriteOwner(false); }
                 catch { /* Logging/settings failures must never interrupt the application. */ }
             }
         }
 
         private static void WriteOwner(bool stop)
         {
+            ownerStopped = stop;
             try
             {
                 Directory.CreateDirectory(directory);
@@ -129,11 +128,21 @@ namespace AllLive.UWP.Helper
 
         private static async void ObserveStartup()
         {
-            try { await EnsureReadyAsync(); }
+            try { await EnsureReadyAsync().ConfigureAwait(false); }
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
                 LogHelper.LogDebug(() => "[LocalService] Startup unavailable: " + ex.GetType().Name);
+            }
+        }
+
+        public static void PrepareManualRetry(string serviceUrl)
+        {
+            if (!LocalServiceClient.IsBuiltInUrl(serviceUrl)) return;
+            lock (sync)
+            {
+                if (supported && startup != null && startup.RetryIfFailed())
+                    LogHelper.LogDebug(() => "[LocalService] Manual health check renewed startup budget");
             }
         }
 
@@ -143,95 +152,107 @@ namespace AllLive.UWP.Helper
             {
                 if (!supported || views.Count == 0 && openingViews == 0)
                     return Task.FromException<LocalServiceConnection>(new InvalidOperationException("本地服务当前不可用"));
-                if (startup != null) return startup;
-                if (attempts >= 2)
-                    return Task.FromException<LocalServiceConnection>(new InvalidOperationException("本地服务启动失败，请重新打开 AllLive"));
-                attempts++;
-                if (lifetime != null) lifetime.Cancel();
-                lifetime = new CancellationTokenSource();
-                sessionId = Guid.NewGuid().ToString("N");
-                WriteOwner(false);
-                startup = StartAsync(sessionId, lifetime.Token, attempts > 1);
-                return startup;
+                if (startup == null)
+                    startup = new LocalServiceStartup(StartAttemptAsync, TimeSpan.FromSeconds(2));
+                return startup.GetReadyAsync();
             }
         }
 
-        private static async Task<LocalServiceConnection> StartAsync(string id, CancellationToken token, bool retry)
+        private static async Task<LocalServiceConnection> StartAttemptAsync(int attempt, CancellationToken token)
         {
-            // Start outside the lock; callers share this task and do not block the UI.
-            await Task.Yield();
-            try { return await StartCoreAsync(id, token, retry); }
-            catch
+            var elapsed = Stopwatch.StartNew();
+            var stage = "Owner";
+            string id = null;
+            try
+            {
+                // Called on the thread pool; file work and continuations never use the UI thread.
+                lock (sync)
+                {
+                    token.ThrowIfCancellationRequested();
+                    sessionId = id = Guid.NewGuid().ToString("N");
+                    WriteOwner(false);
+                }
+                stage = "Launch";
+                LogHelper.LogDebug(() => $"[LocalService] Starting; attempt={attempt}/2");
+#if BUNDLED_LOCAL_SERVICE
+                var launch = FullTrustProcessLauncher.LaunchFullTrustProcessForCurrentAppAsync("Managed").AsTask();
+                using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    if (await Task.WhenAny(launch, Task.Delay(TimeSpan.FromSeconds(10), deadline.Token)).ConfigureAwait(false) != launch)
+                    {
+                        _ = launch.ContinueWith(t => { var ignored = t.Exception; },
+                            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+                        token.ThrowIfCancellationRequested();
+                        throw new TimeoutException("系统启动本地服务进程超时");
+                    }
+                    deadline.Cancel();
+                    await launch.ConfigureAwait(false);
+                }
+#endif
+                token.ThrowIfCancellationRequested();
+                LogHelper.LogDebug(() => $"[LocalService] Launch acknowledged; attempt={attempt}/2; elapsedMs={elapsed.ElapsedMilliseconds}");
+                // Do not charge Windows activation time against cold .NET/Kestrel initialization.
+                var readyElapsed = Stopwatch.StartNew();
+                var readyBudget = TimeSpan.FromSeconds(20);
+                Exception lastFailure = null;
+                using (var client = new System.Net.Http.HttpClient(new System.Net.Http.HttpClientHandler
+                    { UseProxy = false, AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan })
+                {
+                    while (readyElapsed.Elapsed < readyBudget)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        stage = "Readiness";
+                        try
+                        {
+                            var ready = JObject.Parse(File.ReadAllText(Path.Combine(directory, "ready-" + id + ".json")));
+                            if (ready.Value<string>("SessionId") == id && ready.Value<int>("ProtocolVersion") == 1)
+                            {
+                                var connection = new LocalServiceConnection(ready.Value<int>("Port"), id);
+                                stage = "Health";
+                                using (var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, connection.BaseUrl + "/health"))
+                                using (var check = CancellationTokenSource.CreateLinkedTokenSource(token))
+                                {
+                                    check.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(1,
+                                        Math.Min(2000, (readyBudget - readyElapsed.Elapsed).TotalMilliseconds))));
+                                    request.Headers.Add("X-AllLive-Session", id);
+                                    using (var response = await client.SendAsync(request, check.Token).ConfigureAwait(false))
+                                        response.EnsureSuccessStatusCode();
+                                }
+                                token.ThrowIfCancellationRequested();
+                                LogHelper.LogDebug(() => $"[LocalService] Ready; protocol=1; attempt={attempt}/2; elapsedMs={elapsed.ElapsedMilliseconds}");
+                                return connection;
+                            }
+                        }
+                        catch (IOException ex) { lastFailure = ex; }
+                        catch (JsonException ex) { lastFailure = ex; }
+                        catch (System.Net.Http.HttpRequestException ex) { lastFailure = ex; }
+                        catch (OperationCanceledException ex)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            lastFailure = ex;
+                        }
+                        await Task.Delay(200, token).ConfigureAwait(false);
+                    }
+                }
+                throw new TimeoutException(stage == "Health" ? "本地服务连接检测超时" : "等待本地服务就绪超时", lastFailure);
+            }
+            catch (Exception ex)
             {
                 lock (sync)
                 {
-                    if (sessionId == id && lifetime != null)
-                    {
-                        lifetime.Cancel();
-                        WriteOwner(true);
-                    }
+                    if (id != null && sessionId == id) WriteOwner(true);
                 }
+                if (!token.IsCancellationRequested)
+                    LogHelper.LogDebug(() => $"[LocalService] Attempt failed; attempt={attempt}/2; stage={stage}; elapsedMs={elapsed.ElapsedMilliseconds}; error={ex.GetType().Name}; hresult=0x{ex.HResult:X8}; cause={ex.InnerException?.GetType().Name ?? "none"}");
                 throw;
             }
-        }
-
-        private static async Task<LocalServiceConnection> StartCoreAsync(string id, CancellationToken token, bool retry)
-        {
-            if (retry) await Task.Delay(2000, token);
-            token.ThrowIfCancellationRequested();
-            var elapsed = Stopwatch.StartNew();
-#if BUNDLED_LOCAL_SERVICE
-            var launch = FullTrustProcessLauncher.LaunchFullTrustProcessForCurrentAppAsync("Managed").AsTask();
-            if (await Task.WhenAny(launch, Task.Delay(TimeSpan.FromSeconds(10), token)) != launch)
-            {
-                _ = launch.ContinueWith(t => { var ignored = t.Exception; },
-                    CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
-                token.ThrowIfCancellationRequested();
-                throw new TimeoutException("本地服务未能及时启动");
-            }
-            await launch;
-#endif
-            while (elapsed.Elapsed < TimeSpan.FromSeconds(10))
-            {
-                token.ThrowIfCancellationRequested();
-                try
-                {
-                    var ready = JObject.Parse(File.ReadAllText(Path.Combine(directory, "ready-" + id + ".json")));
-                    if (ready.Value<string>("SessionId") == id && ready.Value<int>("ProtocolVersion") == 1)
-                    {
-                        var connection = new LocalServiceConnection(ready.Value<int>("Port"), id);
-                        // The ready file proves the socket is bound. Verify AppContainer loopback too.
-                        using (var client = new System.Net.Http.HttpClient(new System.Net.Http.HttpClientHandler
-                            { UseProxy = false, AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(2) })
-                        using (var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, connection.BaseUrl + "/health"))
-                        {
-                            request.Headers.Add("X-AllLive-Session", id);
-                            using (var response = await client.SendAsync(request, token))
-                                response.EnsureSuccessStatusCode();
-                        }
-                        token.ThrowIfCancellationRequested();
-                        LogHelper.LogDebug(() => "[LocalService] Ready; protocol=1");
-                        return connection;
-                    }
-                }
-                catch (IOException) { }
-                catch (JsonException) { }
-                await Task.Delay(200, token);
-            }
-            throw new TimeoutException("本地服务未能及时启动");
         }
 
         private static void InvalidateConnection(string id)
         {
             lock (sync)
             {
-                if (id != sessionId || lifetime == null) return;
-                if (attempts >= 2)
-                {
-                    startup = Task.FromException<LocalServiceConnection>(new InvalidOperationException("本地服务已停止，请重新打开 AllLive"));
-                    return;
-                }
-                startup = null;
+                if (startup == null || !startup.Invalidate(id)) return;
             }
             ObserveStartup();
         }

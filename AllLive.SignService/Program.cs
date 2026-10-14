@@ -9,7 +9,7 @@ using System.Net;
 using System.Net.Http.Headers;
 
 var managed = args.Contains("--managed", StringComparer.Ordinal);
-using var owner = managed ? ManagedServiceOwner.TryCreate() : null;
+using var owner = managed ? await ManagedServiceOwner.TryCreateAsync() : null;
 if (managed && owner == null) return;
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
@@ -291,13 +291,23 @@ app.MapPost("/api/douyin/abogus", async (HttpRequest request) =>
     }
 });
 
-await app.StartAsync(owner?.Token ?? CancellationToken.None);
-if (owner != null)
+try
 {
-    var address = app.Urls.Single();
-    owner.PublishReady(new Uri(address).Port);
+    await app.StartAsync(owner?.Token ?? CancellationToken.None);
+    if (owner != null)
+    {
+        var address = app.Urls.Single();
+        owner.PublishReady(new Uri(address).Port);
+        ServiceDiagnostics.Write(() => "[Startup] HTTP listener ready");
+    }
+    await app.WaitForShutdownAsync();
 }
-await app.WaitForShutdownAsync();
+catch (OperationCanceledException) when (owner?.Token.IsCancellationRequested == true) { }
+catch (Exception ex)
+{
+    ServiceDiagnostics.Write(() => $"[Startup] Host failed; error={ex.GetType().Name}; hresult=0x{ex.HResult:X8}");
+    throw;
+}
 
 static string BuildDouyinSignature(string script, string roomId, string uniqueId, CancellationToken token, out string? error)
 {

@@ -128,8 +128,8 @@ namespace AllLive.UWP
         /// <param name="e">有关启动请求和过程的详细信息。</param>
         protected async override void OnLaunched(LaunchActivatedEventArgs e)
         {
+            var launchTiming = LogHelper.Enabled ? System.Diagnostics.Stopwatch.StartNew() : null;
             LocalServiceManager.Initialize();
-            if (!e.PrelaunchActivated) LocalServiceManager.RegisterCurrentView();
             //初始化数据库
             await DatabaseHelper.InitializeDatabase();
             await ApplyDouyinCookieSettingAsync();
@@ -178,6 +178,11 @@ namespace AllLive.UWP
             }
 
             ThemeHelper.Apply(rootFrame);
+            if (!e.PrelaunchActivated)
+            {
+                LogHelper.LogDebug(() => "[Startup] Main window activated; elapsedMs=" + launchTiming?.ElapsedMilliseconds);
+                LocalServiceManager.RegisterCurrentView();
+            }
         }
 
 

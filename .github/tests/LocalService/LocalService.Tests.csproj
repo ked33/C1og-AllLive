@@ -8,5 +8,6 @@
   <ItemGroup>
     <ProjectReference Include="../../../AllLive.SignService/AllLive.SignService.csproj" />
     <Compile Include="../../../AllLive.Core/Helper/LocalServiceClient.cs" Link="LocalServiceClient.cs" />
+    <Compile Include="../../../AllLive.Core/Helper/LocalServiceStartup.cs" Link="LocalServiceStartup.cs" />
   </ItemGroup>
 </Project>

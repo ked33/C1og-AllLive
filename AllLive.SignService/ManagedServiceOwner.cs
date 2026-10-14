@@ -42,10 +42,11 @@ internal sealed class ManagedServiceOwner : IDisposable
         SignalChange(); // Close the read/subscribe race.
     }
 
-    public static ManagedServiceOwner? TryCreate()
+    public static async Task<ManagedServiceOwner?> TryCreateAsync()
     {
         Process? parent = null;
         Mutex? mutex = null;
+        var stage = "PackageIdentity";
         try
         {
             uint length = 0;
@@ -54,15 +55,23 @@ internal sealed class ManagedServiceOwner : IDisposable
             if (GetCurrentPackageFamilyName(ref length, family) != 0) return null;
             var directory = Path.Combine(GetUnredirectedLocalAppData(),
                 "Packages", family.ToString(), "LocalState", "LocalService");
-            var owner = ReadOwner(directory);
+            stage = "Owner";
+            var owner = await ReadStartupOwnerAsync(directory);
             if (owner == null || owner.StopRequested || owner.ProtocolVersion != 1
                 || !Guid.TryParseExact(owner.SessionId, "N", out _)) return null;
+            ServiceDiagnostics.Configure(Path.Combine(directory, "..", "log"), owner.LogEnabled);
+            stage = "ParentProcess";
             parent = Process.GetProcessById(owner.ParentProcessId);
             // Hold the actual process handle, and only accept this package's UWP executable.
             var packageRoot = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))!.FullName;
             if (parent.HasExited || !string.Equals(parent.MainModule?.FileName,
-                Path.Combine(packageRoot, "AllLive.UWP.exe"), StringComparison.OrdinalIgnoreCase)) return null;
+                Path.Combine(packageRoot, "AllLive.UWP.exe"), StringComparison.OrdinalIgnoreCase))
+            {
+                ServiceDiagnostics.Write(() => "[Startup] Parent validation failed");
+                return null;
+            }
             _ = parent.Handle;
+            stage = "InstanceLock";
             mutex = new Mutex(false, "Local\\AllLive.SignService." + family + "." + owner.SessionId, out var created);
             if (!created) return null;
             var result = new ManagedServiceOwner(directory, owner, parent, mutex);
@@ -70,8 +79,30 @@ internal sealed class ManagedServiceOwner : IDisposable
             mutex = null;
             return result;
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            ServiceDiagnostics.Write(() => $"[Startup] Failed; stage={stage}; error={ex.GetType().Name}; hresult=0x{ex.HResult:X8}");
+            return null;
+        }
         finally { parent?.Dispose(); mutex?.Dispose(); }
+    }
+
+    internal static async Task<OwnerState?> ReadStartupOwnerAsync(string directory)
+    {
+        // A settings update can briefly overlap process activation. Retry a partially
+        // written/locked owner file, instead of exiting silently on the first read.
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                var owner = ReadOwner(directory);
+                if (owner != null) return owner;
+            }
+            catch (IOException) when (attempt < 9) { }
+            catch (JsonException) when (attempt < 9) { }
+            await Task.Delay(50);
+        }
+        return null;
     }
 
     public void PublishReady(int port)

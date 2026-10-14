@@ -19,6 +19,8 @@ sealed class Tests
     public async Task RunAsync()
     {
         TestRoutes();
+        await LocalServiceStartupTests.RunAsync();
+        await TestStartupOwnerAsync();
         DesktopWindowControlTests.Run();
         TestRegistry();
         TestScripts();
@@ -37,6 +39,26 @@ sealed class Tests
             "http://127.0.0.1:9000/api/douyu/sign", "http://127.0.0.1:8788/api/douyu/sign?key=custom",
             "http://user@127.0.0.1:8788/api/douyu/sign", "http://127.0.0.1.evil.test:8788/api/douyu/sign" })
             Check(!LocalServiceClient.IsBuiltInUrl(url), "preserve custom endpoint: " + url);
+    }
+
+    private static async Task TestStartupOwnerAsync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "AllLive-startup-owner-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "owner.json");
+        try
+        {
+            File.WriteAllText(path, "{");
+            var pending = ManagedServiceOwner.ReadStartupOwnerAsync(directory);
+            Check(!pending.IsCompleted, "incomplete startup owner waits for completion");
+            File.WriteAllText(path, JsonSerializer.Serialize(new ManagedServiceOwner.OwnerState
+            {
+                ProtocolVersion = 1, ParentProcessId = Environment.ProcessId,
+                SessionId = Guid.NewGuid().ToString("N")
+            }));
+            Check((await pending)?.ParentProcessId == Environment.ProcessId, "startup recovers a partially written owner file");
+        }
+        finally { File.Delete(path); Directory.Delete(directory); }
     }
 
     private static void TestRegistry()

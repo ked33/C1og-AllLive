@@ -885,6 +885,7 @@ namespace AllLive.UWP.Views
                 ? SettingHelper.DOUYU_SIGN_URL_DEFAULT
                 : txtDouyuSignUrl.Text.Trim();
             txtDouyuSignStatus.Text = "检测中...";
+            if (showToast) LocalServiceManager.PrepareManualRetry(url);
 
             try
             {
@@ -925,6 +926,7 @@ namespace AllLive.UWP.Views
                 ? SettingHelper.DOUYIN_SIGN_URL_DEFAULT
                 : txtDouyinSignUrl.Text.Trim();
             txtDouyinSignStatus.Text = "检测中...";
+            if (showToast) LocalServiceManager.PrepareManualRetry(url);
 
             try
             {
