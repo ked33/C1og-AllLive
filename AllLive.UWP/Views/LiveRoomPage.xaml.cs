@@ -98,6 +98,7 @@ namespace AllLive.UWP.Views
         private DispatcherTimer bufferingTimer;
         private readonly object setPlayerRequestLock = new object();
         private bool isPageClosing;
+        private bool isWindowClosing;
         private bool liveRoomCleaned;
         private bool mediaPlayerEventsDetached;
         private bool liveRoomWindowRegistered;
@@ -359,9 +360,28 @@ namespace AllLive.UWP.Views
 
         private async void LiveRoomPage_Consolidated(ApplicationView sender, ApplicationViewConsolidatedEventArgs args)
         {
-            await CleanupLiveRoomPageAsync(clearWindowContent: true);
-            // 关闭窗口
-            CoreWindow.GetForCurrentThread().Close();
+            await CloseLiveRoomWindowAsync();
+        }
+
+        internal async Task CloseLiveRoomWindowAsync()
+        {
+            if (isWindowClosing) return;
+            isWindowClosing = true;
+            var coreWindow = Window.Current.CoreWindow;
+            try
+            {
+                await CleanupLiveRoomPageAsync(clearWindowContent: true);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogDebug(() => "[Window] Cleanup failed: " + ex.GetType().Name);
+            }
+            finally
+            {
+                // Consolidated already hid the view. Never restore/activate it while
+                // draining canceled operations; close it even if cleanup reports an error.
+                try { coreWindow.Close(); } catch { }
+            }
         }
 
      
@@ -4312,7 +4332,7 @@ namespace AllLive.UWP.Views
             return DefaultMediaSourceCreateTimeout;
         }
 
-        private Task StopPlayAsync()
+        private Task StopPlayAsync(bool closingWindow)
         {
             ResetStreamReconnectState();
             ReleasePlaybackResources();
@@ -4322,11 +4342,12 @@ namespace AllLive.UWP.Views
             Window.Current.CoreWindow.PointerCursor = new Windows.UI.Core.CoreCursor(Windows.UI.Core.CoreCursorType.Arrow, 0);
 
             var stopTask = liveRoomVM?.StopAsync() ?? Task.CompletedTask;
-            // Complete all window changes before a replacement page starts using this view.
-            if (!isRefreshingLiveRoom)
+            // A consolidated view is already hidden. Exiting full-screen/CompactOverlay
+            // here can show it again after its content has been cleared.
+            if (!closingWindow && !isRefreshingLiveRoom)
             {
                 SetFullScreen(false);
-                MiniWidnows(false);
+                if (isMini) MiniWidnows(false);
             }
             ReleaseDisplayRequest();
             return stopTask;
@@ -4490,12 +4511,12 @@ namespace AllLive.UWP.Views
             Window.Current.CoreWindow.KeyDown -= CoreWindow_KeyDown;
             ApplicationView.GetForCurrentView().Consolidated -= LiveRoomPage_Consolidated;
 
-            var stopTask = StopPlayAsync();
+            var stopTask = StopPlayAsync(closingWindow: clearWindowContent);
             // Detach and dispose now: an old danmaku Stop must not hold the player,
             // title bar or view references alive while the replacement page is playing.
             DetachControlEvents();
             DetachMediaPlayerEvents();
-            ClearControlReferences();
+            ClearControlReferences(closingWindow: clearWindowContent);
             LogLiveRoomMemory("直播间控件引用清理完成");
             try { player.SetMediaPlayer(null); } catch { }
             try { mediaPlayer?.Dispose(); } catch { }
@@ -4559,7 +4580,7 @@ namespace AllLive.UWP.Views
             xboxSettingsDMColorful.Toggled -= XboxSettingsDMColorful_Toggled;
         }
 
-        private void ClearControlReferences()
+        private void ClearControlReferences(bool closingWindow)
         {
             try { Bindings.StopTracking(); } catch { }
             try { DataContext = null; } catch { }
@@ -4582,7 +4603,10 @@ namespace AllLive.UWP.Views
             try { PlayCodec.ItemsSource = null; } catch { }
             try { DanmuControl.ClearAll(); } catch { }
             try { player.Source = null; } catch { }
-            try { Window.Current.SetTitleBar(null); } catch { }
+            if (!closingWindow)
+            {
+                try { Window.Current.SetTitleBar(null); } catch { }
+            }
         }
 
         private void ClearWindowContentReference()

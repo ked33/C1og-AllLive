@@ -24,9 +24,8 @@ namespace AllLive.UWP.Helper
     public static class MessageCenter
     {
         private static readonly ConcurrentDictionary<string, int> OpenLiveRoomWindows = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static readonly ConcurrentDictionary<string, DateTimeOffset> OpeningLiveRoomWindows = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, byte> OpeningLiveRoomWindows = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, FavoriteLiveInfo> FavoriteLiveInfoCache = new ConcurrentDictionary<string, FavoriteLiveInfo>(StringComparer.OrdinalIgnoreCase);
-        private static readonly TimeSpan LiveRoomWindowOpenThrottle = TimeSpan.FromSeconds(3);
         private static int ActiveLiveRoomWindowCount;
         private static int LiveRoomMemoryCleanupScheduled;
         public delegate void NavigatePageHandler(Type page, object data);
@@ -117,92 +116,138 @@ namespace AllLive.UWP.Helper
 
         public async static void NavigatePage(Type page, object data)
         {
-            if(SettingHelper.GetValue(SettingHelper.NEW_WINDOW_LIVEROOM, true)&& page == typeof(LiveRoomPage))
-            {
-                var liveRoomKey = GetLiveRoomWindowKey(data);
-                if (!string.IsNullOrWhiteSpace(liveRoomKey)
-                    && OpenLiveRoomWindows.TryGetValue(liveRoomKey, out var existingViewId))
-                {
-                    var currentViewId = ApplicationView.GetForCurrentView().Id;
-                    if (existingViewId == currentViewId)
-                    {
-                        return;
-                    }
-                    var switched = await ApplicationViewSwitcher.TryShowAsStandaloneAsync(existingViewId);
-                    if (switched)
-                    {
-                        return;
-                    }
-                    if (IsLiveRoomWindowOpening(liveRoomKey))
-                    {
-                        return;
-                    }
-                    OpenLiveRoomWindows.TryRemove(liveRoomKey, out _);
-                }
-
-                if (!TryMarkLiveRoomWindowOpening(liveRoomKey))
-                {
-                    return;
-                }
-
-                int newViewId = 0;
-                using (var serviceView = LocalServiceManager.ReserveNewView())
-                try
-                {
-                    CoreApplicationView newView = CoreApplication.CreateNewView();
-                    await newView.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
-                    {
-                        newViewId = ApplicationView.GetForCurrentView().Id;
-                        LocalServiceManager.RegisterCurrentView();
-                        Frame frame = new Frame();
-                        ThemeHelper.Apply(frame);
-                        frame.Navigate(typeof(LiveRoomPage), data);
-                        Window.Current.Content = frame;
-                        Window.Current.Activate();
-                        // 新窗口标题栏再应用一次（ExtendViewIntoTitleBar 之后）
-                        ThemeHelper.Apply(frame);
-                        if (!string.IsNullOrWhiteSpace(liveRoomKey))
-                        {
-                            OpenLiveRoomWindows[liveRoomKey] = newViewId;
-                            ApplicationView.GetForCurrentView().Consolidated += (sender, args) =>
-                            {
-                                if (OpenLiveRoomWindows.TryGetValue(liveRoomKey, out var viewId) && viewId == newViewId)
-                                {
-                                    OpenLiveRoomWindows.TryRemove(liveRoomKey, out _);
-                                }
-                            };
-                        }
-                        //ApplicationView.GetForCurrentView().Consolidated += (sender, args) =>
-                        //{
-                        //    frame.Navigate(typeof(BlankPage));
-                        //    //newView.CoreWindow.Close();
-                        //};
-                    });
-                    bool viewShown = await ApplicationViewSwitcher.TryShowAsStandaloneAsync(newViewId);
-                    if (!viewShown) LocalServiceManager.UnregisterView(newViewId);
-                    if (!viewShown && !string.IsNullOrWhiteSpace(liveRoomKey))
-                    {
-                        OpenLiveRoomWindows.TryRemove(liveRoomKey, out _);
-                    }
-                }
-                catch
-                {
-                    if (newViewId != 0) LocalServiceManager.UnregisterView(newViewId);
-                    throw;
-                }
-                finally
-                {
-                    ClearLiveRoomWindowOpening(liveRoomKey);
-                }
-            }
+            if (SettingHelper.GetValue(SettingHelper.NEW_WINDOW_LIVEROOM, true) && page == typeof(LiveRoomPage))
+                await OpenLiveRoomWindowAsync(data);
             else
-            {
                 NavigatePageEvent?.Invoke(page, data);
-            }
-            
         }
 
-        
+        private static async Task OpenLiveRoomWindowAsync(object data)
+        {
+            var liveRoomKey = GetLiveRoomWindowKey(data);
+            // Own this request until showing/navigation finish, not for a fixed timeout.
+            if (!TryMarkLiveRoomWindowOpening(liveRoomKey)) return;
+
+            CoreApplicationView newView = null;
+            Frame frame = null;
+            var newViewId = 0;
+            var viewClosed = 0;
+            var pageReady = false;
+            using (var serviceView = LocalServiceManager.ReserveNewView())
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(liveRoomKey) &&
+                    OpenLiveRoomWindows.TryGetValue(liveRoomKey, out var existingViewId))
+                {
+                    if (existingViewId == ApplicationView.GetForCurrentView().Id) return;
+                    try
+                    {
+                        if (await ApplicationViewSwitcher.TryShowAsStandaloneAsync(existingViewId)) return;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogHelper.LogDebug(() => "[Window] Existing view unavailable: " + ex.GetType().Name);
+                    }
+                    RemoveLiveRoomWindow(liveRoomKey, existingViewId);
+                }
+
+                newView = CoreApplication.CreateNewView();
+                await newView.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+                {
+                    var view = ApplicationView.GetForCurrentView();
+                    var coreWindow = Window.Current.CoreWindow;
+                    newViewId = view.Id;
+                    LocalServiceManager.RegisterCurrentView();
+                    frame = new Frame();
+                    ThemeHelper.Apply(frame);
+                    var loading = new StackPanel
+                    {
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Spacing = 12
+                    };
+                    loading.Children.Add(new ProgressRing { IsActive = true, Width = 32, Height = 32 });
+                    loading.Children.Add(new TextBlock { Text = "正在打开直播间…" });
+                    ThemeHelper.Apply(loading);
+                    Window.Current.Content = loading;
+
+                    // Subscribe before the page and activation: a closing view must be
+                    // removed before its cleanup can clear content or wait on sockets.
+                    view.Consolidated += (sender, args) =>
+                    {
+                        Interlocked.Exchange(ref viewClosed, 1);
+                        RemoveLiveRoomWindow(liveRoomKey, newViewId);
+                        if (!(frame.Content is LiveRoomPage))
+                        {
+                            try { coreWindow.Close(); } catch { }
+                        }
+                    };
+                    coreWindow.Closed += (sender, args) =>
+                    {
+                        Interlocked.Exchange(ref viewClosed, 1);
+                        RemoveLiveRoomWindow(liveRoomKey, newViewId);
+                    };
+                    if (!string.IsNullOrWhiteSpace(liveRoomKey))
+                        OpenLiveRoomWindows[liveRoomKey] = newViewId;
+                    Window.Current.Activate();
+                });
+
+                if (Volatile.Read(ref viewClosed) != 0) return;
+                if (!await ApplicationViewSwitcher.TryShowAsStandaloneAsync(newViewId)) return;
+                if (Volatile.Read(ref viewClosed) != 0) return;
+
+                // Present the lightweight shell before XAML/player/room initialization.
+                // A close during presentation also cancels this queued navigation.
+                await newView.Dispatcher.RunAsync(CoreDispatcherPriority.Low, () =>
+                {
+                    if (Volatile.Read(ref viewClosed) != 0) return;
+                    if (!frame.Navigate(typeof(LiveRoomPage), data))
+                        throw new InvalidOperationException("Live room navigation failed.");
+                    Window.Current.Content = frame;
+                    ThemeHelper.Apply(frame);
+                    pageReady = true;
+                });
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogDebug(() => "[Window] Open failed: " + ex.GetType().Name);
+                if (Volatile.Read(ref viewClosed) == 0)
+                    Utils.ShowMessageToast("打开直播间失败，请重试");
+            }
+            finally
+            {
+                if (!pageReady && newView != null && Volatile.Read(ref viewClosed) == 0)
+                {
+                    RemoveLiveRoomWindow(liveRoomKey, newViewId);
+                    if (newViewId != 0) LocalServiceManager.UnregisterView(newViewId);
+                    try
+                    {
+                        await newView.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, async () =>
+                        {
+                            if (Volatile.Read(ref viewClosed) != 0) return;
+                            Interlocked.Exchange(ref viewClosed, 1);
+                            if (frame?.Content is LiveRoomPage room)
+                                await room.CloseLiveRoomWindowAsync();
+                            else
+                            {
+                                Window.Current.Content = null;
+                                try { Window.Current.CoreWindow.Close(); } catch { }
+                            }
+                        });
+                    }
+                    catch { /* The view may already have closed its dispatcher. */ }
+                }
+                ClearLiveRoomWindowOpening(liveRoomKey);
+            }
+        }
+
+        private static void RemoveLiveRoomWindow(string liveRoomKey, int viewId)
+        {
+            if (string.IsNullOrWhiteSpace(liveRoomKey)) return;
+            // A late Closed callback must not remove a replacement window's registration.
+            ((ICollection<KeyValuePair<string, int>>)OpenLiveRoomWindows).Remove(
+                new KeyValuePair<string, int>(liveRoomKey, viewId));
+        }
 
         public static void ChangeTitle(string title, ILiveSite site = null)
         {
@@ -315,7 +360,7 @@ namespace AllLive.UWP.Helper
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(3));
-                    if (Volatile.Read(ref ActiveLiveRoomWindowCount) > 0)
+                    if (Volatile.Read(ref ActiveLiveRoomWindowCount) > 0 || !OpeningLiveRoomWindows.IsEmpty)
                     {
                         return;
                     }
@@ -382,44 +427,7 @@ namespace AllLive.UWP.Helper
 
         private static bool TryMarkLiveRoomWindowOpening(string liveRoomKey)
         {
-            if (string.IsNullOrWhiteSpace(liveRoomKey))
-            {
-                return true;
-            }
-
-            while (true)
-            {
-                var now = DateTimeOffset.UtcNow;
-                if (!OpeningLiveRoomWindows.TryGetValue(liveRoomKey, out var openingAt))
-                {
-                    return OpeningLiveRoomWindows.TryAdd(liveRoomKey, now);
-                }
-                if ((now - openingAt) < LiveRoomWindowOpenThrottle)
-                {
-                    return false;
-                }
-                OpeningLiveRoomWindows.TryRemove(liveRoomKey, out _);
-            }
-        }
-
-        private static bool IsLiveRoomWindowOpening(string liveRoomKey)
-        {
-            if (string.IsNullOrWhiteSpace(liveRoomKey))
-            {
-                return false;
-            }
-
-            if (!OpeningLiveRoomWindows.TryGetValue(liveRoomKey, out var openingAt))
-            {
-                return false;
-            }
-
-            var isOpening = (DateTimeOffset.UtcNow - openingAt) < LiveRoomWindowOpenThrottle;
-            if (!isOpening)
-            {
-                OpeningLiveRoomWindows.TryRemove(liveRoomKey, out _);
-            }
-            return isOpening;
+            return string.IsNullOrWhiteSpace(liveRoomKey) || OpeningLiveRoomWindows.TryAdd(liveRoomKey, 0);
         }
 
         private static void ClearLiveRoomWindowOpening(string liveRoomKey)
