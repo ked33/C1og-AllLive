@@ -97,8 +97,14 @@ namespace AllLive.UWP.ViewModels
         }
 
         private int _refreshVersion = 0;
-        private const int LiveStatusParallelism = 6;
-        private readonly SemaphoreSlim _liveStatusSemaphore = new SemaphoreSlim(LiveStatusParallelism, LiveStatusParallelism);
+        private const int DefaultLiveStatusParallelism = 6;
+        private const int DefaultDouyinLiveStatusParallelism = 2;
+        private const string DouyinSiteName = "抖音直播";
+        private readonly object _liveStatusSemaphoreSync = new object();
+        private SemaphoreSlim _liveStatusSemaphore = new SemaphoreSlim(DefaultLiveStatusParallelism, DefaultLiveStatusParallelism);
+        private SemaphoreSlim _douyinLiveStatusSemaphore = new SemaphoreSlim(DefaultDouyinLiveStatusParallelism, DefaultDouyinLiveStatusParallelism);
+        private int _liveStatusSemaphoreSize = DefaultLiveStatusParallelism;
+        private int _douyinLiveStatusSemaphoreSize = DefaultDouyinLiveStatusParallelism;
 
         public async void LoadData()
         {
@@ -299,29 +305,60 @@ namespace AllLive.UWP.ViewModels
         // 返回开播状态获取失败的关注项数量。
         private async Task<int> UpdateLiveStatusAsync(IList<FavoriteItem> items, int refreshVersion, bool loadRoomDetail)
         {
+            GetLiveStatusSemaphores(out var liveStatusSemaphore, out var douyinLiveStatusSemaphore);
             var tasks = new List<Task<bool>>(items.Count);
             foreach (var item in items)
             {
-                tasks.Add(UpdateLiveStatusAsync(item, refreshVersion, loadRoomDetail));
+                tasks.Add(UpdateLiveStatusAsync(item, refreshVersion, loadRoomDetail, liveStatusSemaphore, douyinLiveStatusSemaphore));
             }
             var results = await Task.WhenAll(tasks);
             return results.Count(failed => failed);
         }
 
+        // 并发数设置即时生效：每轮刷新读取一次，容量变化时才整体替换信号量（旧信号量由在跑任务自行释放）。
+        private void GetLiveStatusSemaphores(out SemaphoreSlim liveStatusSemaphore, out SemaphoreSlim douyinLiveStatusSemaphore)
+        {
+            var parallelism = SettingHelper.GetFavoriteLiveStatusParallelism();
+            var douyinParallelism = SettingHelper.GetFavoriteDouyinLiveStatusParallelism();
+            lock (_liveStatusSemaphoreSync)
+            {
+                if (parallelism != _liveStatusSemaphoreSize)
+                {
+                    _liveStatusSemaphore = new SemaphoreSlim(parallelism, parallelism);
+                    _liveStatusSemaphoreSize = parallelism;
+                }
+                if (douyinParallelism != _douyinLiveStatusSemaphoreSize)
+                {
+                    _douyinLiveStatusSemaphore = new SemaphoreSlim(douyinParallelism, douyinParallelism);
+                    _douyinLiveStatusSemaphoreSize = douyinParallelism;
+                }
+                liveStatusSemaphore = _liveStatusSemaphore;
+                douyinLiveStatusSemaphore = _douyinLiveStatusSemaphore;
+            }
+        }
+
         // 返回 true 表示该关注项的开播状态获取失败（用于在刷新结束后统一提示）。
         // 仅 GetLiveStatus 失败才算开播状态获取失败；已拿到开播状态、仅房间详情失败不计入。
-        private async Task<bool> UpdateLiveStatusAsync(FavoriteItem item, int refreshVersion, bool loadRoomDetail)
+        private async Task<bool> UpdateLiveStatusAsync(FavoriteItem item, int refreshVersion, bool loadRoomDetail, SemaphoreSlim liveStatusSemaphore, SemaphoreSlim douyinLiveStatusSemaphore)
         {
             if (refreshVersion != _refreshVersion)
             {
                 return false;
             }
-            await _liveStatusSemaphore.WaitAsync();
+            var isDouyin = string.Equals(item.SiteName, DouyinSiteName, StringComparison.Ordinal);
+            var douyinSlotTaken = false;
+            await liveStatusSemaphore.WaitAsync();
             try
             {
                 if (refreshVersion != _refreshVersion)
                 {
                     return false;
+                }
+                if (isDouyin)
+                {
+                    // 抖音在「全站并发」之下再受「抖音并发」子上限约束（嵌套获取，释放顺序相反，无死锁）。
+                    await douyinLiveStatusSemaphore.WaitAsync();
+                    douyinSlotTaken = true;
                 }
                 var site = MainVM.Sites.FirstOrDefault(x => x.Name == item.SiteName);
                 if (site == null)
@@ -390,7 +427,11 @@ namespace AllLive.UWP.ViewModels
             }
             finally
             {
-                _liveStatusSemaphore.Release();
+                if (douyinSlotTaken)
+                {
+                    douyinLiveStatusSemaphore.Release();
+                }
+                liveStatusSemaphore.Release();
             }
         }
 

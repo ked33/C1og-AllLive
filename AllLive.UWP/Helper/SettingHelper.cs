@@ -26,6 +26,39 @@ namespace AllLive.UWP.Helper
         {
             storageHelper.Save<T>(key, value);
         }
+
+        public static int GetFavoriteLiveStatusParallelism()
+        {
+            return ClampIntValue(GetValue<int>(FAVORITE_LIVE_STATUS_PARALLELISM, 6), 1, 16);
+        }
+
+        public static int GetFavoriteDouyinLiveStatusParallelism()
+        {
+            return ClampIntValue(GetValue<int>(FAVORITE_DOUYIN_LIVE_STATUS_PARALLELISM, 2), 1, 16);
+        }
+
+        public static int GetDouyinHttp444PauseSeconds()
+        {
+            return ClampIntValue(GetValue<int>(DOUYIN_HTTP444_PAUSE_SECONDS, 30), 5, 300);
+        }
+
+        public static int GetDouyinCaptchaPauseSeconds()
+        {
+            return ClampIntValue(GetValue<int>(DOUYIN_CAPTCHA_PAUSE_SECONDS, 30), 5, 300);
+        }
+
+        private static int ClampIntValue(int value, int min, int max)
+        {
+            if (value < min)
+            {
+                return min;
+            }
+            if (value > max)
+            {
+                return max;
+            }
+            return value;
+        }
         /// <summary>
         /// 主题: 0 跟随系统, 1 浅色, 2 深色, 3 One Dark Pro, 4 Nord, 5 Dracula, 6 Catppuccin Mocha, 7 纯黑
         /// </summary>
@@ -56,6 +89,23 @@ namespace AllLive.UWP.Helper
         /// 关注列表隐藏未开播
         /// </summary>
         public const string FAVORITE_HIDE_OFFLINE = "FavoriteHideOffline";
+
+        /// <summary>
+        /// 全站关注并发（关注列表检测开播状态的最大并发数，默认 6，范围 1-16）
+        /// </summary>
+        public const string FAVORITE_LIVE_STATUS_PARALLELISM = "FavoriteLiveStatusParallelism";
+        /// <summary>
+        /// 抖音关注并发（抖音检测的单独并发上限，默认 2，范围 1-16）
+        /// </summary>
+        public const string FAVORITE_DOUYIN_LIVE_STATUS_PARALLELISM = "FavoriteDouyinLiveStatusParallelism";
+        /// <summary>
+        /// 命中 HTTP 444 后暂停抖音请求的秒数（默认 30，范围 5-300）
+        /// </summary>
+        public const string DOUYIN_HTTP444_PAUSE_SECONDS = "DouyinHttp444PauseSeconds";
+        /// <summary>
+        /// 命中验证码中间页后暂停抖音请求的秒数（默认 30，范围 5-300）
+        /// </summary>
+        public const string DOUYIN_CAPTCHA_PAUSE_SECONDS = "DouyinCaptchaPauseSeconds";
 
         /// <summary>
         /// 图片降低亮度（默认开启，约 70% 不透明度，深色主题护眼）
