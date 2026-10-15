@@ -47,6 +47,20 @@ namespace AllLive.UWP.Helper
             return ClampIntValue(GetValue<int>(DOUYIN_CAPTCHA_PAUSE_SECONDS, 30), 5, 300);
         }
 
+        /// <summary>
+        /// 斗鱼设备标识（首次使用时生成并持久化）：作为 dy_did/acf_did Cookie 保持长期稳定的匿名设备身份。
+        /// </summary>
+        public static string GetDouyuDeviceId()
+        {
+            var deviceId = GetValue<string>(DOUYU_DEVICE_ID, "");
+            if (string.IsNullOrWhiteSpace(deviceId))
+            {
+                deviceId = Guid.NewGuid().ToString("N");
+                SetValue(DOUYU_DEVICE_ID, deviceId);
+            }
+            return deviceId;
+        }
+
         private static int ClampIntValue(int value, int min, int max)
         {
             if (value < min)
@@ -125,6 +139,11 @@ namespace AllLive.UWP.Helper
         public const string DOUYU_SIGN_URL_DEFAULT = "http://127.0.0.1:8788/api/douyu/sign";
         public const string DOUYU_SIGN_URL_PUBLIC = "http://alive.nsapps.cn/api/AllLive/DouyuSign";
         public const string DOUYU_SIGN_ENABLED = "DouyuSignEnabled";
+
+        /// <summary>
+        /// 斗鱼设备标识（dy_did/acf_did Cookie，首次使用时自动生成并持久化）
+        /// </summary>
+        public const string DOUYU_DEVICE_ID = "DouyuDeviceId";
 
         /// <summary>
         /// 抖音签名服务地址（可为空，使用默认）

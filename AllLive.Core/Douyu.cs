@@ -112,11 +112,13 @@ namespace AllLive.Core
         public async Task<LiveRoomDetail> GetRoomDetail(object roomId)
         {
             var roomInfo = await GetRoomInfo(roomId.ToString());
-            var jsEncResult = await HttpUtil.GetString($"https://www.douyu.com/swf_api/homeH5Enc?rids={roomId}", new Dictionary<string, string>()
+            var jsEncHeaders = new Dictionary<string, string>()
             {
                 { "referer", $"https://m.douyu.com/{roomId}"},
                 { "user-agent","Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1 Edg/114.0.0.0" },
-            });
+            };
+            ApplyDeviceCookie(jsEncHeaders);
+            var jsEncResult = await HttpUtil.GetString($"https://www.douyu.com/swf_api/homeH5Enc?rids={roomId}", jsEncHeaders);
             var crptext = JObject.Parse(jsEncResult)["data"][$"room{roomId}"].ToString();
             CoreDebug.Log(() => $"[Douyu] GetRoomDetail roomId={roomId} show_status={roomInfo["show_status"]} videoLoop={roomInfo["videoLoop"]} room_name={roomInfo["room_name"]}");
            
@@ -133,7 +135,7 @@ namespace AllLive.Core
                 UserAvatar = roomInfo["owner_avatar"].ToString(),
                 Introduction =roomInfo["show_details"].ToString(),
                 Notice = "",
-                Status = roomInfo["show_status"].ToInt32() == 1 && roomInfo["videoLoop"].ToInt32() != 1,
+                Status = roomInfo["show_status"].ToInt32() == 1 && roomInfo["videoLoop"].ToInt32() != 1 && !LiveStatusParser.IsReplayRoomName(roomInfo["room_name"]?.ToString()),
                 DanmakuData = roomInfo["room_id"].ToString(),
                 Data = await GetPlayArgs(crptext, roomInfo["room_id"].ToString()),
                 Url = "https://www.douyu.com/" + roomId,
@@ -160,13 +162,25 @@ namespace AllLive.Core
 
         private async Task<JToken> GetRoomInfo(string roomId)
         {
-            var result = await HttpUtil.GetString($"https://www.douyu.com/betard/{roomId}", new Dictionary<string, string>()
+            var headers = new Dictionary<string, string>()
             {
                 { "referer", $"https://www.douyu.com/{roomId}"},
                 { "user-agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43" },
-            });
+            };
+            ApplyDeviceCookie(headers);
+            var result = await HttpUtil.GetString($"https://www.douyu.com/betard/{roomId}", headers);
             var obj = JObject.Parse(result);
             return obj["room"];
+        }
+
+        // 匿名设备身份：dy_did/acf_did 使用长期稳定的设备 ID（由宿主设置），避免每次都像新设备访问而触发风控。
+        private static void ApplyDeviceCookie(IDictionary<string, string> headers)
+        {
+            var deviceId = CoreConfig.GetDouyuDeviceId();
+            if (!string.IsNullOrWhiteSpace(deviceId))
+            {
+                headers["cookie"] = $"dy_did={deviceId}; acf_did={deviceId}";
+            }
         }
 
         private async Task<string> GetPlayArgs(string html, string rid)
@@ -527,9 +541,12 @@ namespace AllLive.Core
             var roomInfo = await GetRoomInfo(roomId.ToString());
             var showStatus = roomInfo?["show_status"];
             var loop = roomInfo?["videoLoop"];
+            // 官方赛事回放房（room_name 以【回放】开头）即使 show_status=1 也按未开播处理。
+            var replayRoom = LiveStatusParser.IsReplayRoomName(roomInfo?["room_name"]?.ToString());
             var live = LiveStatusParser.IsLive(showStatus, 1, 0, 2)
-                && (loop == null || loop.Type == JTokenType.Null || LiveStatusParser.ReadRequiredNumber(loop) != 1);
-            CoreDebug.Log(() => $"[Douyu] GetLiveStatus roomId={roomId} show_status={showStatus} videoLoop={loop} => {live}");
+                && (loop == null || loop.Type == JTokenType.Null || LiveStatusParser.ReadRequiredNumber(loop) != 1)
+                && !replayRoom;
+            CoreDebug.Log(() => $"[Douyu] GetLiveStatus roomId={roomId} show_status={showStatus} videoLoop={loop} replayRoom={replayRoom} => {live}");
             return live;
         }
         public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)

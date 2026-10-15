@@ -10,6 +10,7 @@ namespace AllLive.Core.Helper
         private static List<string> _douyuSignServiceUrls = new List<string>();
         private static List<string> _douyinSignServiceUrls = new List<string>();
         private static string _douyinCookie = "";
+        private static string _douyuDeviceId = "";
 
         public static IReadOnlyList<string> GetDouyuSignServiceUrls()
         {
@@ -93,6 +94,23 @@ namespace AllLive.Core.Helper
             lock (_lock)
             {
                 _douyinCookie = cookie;
+            }
+        }
+
+        public static string GetDouyuDeviceId()
+        {
+            lock (_lock)
+            {
+                return _douyuDeviceId ?? "";
+            }
+        }
+
+        public static void SetDouyuDeviceId(string value)
+        {
+            var deviceId = value?.Trim() ?? "";
+            lock (_lock)
+            {
+                _douyuDeviceId = deviceId;
             }
         }
     }

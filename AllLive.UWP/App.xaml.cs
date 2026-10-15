@@ -38,6 +38,7 @@ namespace AllLive.UWP
 
             this.InitializeComponent();
             ApplyDouyuSignServiceSetting();
+            ApplyDouyuDeviceIdSetting();
             ApplyDouyinSignServiceSetting();
             LogHelper.SetEnabled(SettingHelper.GetValue<bool>(SettingHelper.LOG_ENABLED, false));
             AllLive.Core.Helper.CoreDebug.IsEnabled = () => LogHelper.Enabled;
@@ -66,6 +67,11 @@ namespace AllLive.UWP
             {
                 CoreConfig.SetDouyuSignServiceUrl(SettingHelper.DOUYU_SIGN_URL_PUBLIC);
             }
+        }
+
+        private static void ApplyDouyuDeviceIdSetting()
+        {
+            CoreConfig.SetDouyuDeviceId(SettingHelper.GetDouyuDeviceId());
         }
 
         private static void ApplyDouyinSignServiceSetting()
