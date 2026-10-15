@@ -204,6 +204,62 @@ namespace AllLive.UWP.Views
                     SettingHelper.SetValue(SettingHelper.FAVORITE_AUTO_REFRESH_MINUTES, minutes);
                 });
             });
+
+            //全站关注并发
+            numFavoriteLiveStatusParallelism.Value = SettingHelper.GetFavoriteLiveStatusParallelism();
+            numFavoriteLiveStatusParallelism.Loaded += new RoutedEventHandler((sender, e) =>
+            {
+                numFavoriteLiveStatusParallelism.ValueChanged += new TypedEventHandler<NumberBox, NumberBoxValueChangedEventArgs>((obj, args) =>
+                {
+                    if (double.IsNaN(args.NewValue))
+                    {
+                        return;
+                    }
+                    SettingHelper.SetValue(SettingHelper.FAVORITE_LIVE_STATUS_PARALLELISM, ClampInt(Convert.ToInt32(args.NewValue), 1, 16));
+                });
+            });
+
+            //抖音关注并发
+            numFavoriteDouyinLiveStatusParallelism.Value = SettingHelper.GetFavoriteDouyinLiveStatusParallelism();
+            numFavoriteDouyinLiveStatusParallelism.Loaded += new RoutedEventHandler((sender, e) =>
+            {
+                numFavoriteDouyinLiveStatusParallelism.ValueChanged += new TypedEventHandler<NumberBox, NumberBoxValueChangedEventArgs>((obj, args) =>
+                {
+                    if (double.IsNaN(args.NewValue))
+                    {
+                        return;
+                    }
+                    SettingHelper.SetValue(SettingHelper.FAVORITE_DOUYIN_LIVE_STATUS_PARALLELISM, ClampInt(Convert.ToInt32(args.NewValue), 1, 16));
+                });
+            });
+
+            //444 暂停时长（秒）
+            numDouyinHttp444PauseSeconds.Value = SettingHelper.GetDouyinHttp444PauseSeconds();
+            numDouyinHttp444PauseSeconds.Loaded += new RoutedEventHandler((sender, e) =>
+            {
+                numDouyinHttp444PauseSeconds.ValueChanged += new TypedEventHandler<NumberBox, NumberBoxValueChangedEventArgs>((obj, args) =>
+                {
+                    if (double.IsNaN(args.NewValue))
+                    {
+                        return;
+                    }
+                    SettingHelper.SetValue(SettingHelper.DOUYIN_HTTP444_PAUSE_SECONDS, ClampInt(Convert.ToInt32(args.NewValue), 5, 300));
+                });
+            });
+
+            //验证码暂停时长（秒）
+            numDouyinCaptchaPauseSeconds.Value = SettingHelper.GetDouyinCaptchaPauseSeconds();
+            numDouyinCaptchaPauseSeconds.Loaded += new RoutedEventHandler((sender, e) =>
+            {
+                numDouyinCaptchaPauseSeconds.ValueChanged += new TypedEventHandler<NumberBox, NumberBoxValueChangedEventArgs>((obj, args) =>
+                {
+                    if (double.IsNaN(args.NewValue))
+                    {
+                        return;
+                    }
+                    SettingHelper.SetValue(SettingHelper.DOUYIN_CAPTCHA_PAUSE_SECONDS, ClampInt(Convert.ToInt32(args.NewValue), 5, 300));
+                });
+            });
             //视频解码
             cbDecoder.SelectedIndex = ClampInt(SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1), 0, 3);
             cbDecoder.Loaded += new RoutedEventHandler((sender, e) =>
@@ -347,6 +403,10 @@ namespace AllLive.UWP.Views
             public int? PaneDisplayMode { get; set; }
             public bool? MouseBack { get; set; }
             public int? FavoriteAutoRefreshMinutes { get; set; }
+            public int? FavoriteLiveStatusParallelism { get; set; }
+            public int? FavoriteDouyinLiveStatusParallelism { get; set; }
+            public int? DouyinHttp444PauseSeconds { get; set; }
+            public int? DouyinCaptchaPauseSeconds { get; set; }
             public bool? FavoriteHideOffline { get; set; }
             public bool? ImageDimEnabled { get; set; }
             public bool? NewWindowLiveRoom { get; set; }
@@ -530,6 +590,10 @@ namespace AllLive.UWP.Views
                 PaneDisplayMode = SettingHelper.GetValue<int>(SettingHelper.PANE_DISPLAY_MODE, 0),
                 MouseBack = SettingHelper.GetValue<bool>(SettingHelper.MOUSE_BACK, true),
                 FavoriteAutoRefreshMinutes = NormalizeFavoriteRefreshMinutes(null),
+                FavoriteLiveStatusParallelism = SettingHelper.GetFavoriteLiveStatusParallelism(),
+                FavoriteDouyinLiveStatusParallelism = SettingHelper.GetFavoriteDouyinLiveStatusParallelism(),
+                DouyinHttp444PauseSeconds = SettingHelper.GetDouyinHttp444PauseSeconds(),
+                DouyinCaptchaPauseSeconds = SettingHelper.GetDouyinCaptchaPauseSeconds(),
                 FavoriteHideOffline = SettingHelper.GetValue<bool>(SettingHelper.FAVORITE_HIDE_OFFLINE, false),
                 ImageDimEnabled = SettingHelper.GetValue<bool>(SettingHelper.IMAGE_DIM_ENABLED, true),
                 NewWindowLiveRoom = SettingHelper.GetValue<bool>(SettingHelper.NEW_WINDOW_LIVEROOM, true),
@@ -595,6 +659,10 @@ namespace AllLive.UWP.Views
             var paneDisplayMode = ClampInt(data.PaneDisplayMode ?? SettingHelper.GetValue<int>(SettingHelper.PANE_DISPLAY_MODE, 0), 0, 1);
             var mouseBack = data.MouseBack ?? SettingHelper.GetValue<bool>(SettingHelper.MOUSE_BACK, true);
             var favoriteRefreshMinutes = NormalizeFavoriteRefreshMinutes(data.FavoriteAutoRefreshMinutes);
+            var favoriteLiveStatusParallelism = ClampInt(data.FavoriteLiveStatusParallelism ?? SettingHelper.GetFavoriteLiveStatusParallelism(), 1, 16);
+            var favoriteDouyinLiveStatusParallelism = ClampInt(data.FavoriteDouyinLiveStatusParallelism ?? SettingHelper.GetFavoriteDouyinLiveStatusParallelism(), 1, 16);
+            var douyinHttp444PauseSeconds = ClampInt(data.DouyinHttp444PauseSeconds ?? SettingHelper.GetDouyinHttp444PauseSeconds(), 5, 300);
+            var douyinCaptchaPauseSeconds = ClampInt(data.DouyinCaptchaPauseSeconds ?? SettingHelper.GetDouyinCaptchaPauseSeconds(), 5, 300);
             var favoriteHideOffline = data.FavoriteHideOffline ?? SettingHelper.GetValue<bool>(SettingHelper.FAVORITE_HIDE_OFFLINE, false);
             var imageDimEnabled = data.ImageDimEnabled ?? SettingHelper.GetValue<bool>(SettingHelper.IMAGE_DIM_ENABLED, true);
             var newWindowLiveRoom = data.NewWindowLiveRoom ?? SettingHelper.GetValue<bool>(SettingHelper.NEW_WINDOW_LIVEROOM, true);
@@ -626,6 +694,10 @@ namespace AllLive.UWP.Views
             SettingHelper.SetValue(SettingHelper.PANE_DISPLAY_MODE, paneDisplayMode);
             SettingHelper.SetValue(SettingHelper.MOUSE_BACK, mouseBack);
             SettingHelper.SetValue(SettingHelper.FAVORITE_AUTO_REFRESH_MINUTES, favoriteRefreshMinutes);
+            SettingHelper.SetValue(SettingHelper.FAVORITE_LIVE_STATUS_PARALLELISM, favoriteLiveStatusParallelism);
+            SettingHelper.SetValue(SettingHelper.FAVORITE_DOUYIN_LIVE_STATUS_PARALLELISM, favoriteDouyinLiveStatusParallelism);
+            SettingHelper.SetValue(SettingHelper.DOUYIN_HTTP444_PAUSE_SECONDS, douyinHttp444PauseSeconds);
+            SettingHelper.SetValue(SettingHelper.DOUYIN_CAPTCHA_PAUSE_SECONDS, douyinCaptchaPauseSeconds);
             SettingHelper.SetValue(SettingHelper.FAVORITE_HIDE_OFFLINE, favoriteHideOffline);
             SettingHelper.SetValue(SettingHelper.IMAGE_DIM_ENABLED, imageDimEnabled);
             SettingHelper.SetValue(SettingHelper.NEW_WINDOW_LIVEROOM, newWindowLiveRoom);
@@ -681,6 +753,10 @@ namespace AllLive.UWP.Views
             cbPaneDisplayMode.SelectedIndex = paneDisplayMode;
             swMouseClosePage.IsOn = mouseBack;
             numFavoriteRefreshInterval.Value = favoriteRefreshMinutes;
+            numFavoriteLiveStatusParallelism.Value = favoriteLiveStatusParallelism;
+            numFavoriteDouyinLiveStatusParallelism.Value = favoriteDouyinLiveStatusParallelism;
+            numDouyinHttp444PauseSeconds.Value = douyinHttp444PauseSeconds;
+            numDouyinCaptchaPauseSeconds.Value = douyinCaptchaPauseSeconds;
             swImageDim.IsOn = imageDimEnabled;
             if (ImageDimHelper.Current != null)
             {

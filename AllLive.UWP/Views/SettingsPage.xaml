@@ -143,6 +143,90 @@
                             SpinButtonPlacementMode="Compact" />
                     </Grid>
                     <Grid
+                        x:Name="SettingsFavoriteLiveStatusParallelism"
+                        Margin="0,8,0,0"
+                        Padding="8,12"
+                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock>全站关注并发</TextBlock>
+                            <TextBlock FontSize="12" Foreground="Gray" TextWrapping="Wrap">关注列表检测开播状态的最大并发数（默认 6）</TextBlock>
+                        </StackPanel>
+                        <my:NumberBox
+                            x:Name="numFavoriteLiveStatusParallelism"
+                            Width="100"
+                            HorizontalAlignment="Right"
+                            Maximum="16"
+                            Minimum="1"
+                            PlaceholderText="并发数"
+                            SpinButtonPlacementMode="Compact" />
+                    </Grid>
+                    <Grid
+                        x:Name="SettingsFavoriteDouyinLiveStatusParallelism"
+                        Margin="0,8,0,0"
+                        Padding="8,12"
+                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock>抖音关注并发</TextBlock>
+                            <TextBlock FontSize="12" Foreground="Gray" TextWrapping="Wrap">抖音检测的单独并发上限，越小越不易触发风控（默认 2）</TextBlock>
+                        </StackPanel>
+                        <my:NumberBox
+                            x:Name="numFavoriteDouyinLiveStatusParallelism"
+                            Width="100"
+                            HorizontalAlignment="Right"
+                            Maximum="16"
+                            Minimum="1"
+                            PlaceholderText="并发数"
+                            SpinButtonPlacementMode="Compact" />
+                    </Grid>
+                    <Grid
+                        x:Name="SettingsDouyinHttp444PauseSeconds"
+                        Margin="0,8,0,0"
+                        Padding="8,12"
+                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock>444 暂停时长</TextBlock>
+                            <TextBlock FontSize="12" Foreground="Gray" TextWrapping="Wrap">命中 HTTP 444 后暂停抖音请求的秒数（默认 30）</TextBlock>
+                        </StackPanel>
+                        <my:NumberBox
+                            x:Name="numDouyinHttp444PauseSeconds"
+                            Width="100"
+                            HorizontalAlignment="Right"
+                            Maximum="300"
+                            Minimum="5"
+                            PlaceholderText="秒"
+                            SpinButtonPlacementMode="Compact" />
+                    </Grid>
+                    <Grid
+                        x:Name="SettingsDouyinCaptchaPauseSeconds"
+                        Margin="0,8,0,0"
+                        Padding="8,12"
+                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock>验证码暂停时长</TextBlock>
+                            <TextBlock FontSize="12" Foreground="Gray" TextWrapping="Wrap">命中验证码中间页后暂停抖音请求的秒数（默认 30）</TextBlock>
+                        </StackPanel>
+                        <my:NumberBox
+                            x:Name="numDouyinCaptchaPauseSeconds"
+                            Width="100"
+                            HorizontalAlignment="Right"
+                            Maximum="300"
+                            Minimum="5"
+                            PlaceholderText="秒"
+                            SpinButtonPlacementMode="Compact" />
+                    </Grid>
+                    <Grid
                         x:Name="SettingsImageDim"
                         Margin="0,8,0,0"
                         Padding="8,12"
