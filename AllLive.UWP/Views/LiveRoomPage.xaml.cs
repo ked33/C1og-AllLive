@@ -55,7 +55,10 @@ namespace AllLive.UWP.Views
         readonly SettingVM settingVM;
 
         FFmpegInteropX.FFmpegMediaSource interopMSS;
-        readonly MediaPlayer mediaPlayer;
+        MediaPlayer mediaPlayer;
+        private bool initialRoomLoadQueued;
+        private bool initialRoomLoadStarted;
+        internal bool WaitForWindowPresentation { get; set; }
 
         DisplayRequest dispRequest;
         bool isDisplayRequestActive;
@@ -316,23 +319,14 @@ namespace AllLive.UWP.Views
             timer_focus.Tick += Timer_focus_Tick;
             controlTimer = new DispatcherTimer() { Interval = TimeSpan.FromSeconds(1) };
             controlTimer.Tick += ControlTimer_Tick;
-            mediaPlayer = new MediaPlayer();
-            mediaPlayer.RealTimePlayback = true;
-            mediaPlayer.PlaybackSession.PlaybackStateChanged += PlaybackSession_PlaybackStateChanged;
-            mediaPlayer.PlaybackSession.BufferingStarted += PlaybackSession_BufferingStarted;
-            mediaPlayer.PlaybackSession.BufferingProgressChanged += PlaybackSession_BufferingProgressChanged;
-            mediaPlayer.PlaybackSession.BufferingEnded += PlaybackSession_BufferingEnded;
-            mediaPlayer.MediaOpened += MediaPlayer_MediaOpened;
-            mediaPlayer.MediaEnded += MediaPlayer_MediaEnded;
-            mediaPlayer.MediaFailed += MediaPlayer_MediaFailed;
 
             bufferingTimer = new DispatcherTimer() { Interval = BufferingTimeout };
             bufferingTimer.Tick += BufferingTimer_Tick;
             NetworkInformation.NetworkStatusChanged += NetworkInformation_NetworkStatusChanged;
             isNetworkDown = !IsNetworkConnected();
 
-            timer_focus.Start();
-            controlTimer.Start();
+            Loaded += LiveRoomPage_Loaded;
+            Window.Current.VisibilityChanged += LiveRoomPage_VisibilityChanged;
             if (Utils.IsXbox && SettingHelper.GetValue<int>(SettingHelper.XBOX_MODE, 0) == 0)
             {
                 XBoxControl.Visibility = Visibility.Visible;
@@ -356,6 +350,67 @@ namespace AllLive.UWP.Views
                 SetTitleBarColor();
             }
 
+        }
+
+        // Create the native player only when a usable source is ready. Volume and
+        // window controls remain usable while room information is still loading.
+        private void EnsureMediaPlayer()
+        {
+            if (mediaPlayer != null) return;
+            mediaPlayer = new MediaPlayer();
+            mediaPlayer.RealTimePlayback = true;
+            mediaPlayer.PlaybackSession.PlaybackStateChanged += PlaybackSession_PlaybackStateChanged;
+            mediaPlayer.PlaybackSession.BufferingStarted += PlaybackSession_BufferingStarted;
+            mediaPlayer.PlaybackSession.BufferingProgressChanged += PlaybackSession_BufferingProgressChanged;
+            mediaPlayer.PlaybackSession.BufferingEnded += PlaybackSession_BufferingEnded;
+            mediaPlayer.MediaOpened += MediaPlayer_MediaOpened;
+            mediaPlayer.MediaEnded += MediaPlayer_MediaEnded;
+            mediaPlayer.MediaFailed += MediaPlayer_MediaFailed;
+        }
+
+        private void LiveRoomPage_Loaded(object sender, RoutedEventArgs e)
+        {
+            QueueInitialRoomLoad();
+        }
+
+        private void LiveRoomPage_VisibilityChanged(object sender, VisibilityChangedEventArgs e)
+        {
+            if (e.Visible) QueueInitialRoomLoad();
+        }
+
+        internal void NotifyWindowPresented()
+        {
+            WaitForWindowPresentation = false;
+            QueueInitialRoomLoad();
+        }
+
+        private async void QueueInitialRoomLoad()
+        {
+            if (isPageClosing || initialRoomLoadQueued || initialRoomLoadStarted ||
+                WaitForWindowPresentation || !IsLoaded || !Window.Current.Visible || pageArgs == null) return;
+            initialRoomLoadQueued = true;
+            try
+            {
+                // Yield the Loaded/layout callback, without starving startup at Low priority.
+                await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+                {
+                    initialRoomLoadQueued = false;
+                    if (isPageClosing || initialRoomLoadStarted || WaitForWindowPresentation ||
+                        !IsLoaded || !Window.Current.Visible) return;
+                    initialRoomLoadStarted = true;
+                    timer_focus.Start();
+                    controlTimer.Start();
+                    liveRoomVM.LoadData(pageArgs.Site, ((LiveRoomItem)pageArgs.Data).RoomID);
+                });
+            }
+            catch (Exception ex)
+            {
+                initialRoomLoadQueued = false;
+                if (isPageClosing) return;
+                liveRoomVM.Loading = false;
+                LogHelper.LogDebug(() => "[Window] Initial room load failed: " + ex.GetType().Name);
+                Utils.ShowMessageToast("加载直播间失败，请点击刷新重试");
+            }
         }
 
         private async void LiveRoomPage_Consolidated(ApplicationView sender, ApplicationViewConsolidatedEventArgs args)
@@ -1383,26 +1438,26 @@ namespace AllLive.UWP.Views
                 //    break;
 
                 case Windows.System.VirtualKey.Up:
-                    SetPlayerVolume(mediaPlayer.Volume + 0.1);
+                    SetPlayerVolume(SliderVolume.Value + 0.1);
 
 
-                    TxtToolTip.Text = "音量:" + mediaPlayer.Volume.ToString("P");
+                    TxtToolTip.Text = "音量:" + SliderVolume.Value.ToString("P");
                     ToolTip.Visibility = Visibility.Visible;
                     await Task.Delay(2000);
                     ToolTip.Visibility = Visibility.Collapsed;
                     break;
 
                 case Windows.System.VirtualKey.Down:
-                    SetPlayerVolume(mediaPlayer.Volume - 0.1);
+                    SetPlayerVolume(SliderVolume.Value - 0.1);
 
 
-                    if (mediaPlayer.Volume == 0)
+                    if (SliderVolume.Value == 0)
                     {
                         TxtToolTip.Text = "静音";
                     }
                     else
                     {
-                        TxtToolTip.Text = "音量:" + mediaPlayer.Volume.ToString("P");
+                        TxtToolTip.Text = "音量:" + SliderVolume.Value.ToString("P");
                     }
                     ToolTip.Visibility = Visibility.Visible;
                     await Task.Delay(2000);
@@ -4205,6 +4260,7 @@ namespace AllLive.UWP.Views
                     return;
                 }
 
+                EnsureMediaPlayer();
                 mediaPlayer.AutoPlay = true;
                 mediaPlayer.Volume = SliderVolume.Value;
                 // HLS 直播关闭 RealTimePlayback，允许 MF 侧多缓冲，降低短时 underrun。
@@ -4491,6 +4547,8 @@ namespace AllLive.UWP.Views
             }
             liveRoomCleaned = true;
             isPageClosing = true;
+            Loaded -= LiveRoomPage_Loaded;
+            Window.Current.VisibilityChanged -= LiveRoomPage_VisibilityChanged;
             desktopWindowController?.Dispose();
             desktopWindowController = null;
             DetachMessageScrollViewer();
@@ -4697,10 +4755,11 @@ namespace AllLive.UWP.Views
                 liveRoomVM.SiteLogo = siteInfo.Logo;
                 liveRoomVM.SiteName = siteInfo.Name;
 
-                var data = pageArgs.Data as LiveRoomItem;
                 MessageCenter.ChangeTitle("", pageArgs.Site);
 
-                liveRoomVM.LoadData(pageArgs.Site, data.RoomID);
+                // The first layout already has the loading state, saved panel width and
+                // final title bar. Loaded/presentation starts requests after it is visible.
+                liveRoomVM.Loading = true;
                 ResetStallTipState();
 
                 var refreshArgs = pageArgs as LiveRoomRefreshArgs;
@@ -5086,7 +5145,7 @@ namespace AllLive.UWP.Views
                 {
                     lastNonZeroVolume = clampedVolume;
                 }
-                mediaPlayer.Volume = clampedVolume;
+                if (mediaPlayer != null) mediaPlayer.Volume = clampedVolume;
                 SliderVolume.Value = clampedVolume;
                 VolumeIcon.Glyph = clampedVolume > 0 ? "\uE15D" : "\uE198";
                 ToolTipService.SetToolTip(PlayBtnVolume, clampedVolume > 0 ? "静音" : "还原音量");
@@ -5104,7 +5163,7 @@ namespace AllLive.UWP.Views
 
         private void PlayBtnVolume_Click(object sender, RoutedEventArgs e)
         {
-            SetPlayerVolume(mediaPlayer.Volume > 0 ? 0 : lastNonZeroVolume);
+            SetPlayerVolume(SliderVolume.Value > 0 ? 0 : lastNonZeroVolume);
         }
 
         private void PlayBtnVolume_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
@@ -5517,7 +5576,7 @@ namespace AllLive.UWP.Views
                 double dd = delta / (this.ActualHeight * 0.8);
 
                 //slider_V.Value -= d;
-                var volume = mediaPlayer.Volume - dd;
+                var volume = SliderVolume.Value - dd;
                 if (volume < 0) volume = 0;
                 SliderVolume.Value = volume;
 
@@ -5525,12 +5584,12 @@ namespace AllLive.UWP.Views
             else
             {
                 double dd = Math.Abs(delta) / (this.ActualHeight * 0.8);
-                var volume = mediaPlayer.Volume + dd;
+                var volume = SliderVolume.Value + dd;
                 if (volume > 1) volume = 1;
                 SliderVolume.Value = volume;
                 //slider_V.Value += d;
             }
-            TxtToolTip.Text = "音量:" + mediaPlayer.Volume.ToString("P");
+            TxtToolTip.Text = "音量:" + SliderVolume.Value.ToString("P");
 
             //Utils.ShowMessageToast("音量:" +  mediaElement.MediaPlayer.Volume.ToString("P"), 3000);
         }
@@ -5588,9 +5647,9 @@ namespace AllLive.UWP.Views
                 {
                     SettingHelper.SetValue<double>(SettingHelper.PLAYER_BRIGHTNESS, _brightness);
                 }
-                else if (mediaPlayer != null)
+                else
                 {
-                    SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, mediaPlayer.Volume);
+                    SettingHelper.SetValue<double>(SettingHelper.PLAYER_VOLUME, SliderVolume.Value);
                 }
             }
         }
@@ -5731,12 +5790,12 @@ namespace AllLive.UWP.Views
 
         private void PlayBtnPlay_Click(object sender, RoutedEventArgs e)
         {
-            mediaPlayer.Play();
+            mediaPlayer?.Play();
         }
 
         private void PlayBtnPause_Click(object sender, RoutedEventArgs e)
         {
-            mediaPlayer.Pause();
+            mediaPlayer?.Pause();
         }
 
 

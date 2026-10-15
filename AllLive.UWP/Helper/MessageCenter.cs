@@ -18,6 +18,7 @@ using Windows.UI.Popups;
 using Windows.UI.ViewManagement;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
+using Windows.UI.Xaml.Media.Animation;
 
 namespace AllLive.UWP.Helper
 {
@@ -27,7 +28,7 @@ namespace AllLive.UWP.Helper
         private static readonly ConcurrentDictionary<string, byte> OpeningLiveRoomWindows = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, FavoriteLiveInfo> FavoriteLiveInfoCache = new ConcurrentDictionary<string, FavoriteLiveInfo>(StringComparer.OrdinalIgnoreCase);
         private static int ActiveLiveRoomWindowCount;
-        private static int LiveRoomMemoryCleanupScheduled;
+        private static int LiveRoomMemorySnapshotScheduled;
         public delegate void NavigatePageHandler(Type page, object data);
         public static event NavigatePageHandler NavigatePageEvent;
         public delegate void ChangeTitleHandler(string title, string logo);
@@ -161,17 +162,6 @@ namespace AllLive.UWP.Helper
                     DouyinPauseToast.RegisterCurrentView();
                     frame = new Frame();
                     ThemeHelper.Apply(frame);
-                    var loading = new StackPanel
-                    {
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Spacing = 12
-                    };
-                    loading.Children.Add(new ProgressRing { IsActive = true, Width = 32, Height = 32 });
-                    loading.Children.Add(new TextBlock { Text = "正在打开直播间…" });
-                    ThemeHelper.Apply(loading);
-                    Window.Current.Content = loading;
-
                     // Subscribe before the page and activation: a closing view must be
                     // removed before its cleanup can clear content or wait on sockets.
                     view.Consolidated += (sender, args) =>
@@ -190,6 +180,12 @@ namespace AllLive.UWP.Helper
                     };
                     if (!string.IsNullOrWhiteSpace(liveRoomKey))
                         OpenLiveRoomWindows[liveRoomKey] = newViewId;
+                    // Build the final chrome/layout before showing the view. Room I/O and
+                    // the native player start later, without replacing Window.Content.
+                    if (!frame.Navigate(typeof(LiveRoomPage), data, new SuppressNavigationTransitionInfo()))
+                        throw new InvalidOperationException("Live room navigation failed.");
+                    ((LiveRoomPage)frame.Content).WaitForWindowPresentation = true;
+                    Window.Current.Content = frame;
                     Window.Current.Activate();
                 });
 
@@ -197,15 +193,11 @@ namespace AllLive.UWP.Helper
                 if (!await ApplicationViewSwitcher.TryShowAsStandaloneAsync(newViewId)) return;
                 if (Volatile.Read(ref viewClosed) != 0) return;
 
-                // Present the lightweight shell before XAML/player/room initialization.
-                // A close during presentation also cancels this queued navigation.
-                await newView.Dispatcher.RunAsync(CoreDispatcherPriority.Low, () =>
+                await newView.Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                 {
                     if (Volatile.Read(ref viewClosed) != 0) return;
-                    if (!frame.Navigate(typeof(LiveRoomPage), data))
-                        throw new InvalidOperationException("Live room navigation failed.");
-                    Window.Current.Content = frame;
-                    ThemeHelper.Apply(frame);
+                    // Resolve the current page: a refresh may already have replaced it.
+                    if (frame.Content is LiveRoomPage room) room.NotifyWindowPresented();
                     pageReady = true;
                 });
             }
@@ -345,13 +337,13 @@ namespace AllLive.UWP.Helper
             if (count <= 0)
             {
                 Interlocked.Exchange(ref ActiveLiveRoomWindowCount, 0);
-                ScheduleLastLiveRoomMemoryCleanup();
+                ScheduleLastLiveRoomMemorySnapshot();
             }
         }
 
-        private static void ScheduleLastLiveRoomMemoryCleanup()
+        private static void ScheduleLastLiveRoomMemorySnapshot()
         {
-            if (Interlocked.CompareExchange(ref LiveRoomMemoryCleanupScheduled, 1, 0) != 0)
+            if (!LogHelper.Enabled || Interlocked.CompareExchange(ref LiveRoomMemorySnapshotScheduled, 1, 0) != 0)
             {
                 return;
             }
@@ -366,31 +358,28 @@ namespace AllLive.UWP.Helper
                         return;
                     }
 
-                    LogMemorySnapshot("最后一个直播间已关闭，开始回收内存");
-
-                    GC.Collect();
-                    GC.WaitForPendingFinalizers();
-                    GC.Collect();
-
-                    LogMemorySnapshot("直播间内存回收完成");
+                    // All views share the managed heap. Forced collections/finalizer waits
+                    // can stall the next opening view even when scheduled on Task.Run.
+                    // Resource owners dispose explicitly; leave collection to the runtime.
+                    LogMemorySnapshot("最后一个直播间已关闭，资源释放后采样");
                     await Task.Delay(TimeSpan.FromSeconds(10));
                     if (Volatile.Read(ref ActiveLiveRoomWindowCount) == 0)
                     {
-                        LogMemorySnapshot("直播间内存回收后10秒采样");
+                        LogMemorySnapshot("直播间关闭后10秒采样");
                     }
                     await Task.Delay(TimeSpan.FromSeconds(20));
                     if (Volatile.Read(ref ActiveLiveRoomWindowCount) == 0)
                     {
-                        LogMemorySnapshot("直播间内存回收后30秒采样");
+                        LogMemorySnapshot("直播间关闭后30秒采样");
                     }
                 }
                 catch (Exception ex)
                 {
-                    LogHelper.Log("直播间内存回收失败", LogType.ERROR, ex);
+                    LogHelper.Log("直播间内存采样失败", LogType.ERROR, ex);
                 }
                 finally
                 {
-                    Interlocked.Exchange(ref LiveRoomMemoryCleanupScheduled, 0);
+                    Interlocked.Exchange(ref LiveRoomMemorySnapshotScheduled, 0);
                 }
             });
         }
