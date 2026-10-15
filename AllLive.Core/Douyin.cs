@@ -59,6 +59,9 @@ namespace AllLive.Core
             { "Accept-Language", ACCEPT_LANGUAGE }
         };
 
+        // web_rid ↔ 19 位 room_id 的会话内映射：reflow/info（免签名）第二通道需要 19 位 room_id。
+        private readonly ConcurrentDictionary<string, string> _webRidRoomIds = new ConcurrentDictionary<string, string>();
+
         private async Task<Dictionary<string, string>> GetRequestHeaders()
         {
             var manualCookie = CoreConfig.GetDouyinCookie();
@@ -659,6 +662,8 @@ namespace AllLive.Core
 
         private async Task<JToken> GetRoomDataByRoomID(string roomId)
         {
+            // reflow/info 属于抖音直播间数据请求，同样服从风控暂停闸门。
+            await DouyinRequestGate.WaitAsync();
             var resp = await HttpUtil.GetString($"https://webcast.amemv.com/webcast/room/reflow/info/",
                 headers: await GetRequestHeaders(),
                 queryParameters: new Dictionary<string, string>
@@ -1195,9 +1200,10 @@ namespace AllLive.Core
             var roomData = await GetRoomDataByRoomID(id);
             var room = roomData?["data"]?["room"];
             var status = LiveStatusParser.ReadRequiredNumber(room?["status"]);
+            var webRid = TryGetRoomWebRid(room);
+            RememberWebRidRoomId(webRid, id);
             if (status == 4)
             {
-                var webRid = room?["owner"]?["web_rid"]?.ToString();
                 if (!string.IsNullOrWhiteSpace(webRid))
                 {
                     return await GetLiveStatusByWebRid(webRid);
@@ -1206,6 +1212,53 @@ namespace AllLive.Core
             return LiveStatusParser.IsLive(room?["status"], 2, 4);
 
         }
+        // web_rid ↔ 19 位 room_id 映射（会话内）：优先复用已解析到的映射，reflow 第二通道才能免签名直查。
+        private void RememberWebRidRoomId(string webRid, string roomId)
+        {
+            if (!string.IsNullOrWhiteSpace(webRid) && !string.IsNullOrWhiteSpace(roomId))
+            {
+                _webRidRoomIds[webRid] = roomId;
+            }
+        }
+
+        private string GetRememberedRoomId(string webRid)
+        {
+            string roomId;
+            if (!string.IsNullOrWhiteSpace(webRid) && _webRidRoomIds.TryGetValue(webRid, out roomId))
+            {
+                return roomId;
+            }
+            return null;
+        }
+
+        private static string GetRoomIdFromRoomToken(JToken room)
+        {
+            if (room == null || room.Type != JTokenType.Object)
+            {
+                return null;
+            }
+            var roomId = room["id_str"]?.ToString();
+            if (string.IsNullOrWhiteSpace(roomId))
+            {
+                roomId = room["id"]?.ToString();
+            }
+            return roomId;
+        }
+
+        private static string TryGetRoomWebRid(JToken room)
+        {
+            if (room == null || room.Type != JTokenType.Object)
+            {
+                return null;
+            }
+            var owner = room["owner"];
+            if (owner == null || owner.Type != JTokenType.Object)
+            {
+                return null;
+            }
+            return owner["web_rid"]?.ToString();
+        }
+
         private async Task<bool> GetLiveStatusByWebRid(string webRid)
         {
             try
@@ -1213,6 +1266,7 @@ namespace AllLive.Core
                 var data = await GetRoomDataApi(webRid);
                 var roomData = data?["data"]?[0];
                 var statusToken = roomData?["status"];
+                RememberWebRidRoomId(webRid, GetRoomIdFromRoomToken(roomData));
                 var live = LiveStatusParser.IsLive(statusToken, 2, 4);
                 CoreDebug.Log(() => $"[Douyin] GetLiveStatus webRid={webRid} status={statusToken} => {live}");
                 return live;
@@ -1227,8 +1281,36 @@ namespace AllLive.Core
                 CoreDebug.Log(() => $"[Douyin] GetLiveStatusByWebRidApi失败 webRid={webRid} err={ex.GetType().FullName}: {ex.Message}");
             }
 
+            // 第二通道：reflow/info（无签名，基于 19 位 room_id），仅复用本会话已解析到的映射。
+            var reflowRoomId = GetRememberedRoomId(webRid);
+            if (!string.IsNullOrEmpty(reflowRoomId))
+            {
+                try
+                {
+                    var reflowData = await GetRoomDataByRoomID(reflowRoomId);
+                    var reflowRoom = reflowData?["data"]?["room"];
+                    var reflowStatus = LiveStatusParser.ReadRequiredNumber(reflowRoom?["status"]);
+                    if (reflowStatus == 2)
+                    {
+                        CoreDebug.Log(() => $"[Douyin] GetLiveStatus reflow第二通道 webRid={webRid} roomId={reflowRoomId} status=2 => True");
+                        return true;
+                    }
+                    // 已结束(4)/其他值不能直接判未开播：主播可能已在新房间开播，继续走HTML兜底确认。
+                    CoreDebug.Log(() => $"[Douyin] GetLiveStatus reflow第二通道未确认开播 webRid={webRid} roomId={reflowRoomId} status={reflowStatus}，继续HTML兜底");
+                }
+                catch (Exception ex)
+                {
+                    CoreDebug.Log(() => $"[Douyin] GetLiveStatus reflow第二通道失败 webRid={webRid} roomId={reflowRoomId} err={ex.GetType().FullName}: {ex.Message}");
+                }
+            }
+            else
+            {
+                CoreDebug.Log(() => $"[Douyin] GetLiveStatus reflow第二通道跳过 webRid={webRid} reason=暂无room_id映射");
+            }
+
             var roomDataHtml = await GetRoomDataHtml(webRid);
             var room = roomDataHtml?["roomStore"]?["roomInfo"]?["room"];
+            RememberWebRidRoomId(webRid, GetRoomIdFromRoomToken(room));
             return LiveStatusParser.IsLive(room?["status"], 2, 4);
         }
         public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
