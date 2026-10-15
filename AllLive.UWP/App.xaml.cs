@@ -42,6 +42,9 @@ namespace AllLive.UWP
             LogHelper.SetEnabled(SettingHelper.GetValue<bool>(SettingHelper.LOG_ENABLED, false));
             AllLive.Core.Helper.CoreDebug.IsEnabled = () => LogHelper.Enabled;
             AllLive.Core.Helper.CoreDebug.Logger = message => LogHelper.Log(message, LogType.DEBUG);
+            DouyinPauseToast.Initialize();
+            AllLive.Core.DouyinRequestGate.BlockedPauseSecondsProvider = () => SettingHelper.GetDouyinHttp444PauseSeconds();
+            AllLive.Core.DouyinRequestGate.CaptchaPauseSecondsProvider = () => SettingHelper.GetDouyinCaptchaPauseSeconds();
             if (Utils.IsXbox && SettingHelper.GetValue<int>(SettingHelper.XBOX_MODE, 0) == 0)
             {
                 this.RequiresPointerMode = Windows.UI.Xaml.ApplicationRequiresPointerMode.WhenRequested;
@@ -182,6 +185,7 @@ namespace AllLive.UWP
             {
                 LogHelper.LogDebug(() => "[Startup] Main window activated; elapsedMs=" + launchTiming?.ElapsedMilliseconds);
                 LocalServiceManager.RegisterCurrentView();
+                DouyinPauseToast.RegisterCurrentView();
             }
         }
 

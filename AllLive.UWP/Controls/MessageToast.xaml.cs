@@ -26,6 +26,8 @@ namespace AllLive.UWP.Controls
 
         private string m_TextBlockContent = "";
         private TimeSpan m_ShowTime;
+        private bool m_Persistent;
+        private bool m_IsClosed;
         public MessageToast()
         {
             this.InitializeComponent();
@@ -73,13 +75,46 @@ namespace AllLive.UWP.Controls
         }
 
 
+        // 常驻模式：不自动关闭，调用方可 SetText 更新文字、Close 主动关闭（用于风控暂停倒计时）。
+        public MessageToast(string content, bool persistent) : this()
+        {
+            if (m_TextBlockContent == null)
+            {
+                m_TextBlockContent = "";
+            }
+            this.m_TextBlockContent = content;
+            this.m_ShowTime = TimeSpan.Zero;
+            this.m_Persistent = persistent;
+        }
+
         public void Show()
         {
             this.m_Popup.IsOpen = true;
 
         }
+
+        public bool IsClosed
+        {
+            get { return m_IsClosed; }
+        }
+
+        // 动态更新文字（仅 UI 线程调用）。
+        public void SetText(string text)
+        {
+            m_TextBlockContent = text ?? "";
+            if (!m_IsClosed)
+            {
+                this.tbNotify.Text = m_TextBlockContent;
+            }
+        }
+
         public async void Close()
         {
+            if (m_IsClosed)
+            {
+                return;
+            }
+            m_IsClosed = true;
             await AnimationBuilder.Create().Offset(to: new Vector2(0, (float)border.ActualHeight), duration: TimeSpan.FromMilliseconds(200)).StartAsync(this);
 
            // await this.Offset(offsetX: 0, offsetY: (float)border.ActualHeight, duration: 200, delay: 0, easingType: EasingType.Default).StartAsync();
@@ -95,9 +130,18 @@ namespace AllLive.UWP.Controls
             Window.Current.SizeChanged += Current_SizeChanged;
             await AnimationBuilder.Create().Offset(to: new Vector2(0, -72), duration: TimeSpan.FromMilliseconds(200)).StartAsync(this);
             //await this.Offset(offsetX: 0, offsetY: -72, duration: 200, delay: 0, easingType: EasingType.Default).StartAsync();
+            if (m_Persistent)
+            {
+                // 常驻模式：保持显示，等待调用方 SetText / Close。
+                return;
+            }
             await AnimationBuilder.Create().Offset(to: new Vector2(0, (float)border.ActualHeight), duration: TimeSpan.FromMilliseconds(200), delay: TimeSpan.FromMilliseconds(m_ShowTime.TotalMilliseconds)).StartAsync(this);
             //await this.Offset(offsetX: 0, offsetY: (float)border.ActualHeight, duration: 200, delay: m_ShowTime.TotalMilliseconds, easingType: EasingType.Default).StartAsync();
-            this.m_Popup.IsOpen = false;
+            if (!m_IsClosed)
+            {
+                m_IsClosed = true;
+                this.m_Popup.IsOpen = false;
+            }
         }
 
 

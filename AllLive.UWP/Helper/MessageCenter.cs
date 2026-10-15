@@ -158,6 +158,7 @@ namespace AllLive.UWP.Helper
                     var coreWindow = Window.Current.CoreWindow;
                     newViewId = view.Id;
                     LocalServiceManager.RegisterCurrentView();
+                    DouyinPauseToast.RegisterCurrentView();
                     frame = new Frame();
                     ThemeHelper.Apply(frame);
                     var loading = new StackPanel
