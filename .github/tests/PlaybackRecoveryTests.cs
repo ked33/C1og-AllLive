@@ -151,6 +151,7 @@ namespace AllLive.Tests
             Assert(LiveStatusParser.IsLive(new JValue(1), 1, 0, 2), "Bilibili live status.");
             Assert(!LiveStatusParser.IsLive(new JValue(2), 1, 0, 2), "Bilibili recorded stream is offline.");
             Assert(LiveStatusParser.IsLive(new JValue("2"), 2, 0, 1), "Huya numeric string status.");
+            Assert(!LiveStatusParser.IsLive(new JValue(3), 2, 0, 1, 3), "Huya replay status is offline.");
             Assert(!LiveStatusParser.IsLive(new JValue(4), 2, 4), "Douyin ended status.");
             Assert(LiveStatusParser.IsTwitchLive(new JObject()), "Twitch stream object is live.");
             Assert(!LiveStatusParser.IsTwitchLive(JValue.CreateNull()), "Explicit Twitch stream null is offline.");

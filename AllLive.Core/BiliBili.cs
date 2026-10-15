@@ -160,8 +160,23 @@ namespace AllLive.Core
             query = await GetWbiSign(query);
             var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader());
             var obj = JObject.Parse(result);
-            var roomInfo = obj["data"]["room_info"];
+            var data = obj["data"];
+            if (data == null || data.Type != JTokenType.Object)
+            {
+                // 例如 code=19002005「房间已加密」时 data 为 null：抛清晰异常，避免对 JValue 访问子节点崩溃。
+                CoreDebug.Log(() => $"[Bilibili] GetRoomDetail 响应异常 roomId={roomId} code={obj["code"]} message={obj["message"]} body={TrimForLog(result)}");
+                throw new InvalidOperationException($"直播间详情响应异常(code={obj["code"]} message={obj["message"]})");
+            }
+            var roomInfo = data["room_info"];
+            if (roomInfo == null || roomInfo.Type != JTokenType.Object)
+            {
+                CoreDebug.Log(() => $"[Bilibili] GetRoomDetail 缺少room_info roomId={roomId} code={obj["code"]} body={TrimForLog(result)}");
+                throw new InvalidOperationException($"直播间详情缺少room_info(code={obj["code"]})");
+            }
+            var anchorInfo = data["anchor_info"];
+            var baseInfo = anchorInfo?["base_info"];
             var isLive = roomInfo["live_status"].ToInt32() == 1;
+            CoreDebug.Log(() => $"[Bilibili] GetRoomDetail roomId={roomId} code={obj["code"]} live_status={roomInfo["live_status"]} title={roomInfo["title"]}");
             var actualRoomId = roomInfo["room_id"].ToInt32();
             long? viewerCount = null;
             long? popularity = null;
@@ -192,9 +207,9 @@ namespace AllLive.Core
                 AllowPopularityFallback = allowPopularityFallback,
                 RoomID = roomInfo["room_id"].ToString(),
                 Title = roomInfo["title"].ToString(),
-                UserName = obj["data"]["anchor_info"]["base_info"]["uname"].ToString(),
+                UserName = baseInfo?["uname"]?.ToString() ?? "",
                 Introduction = roomInfo["description"].ToString(),
-                UserAvatar = obj["data"]["anchor_info"]["base_info"]["face"].ToString() + "@100w.jpg",
+                UserAvatar = (baseInfo?["face"]?.ToString() ?? "") + "@100w.jpg",
                 Notice = "",
                 Status = isLive,
                 DanmakuData = new BiliDanmakuArgs()
@@ -1813,11 +1828,30 @@ namespace AllLive.Core
             return $"len={url?.Length ?? 0}";
         }
 
+        private static string TrimForLog(string body)
+        {
+            if (string.IsNullOrEmpty(body))
+            {
+                return "";
+            }
+            return body.Length <= 200 ? body : body.Substring(0, 200);
+        }
+
         public async Task<bool> GetLiveStatus(object roomId)
         {
             var resp = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/get_info?room_id={roomId}", headers: await GetRequestHeader());
             var obj = JObject.Parse(resp);
-            return LiveStatusParser.IsLive(obj["data"]?["live_status"], 1, 0, 2);
+            var data = obj["data"];
+            JToken liveStatusToken = null;
+            JToken titleToken = null;
+            if (data != null && data.Type == JTokenType.Object)
+            {
+                liveStatusToken = data["live_status"];
+                titleToken = data["title"];
+            }
+            var live = LiveStatusParser.IsLive(liveStatusToken, 1, 0, 2);
+            CoreDebug.Log(() => $"[Bilibili] GetLiveStatus roomId={roomId} code={obj["code"]} live_status={liveStatusToken} title={titleToken} => {live}");
+            return live;
         }
 
         public async Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)

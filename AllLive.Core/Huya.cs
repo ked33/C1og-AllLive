@@ -214,6 +214,7 @@ namespace AllLive.Core
                 realRoomId = jsonObj["roomInfo"]["tProfileInfo"]["lProfileRoom"].ToInt32();
             }
             var isLive = jsonObj["roomInfo"]["eLiveStatus"].ToInt32() == 2;
+            CoreDebug.Log(() => $"[Huya] GetRoomDetail roomId={roomId} eLiveStatus={jsonObj["roomInfo"]["eLiveStatus"]} isLive={isLive}");
             var popularity = jsonObj["roomInfo"]["tLiveInfo"]["lTotalCount"].ParseCountTextToLong() ?? 0;
             var presenterUid = TryGetPresenterUid(jsonObj["roomInfo"]);
 
@@ -767,7 +768,11 @@ namespace AllLive.Core
         public async Task<bool> GetLiveStatus(object roomId)
         {
             var roomInfo = await GetRoomInfo(roomId.ToString());
-            return LiveStatusParser.IsLive(roomInfo?["roomInfo"]?["eLiveStatus"], 2, 0, 1);
+            var statusToken = roomInfo?["roomInfo"]?["eLiveStatus"];
+            // eLiveStatus：2=直播中；0/1=未开播；3=回放/轮播（与斗鱼 videoLoop 一致，按未开播处理）。
+            var live = LiveStatusParser.IsLive(statusToken, 2, 0, 1, 3);
+            CoreDebug.Log(() => $"[Huya] GetLiveStatus roomId={roomId} eLiveStatus={statusToken} => {live}");
+            return live;
         }
         public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
         {
