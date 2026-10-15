@@ -398,6 +398,11 @@ namespace AllLive.Core
                 var result = await GetRoomDetailByWebRidApi(webRid);
                 return result;
             }
+            catch (DouyinRoomDataBlockedException)
+            {
+                // 命中风控（444/验证码）时不再回退HTML：暂停期结束后由重试循环再次尝试，避免暂停期重复请求加重风控。
+                throw;
+            }
             catch (Exception ex)
             {
                 CoreDebug.Log(() => $"[Douyin] GetRoomDetailByWebRidApi失败 webRid={webRid} err={ex.GetType().FullName}: {ex.Message}");
@@ -550,6 +555,7 @@ namespace AllLive.Core
 
         private async Task<JToken> GetRoomDataHtml(string webRid)
         {
+            await DouyinRequestGate.WaitAsync();
             var dyCookie = await GetWebCookie(webRid);
             CoreDebug.Log(() => $"[Douyin] GetRoomDataHtml webRid={webRid} cookieLen={dyCookie?.Length ?? 0}");
             using (var response = await HttpUtil.Get($"https://live.douyin.com/{webRid}",
@@ -571,11 +577,13 @@ namespace AllLive.Core
                 if (!response.IsSuccessStatusCode && statusCode == 444)
                 {
                     CoreDebug.Log(() => "[Douyin] GetRoomDataHtml触发风控(444)");
+                    DouyinRequestGate.ReportBlocked(DouyinBlockKind.Http444, "GetRoomDataHtml");
                     throw new DouyinRoomDataBlockedException("直播间HTML请求返回444");
                 }
                 if (IsDouyinCaptchaPage(resp))
                 {
                     CoreDebug.Log(() => "[Douyin] GetRoomDataHtml触发验证码中间页");
+                    DouyinRequestGate.ReportBlocked(DouyinBlockKind.Captcha, "GetRoomDataHtml");
                     throw new DouyinRoomDataBlockedException("直播间HTML返回验证码中间页");
                 }
 
@@ -600,6 +608,7 @@ namespace AllLive.Core
 
         private async Task<JToken> GetRoomDataApi(string webRid)
         {
+            await DouyinRequestGate.WaitAsync();
             var reqParams = new Dictionary<string, string> {
                     {"aid","6383" },
                     {"app_name","douyin_web" },
@@ -636,6 +645,7 @@ namespace AllLive.Core
                     CoreDebug.Log(() => $"[Douyin] GetRoomDataApi status={statusCode} respLen={resp?.Length ?? 0} head={TrimForLog(resp)}");
                     if (statusCode == 444)
                     {
+                        DouyinRequestGate.ReportBlocked(DouyinBlockKind.Http444, "GetRoomDataApi");
                         throw new DouyinRoomDataBlockedException("直播间详情API返回444");
                     }
                     response.EnsureSuccessStatusCode();
@@ -1203,6 +1213,11 @@ namespace AllLive.Core
                 var data = await GetRoomDataApi(webRid);
                 var roomData = data?["data"]?[0];
                 return LiveStatusParser.IsLive(roomData?["status"], 2, 4);
+            }
+            catch (DouyinRoomDataBlockedException)
+            {
+                // 命中风控时不回退HTML（暂停期请求会再次被拦），本轮直接失败，下一轮刷新重试。
+                throw;
             }
             catch (Exception ex)
             {
