@@ -457,6 +457,7 @@ namespace AllLive.UWP.ViewModels
                 {
                     item.LiveTitle = string.Empty;
                 }
+                LogHelper.LogDebug(() => $"[Favorite] {item.SiteName}-{item.RoomID} 应用开播状态 live={liveStatus} title={item.LiveTitle}");
                 ProgressiveApplyItem(item);
             });
         }

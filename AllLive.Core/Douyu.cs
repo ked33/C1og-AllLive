@@ -118,6 +118,7 @@ namespace AllLive.Core
                 { "user-agent","Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1 Edg/114.0.0.0" },
             });
             var crptext = JObject.Parse(jsEncResult)["data"][$"room{roomId}"].ToString();
+            CoreDebug.Log(() => $"[Douyu] GetRoomDetail roomId={roomId} show_status={roomInfo["show_status"]} videoLoop={roomInfo["videoLoop"]} room_name={roomInfo["room_name"]}");
            
 
             return new LiveRoomDetail()
@@ -524,10 +525,12 @@ namespace AllLive.Core
         public async Task<bool> GetLiveStatus(object roomId)
         {
             var roomInfo = await GetRoomInfo(roomId.ToString());
-            var live = LiveStatusParser.IsLive(roomInfo?["show_status"], 1, 0, 2);
-            if (!live) return false;
+            var showStatus = roomInfo?["show_status"];
             var loop = roomInfo?["videoLoop"];
-            return loop == null || loop.Type == JTokenType.Null || LiveStatusParser.ReadRequiredNumber(loop) != 1;
+            var live = LiveStatusParser.IsLive(showStatus, 1, 0, 2)
+                && (loop == null || loop.Type == JTokenType.Null || LiveStatusParser.ReadRequiredNumber(loop) != 1);
+            CoreDebug.Log(() => $"[Douyu] GetLiveStatus roomId={roomId} show_status={showStatus} videoLoop={loop} => {live}");
+            return live;
         }
         public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
         {

@@ -1212,7 +1212,10 @@ namespace AllLive.Core
             {
                 var data = await GetRoomDataApi(webRid);
                 var roomData = data?["data"]?[0];
-                return LiveStatusParser.IsLive(roomData?["status"], 2, 4);
+                var statusToken = roomData?["status"];
+                var live = LiveStatusParser.IsLive(statusToken, 2, 4);
+                CoreDebug.Log(() => $"[Douyin] GetLiveStatus webRid={webRid} status={statusToken} => {live}");
+                return live;
             }
             catch (DouyinRoomDataBlockedException)
             {
