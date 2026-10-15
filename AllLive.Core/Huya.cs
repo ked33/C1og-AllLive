@@ -767,12 +767,64 @@ namespace AllLive.Core
 
         public async Task<bool> GetLiveStatus(object roomId)
         {
+            // 优先走 mp.huya.com 轻量 JSON 接口（data.liveStatus 文本状态，避免整页 HTML 正则解析）；
+            // 接口不可用或状态未知时回退到 m.huya.com 页面解析。
+            var cacheLive = await TryGetLiveStatusFromCacheAsync(roomId);
+            if (cacheLive.HasValue)
+            {
+                return cacheLive.Value;
+            }
+
             var roomInfo = await GetRoomInfo(roomId.ToString());
             var statusToken = roomInfo?["roomInfo"]?["eLiveStatus"];
             // eLiveStatus：2=直播中；0/1=未开播；3=回放/轮播（与斗鱼 videoLoop 一致，按未开播处理）。
             var live = LiveStatusParser.IsLive(statusToken, 2, 0, 1, 3);
-            CoreDebug.Log(() => $"[Huya] GetLiveStatus roomId={roomId} eLiveStatus={statusToken} => {live}");
+            CoreDebug.Log(() => $"[Huya] GetLiveStatus roomId={roomId} source=html eLiveStatus={statusToken} => {live}");
             return live;
+        }
+
+        // 虎牙 mp.huya.com 轻量状态接口：liveStatus 文本（ON=直播中，REPLAY=回放/轮播，OFF 等=未开播）。
+        // 返回 null 表示接口不可用或状态未知，由调用方回退 HTML 页面解析；请求异常一律吞掉并回退。
+        private async Task<bool?> TryGetLiveStatusFromCacheAsync(object roomId)
+        {
+            try
+            {
+                var headers = new Dictionary<string, string>
+                {
+                    { "user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0" },
+                    { "origin", "https://www.huya.com" },
+                    { "referer", "https://www.huya.com/" },
+                    { "accept", "application/json, text/plain, */*" },
+                };
+                var result = await HttpUtil.GetString($"https://mp.huya.com/cache.php?m=Live&do=profileRoom&roomid={roomId}&showSecret=1", headers);
+                var obj = JObject.Parse(result);
+                var statusCode = obj["status"]?.ToInt32();
+                if (statusCode != 200)
+                {
+                    CoreDebug.Log(() => $"[Huya] GetLiveStatus(cache)接口返回异常 roomId={roomId} status={obj["status"]}，回退HTML");
+                    return null;
+                }
+                var data = obj["data"];
+                if (data == null || data.Type != JTokenType.Object)
+                {
+                    CoreDebug.Log(() => $"[Huya] GetLiveStatus(cache)缺少data roomId={roomId}，回退HTML");
+                    return null;
+                }
+                var liveStatus = data["liveStatus"]?.ToString();
+                var live = LiveStatusParser.TryParseHuyaCacheLiveStatus(liveStatus);
+                if (!live.HasValue)
+                {
+                    CoreDebug.Log(() => $"[Huya] GetLiveStatus(cache)状态未知 roomId={roomId} liveStatus={LiveStatusParser.DescribeToken(data["liveStatus"])}，回退HTML");
+                    return null;
+                }
+                CoreDebug.Log(() => $"[Huya] GetLiveStatus roomId={roomId} source=cache liveStatus={liveStatus} => {live.Value}");
+                return live;
+            }
+            catch (Exception ex)
+            {
+                CoreDebug.Log(() => $"[Huya] GetLiveStatus(cache)请求失败 roomId={roomId} err={ex.GetType().Name}: {ex.Message}，回退HTML");
+                return null;
+            }
         }
         public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
         {

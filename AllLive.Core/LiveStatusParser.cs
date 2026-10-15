@@ -25,6 +25,34 @@ namespace AllLive.Core
             throw new InvalidOperationException("Live status is unknown: " + status);
         }
 
+        // 虎牙 mp.huya.com 轻量接口的文本状态（liveStatus）：ON=直播中；
+        // REPLAY=回放/轮播、OFF/OFFLINE/CLOSED=未开播；其余/缺失=未知（null，由调用方回退或保留原状态）。
+        internal static bool? TryParseHuyaCacheLiveStatus(string liveStatus)
+        {
+            if (string.IsNullOrWhiteSpace(liveStatus))
+            {
+                return null;
+            }
+            switch (liveStatus.Trim().ToUpperInvariant())
+            {
+                case "ON":
+                    return true;
+                case "REPLAY":
+                case "OFF":
+                case "OFFLINE":
+                case "CLOSED":
+                    return false;
+                default:
+                    return null;
+            }
+        }
+
+        // 斗鱼官方赛事回放房以「【回放】」前缀命名，show_status 也可能为 1，需要按未开播处理。
+        internal static bool IsReplayRoomName(string roomName)
+        {
+            return !string.IsNullOrEmpty(roomName) && roomName.TrimStart().StartsWith("【回放】", StringComparison.Ordinal);
+        }
+
         internal static string DescribeToken(JToken token)
         {
             if (token == null)

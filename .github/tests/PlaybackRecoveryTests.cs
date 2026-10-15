@@ -155,6 +155,15 @@ namespace AllLive.Tests
             Assert(!LiveStatusParser.IsLive(new JValue(4), 2, 4), "Douyin ended status.");
             Assert(LiveStatusParser.IsTwitchLive(new JObject()), "Twitch stream object is live.");
             Assert(!LiveStatusParser.IsTwitchLive(JValue.CreateNull()), "Explicit Twitch stream null is offline.");
+            Assert(LiveStatusParser.TryParseHuyaCacheLiveStatus("ON") == true, "Huya cache ON is live.");
+            Assert(LiveStatusParser.TryParseHuyaCacheLiveStatus("on") == true, "Huya cache status is case-insensitive.");
+            Assert(LiveStatusParser.TryParseHuyaCacheLiveStatus("REPLAY") == false, "Huya cache REPLAY is offline.");
+            Assert(LiveStatusParser.TryParseHuyaCacheLiveStatus("OFF") == false, "Huya cache OFF is offline.");
+            Assert(LiveStatusParser.TryParseHuyaCacheLiveStatus("weird-state") == null, "Huya cache unknown status stays unknown.");
+            Assert(LiveStatusParser.TryParseHuyaCacheLiveStatus(null) == null, "Huya cache missing status stays unknown.");
+            Assert(LiveStatusParser.IsReplayRoomName("【回放】2024 春季赛"), "Douyu replay room name is detected.");
+            Assert(!LiveStatusParser.IsReplayRoomName("正常直播间"), "Douyu normal room name is not a replay room.");
+            Assert(!LiveStatusParser.IsReplayRoomName(null), "Douyu null room name is not a replay room.");
             ExpectUnknown(() => LiveStatusParser.IsLive(null, 2, 4));
             ExpectUnknown(() => LiveStatusParser.IsLive(JValue.CreateNull(), 2, 4));
             ExpectUnknown(() => LiveStatusParser.IsLive(new JValue(true), 1, 0));
