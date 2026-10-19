@@ -11,6 +11,7 @@ namespace AllLive.Core.Helper
         private static List<string> _douyinSignServiceUrls = new List<string>();
         private static string _douyinCookie = "";
         private static string _douyuDeviceId = "";
+        private static bool _bilibiliFilterHiddenRooms = true;
 
         public static IReadOnlyList<string> GetDouyuSignServiceUrls()
         {
@@ -111,6 +112,25 @@ namespace AllLive.Core.Helper
             lock (_lock)
             {
                 _douyuDeviceId = deviceId;
+            }
+        }
+
+        /// <summary>
+        /// 哔哩哔哩隐藏/加密房间过滤（默认开启）：开启后这类房间视为未开播，避免误报开播。
+        /// </summary>
+        public static bool GetBilibiliFilterHiddenRooms()
+        {
+            lock (_lock)
+            {
+                return _bilibiliFilterHiddenRooms;
+            }
+        }
+
+        public static void SetBilibiliFilterHiddenRooms(bool value)
+        {
+            lock (_lock)
+            {
+                _bilibiliFilterHiddenRooms = value;
             }
         }
     }

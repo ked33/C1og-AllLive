@@ -103,6 +103,10 @@ namespace AllLive.UWP.Helper
         /// 关注列表隐藏未开播
         /// </summary>
         public const string FAVORITE_HIDE_OFFLINE = "FavoriteHideOffline";
+        /// <summary>
+        /// 哔哩哔哩关注列表过滤隐藏/加密房间（默认开启）
+        /// </summary>
+        public const string BILI_FILTER_HIDDEN_ROOMS = "BiliFilterHiddenRooms";
 
         /// <summary>
         /// 全站关注并发（关注列表检测开播状态的最大并发数，默认 6，范围 1-16）

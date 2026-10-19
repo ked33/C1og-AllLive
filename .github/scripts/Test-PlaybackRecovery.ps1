@@ -7,10 +7,12 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $sources = @(
     (Join-Path $repoRoot 'AllLive.UWP\Helper\PlaybackOperationGate.cs'),
     (Join-Path $repoRoot 'AllLive.Core\LiveStatusParser.cs'),
+    (Join-Path $repoRoot 'AllLive.Core\BilibiliRoomFilter.cs'),
     (Join-Path $repoRoot 'AllLive.Core\DouyinRequestGate.cs'),
     (Join-Path $repoRoot 'AllLive.Core\Helper\CoreDebug.cs'),
     (Join-Path $repoRoot '.github\tests\PlaybackRecoveryTests.cs'),
-    (Join-Path $repoRoot '.github\tests\DouyinRequestGateTests.cs')
+    (Join-Path $repoRoot '.github\tests\DouyinRequestGateTests.cs'),
+    (Join-Path $repoRoot '.github\tests\BilibiliRoomFilterTests.cs')
 )
 $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' -File | ForEach-Object FullName)
 $references += Join-Path $PSHOME 'Newtonsoft.Json.dll'
@@ -18,6 +20,7 @@ $references += Join-Path $PSHOME 'Newtonsoft.Json.dll'
 Add-Type -Path $sources -ReferencedAssemblies $references -CompilerOptions '/nowarn:1701'
 [AllLive.Tests.PlaybackRecoveryTests]::RunAsync().GetAwaiter().GetResult()
 [AllLive.Tests.DouyinRequestGateTests]::RunAsync().GetAwaiter().GetResult()
+[AllLive.Tests.BilibiliRoomFilterTests]::RunAsync().GetAwaiter().GetResult()
 
 # Syntax and project inclusion checks do not replace the UWP/WinRT cloud build.
 [xml]$project = Get-Content -LiteralPath (Join-Path $repoRoot 'AllLive.UWP\AllLive.UWP.csproj') -Raw

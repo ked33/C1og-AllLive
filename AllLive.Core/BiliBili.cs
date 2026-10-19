@@ -1850,8 +1850,37 @@ namespace AllLive.Core
                 titleToken = data["title"];
             }
             var live = LiveStatusParser.IsLive(liveStatusToken, 1, 0, 2);
+            if (live && CoreConfig.GetBilibiliFilterHiddenRooms())
+            {
+                // 隐藏/加密房间在 get_info 中仍可能返回 live_status=1，开启过滤时用 room_init 复核。
+                var shouldFilter = await GetRoomInitFilterAsync(roomId);
+                if (shouldFilter == true)
+                {
+                    live = false;
+                }
+            }
             CoreDebug.Log(() => $"[Bilibili] GetLiveStatus roomId={roomId} code={obj["code"]} live_status={liveStatusToken} title={titleToken} => {live}");
             return live;
+        }
+
+        // 返回 room_init 的过滤结论：true 过滤，false 不过滤，null 判定失败（保持 get_info 结果）。
+        // 请求或解析失败时不抛异常，避免影响关注列表刷新。
+        private async Task<bool?> GetRoomInitFilterAsync(object roomId)
+        {
+            try
+            {
+                var resp = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/room_init?id={roomId}", headers: await GetRequestHeader());
+                var obj = JObject.Parse(resp);
+                var data = obj["data"];
+                var shouldFilter = BilibiliRoomFilter.ShouldFilter(data);
+                CoreDebug.Log(() => $"[Bilibili] room_init roomId={roomId} code={obj["code"]} is_hidden={data?["is_hidden"]} is_locked={data?["is_locked"]} encrypted={data?["encrypted"]} pwd_verified={data?["pwd_verified"]} shouldFilter={shouldFilter}");
+                return shouldFilter;
+            }
+            catch (Exception ex)
+            {
+                CoreDebug.Log(() => $"[Bilibili] room_init 请求失败 roomId={roomId} err={ex.GetType().Name}: {ex.Message}，保持 get_info 结果");
+                return null;
+            }
         }
 
         public async Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)

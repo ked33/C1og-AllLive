@@ -143,6 +143,24 @@
                             SpinButtonPlacementMode="Compact" />
                     </Grid>
                     <Grid
+                        x:Name="SettingsBiliFilterHiddenRooms"
+                        Margin="0,8,0,0"
+                        Padding="8,12"
+                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,88,0">
+                            <TextBlock>过滤隐藏/加密房间</TextBlock>
+                            <TextBlock FontSize="12" Foreground="Gray" TextWrapping="Wrap">哔哩哔哩隐藏或加密的直播间在关注列表中视为未开播（默认开启）</TextBlock>
+                        </StackPanel>
+                        <ToggleSwitch
+                            x:Name="swBiliFilterHiddenRooms"
+                            MinWidth="72"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid
                         x:Name="SettingsFavoriteLiveStatusParallelism"
                         Margin="0,8,0,0"
                         Padding="8,12"

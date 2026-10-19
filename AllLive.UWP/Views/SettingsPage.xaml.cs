@@ -205,6 +205,14 @@ namespace AllLive.UWP.Views
                 });
             });
 
+            //哔哩哔哩隐藏/加密房间过滤
+            swBiliFilterHiddenRooms.IsOn = SettingHelper.GetValue<bool>(SettingHelper.BILI_FILTER_HIDDEN_ROOMS, true);
+            swBiliFilterHiddenRooms.Toggled += new RoutedEventHandler((obj, args) =>
+            {
+                SettingHelper.SetValue(SettingHelper.BILI_FILTER_HIDDEN_ROOMS, swBiliFilterHiddenRooms.IsOn);
+                CoreConfig.SetBilibiliFilterHiddenRooms(swBiliFilterHiddenRooms.IsOn);
+            });
+
             //全站关注并发
             numFavoriteLiveStatusParallelism.Value = SettingHelper.GetFavoriteLiveStatusParallelism();
             numFavoriteLiveStatusParallelism.Loaded += new RoutedEventHandler((sender, e) =>
@@ -408,6 +416,7 @@ namespace AllLive.UWP.Views
             public int? DouyinHttp444PauseSeconds { get; set; }
             public int? DouyinCaptchaPauseSeconds { get; set; }
             public bool? FavoriteHideOffline { get; set; }
+            public bool? BiliFilterHiddenRooms { get; set; }
             public bool? ImageDimEnabled { get; set; }
             public bool? NewWindowLiveRoom { get; set; }
             public int? VideoDecoder { get; set; }
@@ -595,6 +604,7 @@ namespace AllLive.UWP.Views
                 DouyinHttp444PauseSeconds = SettingHelper.GetDouyinHttp444PauseSeconds(),
                 DouyinCaptchaPauseSeconds = SettingHelper.GetDouyinCaptchaPauseSeconds(),
                 FavoriteHideOffline = SettingHelper.GetValue<bool>(SettingHelper.FAVORITE_HIDE_OFFLINE, false),
+                BiliFilterHiddenRooms = SettingHelper.GetValue<bool>(SettingHelper.BILI_FILTER_HIDDEN_ROOMS, true),
                 ImageDimEnabled = SettingHelper.GetValue<bool>(SettingHelper.IMAGE_DIM_ENABLED, true),
                 NewWindowLiveRoom = SettingHelper.GetValue<bool>(SettingHelper.NEW_WINDOW_LIVEROOM, true),
                 VideoDecoder = SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1),
@@ -664,6 +674,7 @@ namespace AllLive.UWP.Views
             var douyinHttp444PauseSeconds = ClampInt(data.DouyinHttp444PauseSeconds ?? SettingHelper.GetDouyinHttp444PauseSeconds(), 5, 300);
             var douyinCaptchaPauseSeconds = ClampInt(data.DouyinCaptchaPauseSeconds ?? SettingHelper.GetDouyinCaptchaPauseSeconds(), 5, 300);
             var favoriteHideOffline = data.FavoriteHideOffline ?? SettingHelper.GetValue<bool>(SettingHelper.FAVORITE_HIDE_OFFLINE, false);
+            var biliFilterHiddenRooms = data.BiliFilterHiddenRooms ?? SettingHelper.GetValue<bool>(SettingHelper.BILI_FILTER_HIDDEN_ROOMS, true);
             var imageDimEnabled = data.ImageDimEnabled ?? SettingHelper.GetValue<bool>(SettingHelper.IMAGE_DIM_ENABLED, true);
             var newWindowLiveRoom = data.NewWindowLiveRoom ?? SettingHelper.GetValue<bool>(SettingHelper.NEW_WINDOW_LIVEROOM, true);
             var videoDecoder = ClampInt(data.VideoDecoder ?? SettingHelper.GetValue<int>(SettingHelper.VIDEO_DECODER, 1), 0, 3);
@@ -699,6 +710,8 @@ namespace AllLive.UWP.Views
             SettingHelper.SetValue(SettingHelper.DOUYIN_HTTP444_PAUSE_SECONDS, douyinHttp444PauseSeconds);
             SettingHelper.SetValue(SettingHelper.DOUYIN_CAPTCHA_PAUSE_SECONDS, douyinCaptchaPauseSeconds);
             SettingHelper.SetValue(SettingHelper.FAVORITE_HIDE_OFFLINE, favoriteHideOffline);
+            SettingHelper.SetValue(SettingHelper.BILI_FILTER_HIDDEN_ROOMS, biliFilterHiddenRooms);
+            CoreConfig.SetBilibiliFilterHiddenRooms(biliFilterHiddenRooms);
             SettingHelper.SetValue(SettingHelper.IMAGE_DIM_ENABLED, imageDimEnabled);
             SettingHelper.SetValue(SettingHelper.NEW_WINDOW_LIVEROOM, newWindowLiveRoom);
             SettingHelper.SetValue(SettingHelper.VIDEO_DECODER, videoDecoder);
@@ -752,6 +765,7 @@ namespace AllLive.UWP.Views
             cbXboxMode.SelectedIndex = xboxMode;
             cbPaneDisplayMode.SelectedIndex = paneDisplayMode;
             swMouseClosePage.IsOn = mouseBack;
+            swBiliFilterHiddenRooms.IsOn = biliFilterHiddenRooms;
             numFavoriteRefreshInterval.Value = favoriteRefreshMinutes;
             numFavoriteLiveStatusParallelism.Value = favoriteLiveStatusParallelism;
             numFavoriteDouyinLiveStatusParallelism.Value = favoriteDouyinLiveStatusParallelism;

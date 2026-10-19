@@ -40,6 +40,7 @@ namespace AllLive.UWP
             ApplyDouyuSignServiceSetting();
             ApplyDouyuDeviceIdSetting();
             ApplyDouyinSignServiceSetting();
+            ApplyBilibiliFilterSetting();
             LogHelper.SetEnabled(SettingHelper.GetValue<bool>(SettingHelper.LOG_ENABLED, false));
             AllLive.Core.Helper.CoreDebug.IsEnabled = () => LogHelper.Enabled;
             AllLive.Core.Helper.CoreDebug.Logger = message => LogHelper.Log(message, LogType.DEBUG);
@@ -86,6 +87,11 @@ namespace AllLive.UWP
             {
                 CoreConfig.SetDouyinSignServiceUrl(SettingHelper.DOUYIN_SIGN_URL_PUBLIC);
             }
+        }
+
+        private static void ApplyBilibiliFilterSetting()
+        {
+            CoreConfig.SetBilibiliFilterHiddenRooms(SettingHelper.GetValue<bool>(SettingHelper.BILI_FILTER_HIDDEN_ROOMS, true));
         }
 
         private static async Task ApplyDouyinCookieSettingAsync()
