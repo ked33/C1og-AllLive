@@ -17,7 +17,7 @@ namespace AllLive.Core.Danmaku
     public sealed class TwitchDanmakuArgs
     {
         public string Channel { get; set; }
-        public Func<Task<long?>> ViewerCountProvider { get; set; }
+        public Func<CancellationToken, Task<long?>> ViewerCountProvider { get; set; }
     }
 
     /// <summary>
@@ -36,7 +36,7 @@ namespace AllLive.Core.Danmaku
         private System.Timers.Timer viewerCountTimer;
         private volatile bool isStopped = true;
         private int closeRaised;
-        private int viewerCountRefreshInProgress;
+        private CancellationTokenSource viewerCountRefreshOwner;
 
         public int HeartbeatTime => 60 * 1000;
 
@@ -65,7 +65,7 @@ namespace AllLive.Core.Danmaku
             this.args.Channel = this.args.Channel.Trim().ToLowerInvariant();
             isStopped = false;
             Interlocked.Exchange(ref closeRaised, 0);
-            Interlocked.Exchange(ref viewerCountRefreshInProgress, 0);
+            Interlocked.Exchange(ref viewerCountRefreshOwner, null);
 
             var cts = new CancellationTokenSource();
             var socket = new ClientWebSocket();
@@ -115,7 +115,7 @@ namespace AllLive.Core.Danmaku
         {
             isStopped = true;
             Interlocked.Exchange(ref closeRaised, 1);
-            Interlocked.Exchange(ref viewerCountRefreshInProgress, 0);
+            Interlocked.Exchange(ref viewerCountRefreshOwner, null);
             StopViewerCountTimer();
             args = null;
 
@@ -319,16 +319,18 @@ namespace AllLive.Core.Danmaku
         private async void ViewerCountTimer_Elapsed(object sender, ElapsedEventArgs e)
         {
             var provider = args?.ViewerCountProvider;
-            if (isStopped || provider == null
-                || Interlocked.CompareExchange(ref viewerCountRefreshInProgress, 1, 0) != 0)
+            var owner = connectionCts;
+            if (isStopped || provider == null || owner == null || !ReferenceEquals(sender, viewerCountTimer)
+                || Interlocked.CompareExchange(ref viewerCountRefreshOwner, owner, null) != null)
             {
                 return;
             }
 
             try
             {
-                var viewerCount = await provider();
-                if (!isStopped && viewerCount.HasValue)
+                var token = owner.Token;
+                var viewerCount = await provider(token);
+                if (!isStopped && !token.IsCancellationRequested && ReferenceEquals(connectionCts, owner) && viewerCount.HasValue)
                 {
                     NewMessage?.Invoke(this, new LiveMessage()
                     {
@@ -344,7 +346,8 @@ namespace AllLive.Core.Danmaku
             }
             finally
             {
-                Interlocked.Exchange(ref viewerCountRefreshInProgress, 0);
+                // A late completion from a stopped connection must not unlock a newer refresh.
+                Interlocked.CompareExchange(ref viewerCountRefreshOwner, null, owner);
             }
         }
 

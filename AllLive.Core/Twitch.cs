@@ -11,6 +11,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AllLive.Core
@@ -36,11 +37,19 @@ namespace AllLive.Core
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
         private static readonly string DeviceId = Guid.NewGuid().ToString("N");
-        private static readonly HttpClient HttpClient = CreateHttpClient();
+        private static readonly HttpClient SharedHttpClient = CreateHttpClient();
+        private readonly HttpClient HttpClient;
         private static readonly TimeSpan PlaybackCacheLifetime = TimeSpan.FromSeconds(90);
 
         private readonly object playbackCacheLock = new object();
         private TwitchPlaybackSnapshot playbackCache;
+
+        public Twitch() : this(SharedHttpClient) { }
+
+        internal Twitch(HttpClient client)
+        {
+            HttpClient = client ?? throw new ArgumentNullException(nameof(client));
+        }
 
         public string Name => "Twitch直播";
 
@@ -49,12 +58,12 @@ namespace AllLive.Core
             return new TwitchDanmaku();
         }
 
-        public Task<List<LiveCategory>> GetCategores()
+        public Task<List<LiveCategory>> GetCategores(CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult(new List<LiveCategory>());
         }
 
-        public Task<LiveCategoryResult> GetCategoryRooms(LiveSubCategory category, int page = 1)
+        public Task<LiveCategoryResult> GetCategoryRooms(LiveSubCategory category, int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult(new LiveCategoryResult()
             {
@@ -63,7 +72,7 @@ namespace AllLive.Core
             });
         }
 
-        public Task<LiveCategoryResult> GetRecommendRooms(int page = 1)
+        public Task<LiveCategoryResult> GetRecommendRooms(int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult(new LiveCategoryResult()
             {
@@ -72,7 +81,7 @@ namespace AllLive.Core
             });
         }
 
-        public Task<LiveSearchResult> Search(string keyword, int page = 1)
+        public Task<LiveSearchResult> Search(string keyword, int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             // 主界面会先把 Twitch URL 交给 SiteParser。这里暂不实现 Twitch
             // 的站内搜索，避免把普通关键词误发给 GQL 接口。
@@ -83,10 +92,10 @@ namespace AllLive.Core
             });
         }
 
-        public async Task<LiveRoomDetail> GetRoomDetail(object roomId)
+        public async Task<LiveRoomDetail> GetRoomDetail(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             var channel = NormalizeChannel(roomId);
-            var user = await GetChannelUserAsync(channel);
+            var user = await GetChannelUserAsync(channel, cancellationToken: cancellationToken);
             if (user == null)
             {
                 return new LiveRoomDetail()
@@ -143,13 +152,13 @@ namespace AllLive.Core
                 DanmakuData = isLive ? new TwitchDanmakuArgs()
                 {
                     Channel = channel,
-                    ViewerCountProvider = () => GetViewerCountAsync(channel),
+                    ViewerCountProvider = token => GetViewerCountAsync(channel, cancellationToken: token),
                 } : null,
                 Url = BuildChannelUrl(channel),
             };
         }
 
-        public async Task<LiveAudienceMetrics> GetDeferredAudienceMetrics(LiveRoomDetail roomDetail)
+        public async Task<LiveAudienceMetrics> GetDeferredAudienceMetrics(LiveRoomDetail roomDetail, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (roomDetail == null)
             {
@@ -158,7 +167,7 @@ namespace AllLive.Core
             var channel = NormalizeChannel(roomDetail.RoomID);
             return new LiveAudienceMetrics()
             {
-                ViewerCount = await GetViewerCountAsync(channel),
+                ViewerCount = await GetViewerCountAsync(channel, cancellationToken: cancellationToken),
                 ViewerCountSource = "Twitch GQL stream.viewersCount",
                 VipCount = null,
                 VipCountSource = null,
@@ -166,7 +175,7 @@ namespace AllLive.Core
             };
         }
 
-        public async Task<List<LivePlayQuality>> GetPlayQuality(LiveRoomDetail roomDetail)
+        public async Task<List<LivePlayQuality>> GetPlayQuality(LiveRoomDetail roomDetail, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (roomDetail == null || !roomDetail.Status)
             {
@@ -174,7 +183,7 @@ namespace AllLive.Core
             }
 
             var channel = NormalizeChannel(roomDetail.RoomID);
-            var snapshot = await GetPlaybackSnapshotAsync(channel);
+            var snapshot = await GetPlaybackSnapshotAsync(channel, cancellationToken: cancellationToken);
             return snapshot.Variants
                 .Select((variant, index) => new LivePlayQuality()
                 {
@@ -185,7 +194,7 @@ namespace AllLive.Core
                 .ToList();
         }
 
-        public async Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn)
+        public async Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (roomDetail == null || qn == null)
             {
@@ -203,7 +212,7 @@ namespace AllLive.Core
                 return new List<string>() { variant.Url };
             }
 
-            var snapshot = await GetPlaybackSnapshotAsync(channel);
+            var snapshot = await GetPlaybackSnapshotAsync(channel, cancellationToken: cancellationToken);
             var selected = variant == null
                 ? snapshot.Variants.FirstOrDefault(x => string.Equals(x.Quality, qn.Quality, StringComparison.OrdinalIgnoreCase))
                 : snapshot.Variants.FirstOrDefault(x => string.Equals(x.VariantId, variant.VariantId, StringComparison.OrdinalIgnoreCase));
@@ -212,15 +221,15 @@ namespace AllLive.Core
                 : new List<string>() { selected.Url };
         }
 
-        public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
+        public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult(new List<LiveSuperChatMessage>());
         }
 
-        public async Task<bool> GetLiveStatus(object roomId)
+        public async Task<bool> GetLiveStatus(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             var channel = NormalizeChannel(roomId);
-            var user = await GetChannelUserAsync(channel);
+            var user = await GetChannelUserAsync(channel, cancellationToken: cancellationToken);
             return LiveStatusParser.IsTwitchLive(user?["stream"]);
         }
 
@@ -238,7 +247,7 @@ namespace AllLive.Core
             return client;
         }
 
-        private async Task<JObject> GetChannelUserAsync(string channel)
+        private async Task<JObject> GetChannelUserAsync(string channel, CancellationToken cancellationToken = default(CancellationToken))
         {
             const string query =
                 "query ChannelInfo($login: String!) { " +
@@ -255,12 +264,12 @@ namespace AllLive.Core
             payload["operationName"] = "ChannelInfo";
             payload["variables"] = variables;
             payload["query"] = query;
-            var root = await SendGraphQlAsync(payload);
+            var root = await SendGraphQlAsync(payload, cancellationToken: cancellationToken);
             var data = root["data"] as JObject;
             return data?["user"] as JObject;
         }
 
-        private async Task<long?> GetViewerCountAsync(string channel)
+        private async Task<long?> GetViewerCountAsync(string channel, CancellationToken cancellationToken = default(CancellationToken))
         {
             const string query =
                 "query ViewerCount($login: String!) { " +
@@ -273,14 +282,14 @@ namespace AllLive.Core
             payload["operationName"] = "ViewerCount";
             payload["variables"] = variables;
             payload["query"] = query;
-            var root = await SendGraphQlAsync(payload);
+            var root = await SendGraphQlAsync(payload, cancellationToken: cancellationToken);
             var data = root["data"] as JObject;
             var user = data?["user"] as JObject;
             var stream = user?["stream"] as JObject;
             return ReadLong(stream?["viewersCount"]);
         }
 
-        private async Task<TwitchAccessToken> GetPlaybackAccessTokenAsync(string channel)
+        private async Task<TwitchAccessToken> GetPlaybackAccessTokenAsync(string channel, CancellationToken cancellationToken = default(CancellationToken))
         {
             var variables = new JObject();
             variables["isLive"] = true;
@@ -301,7 +310,7 @@ namespace AllLive.Core
             payload["variables"] = variables;
             payload["extensions"] = extensions;
 
-            var root = await SendGraphQlAsync(payload);
+            var root = await SendGraphQlAsync(payload, cancellationToken: cancellationToken);
             var data = root["data"] as JObject;
             var accessToken = data?["streamPlaybackAccessToken"] as JObject;
             var signature = ReadString(accessToken?["signature"]);
@@ -318,7 +327,7 @@ namespace AllLive.Core
             };
         }
 
-        private async Task<JObject> SendGraphQlAsync(JObject payload)
+        private async Task<JObject> SendGraphQlAsync(JObject payload, CancellationToken cancellationToken = default(CancellationToken))
         {
             using (var request = new HttpRequestMessage(HttpMethod.Post, GraphQlUrl))
             {
@@ -329,7 +338,7 @@ namespace AllLive.Core
                 request.Headers.TryAddWithoutValidation("Accept", "application/json");
                 request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
 
-                using (var response = await HttpClient.SendAsync(request))
+                using (var response = await HttpClient.SendAsync(request, cancellationToken: cancellationToken))
                 {
                     var text = await response.Content.ReadAsStringAsync();
                     if (!response.IsSuccessStatusCode)
@@ -342,7 +351,7 @@ namespace AllLive.Core
                     {
                         root = JObject.Parse(text);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                     {
                         throw new InvalidOperationException("Twitch GQL返回了无法解析的数据", ex);
                     }
@@ -367,7 +376,7 @@ namespace AllLive.Core
             }
         }
 
-        private async Task<TwitchPlaybackSnapshot> GetPlaybackSnapshotAsync(string channel)
+        private async Task<TwitchPlaybackSnapshot> GetPlaybackSnapshotAsync(string channel, CancellationToken cancellationToken = default(CancellationToken))
         {
             var cached = GetCachedPlaybackSnapshot(channel);
             if (cached != null)
@@ -375,8 +384,8 @@ namespace AllLive.Core
                 return cached;
             }
 
-            var accessToken = await GetPlaybackAccessTokenAsync(channel);
-            var variants = await GetHlsVariantsAsync(channel, accessToken);
+            var accessToken = await GetPlaybackAccessTokenAsync(channel, cancellationToken: cancellationToken);
+            var variants = await GetHlsVariantsAsync(channel, accessToken, cancellationToken: cancellationToken);
             if (variants.Count == 0)
             {
                 throw new InvalidOperationException("Twitch未返回可播放的H.264清晰度");
@@ -409,7 +418,7 @@ namespace AllLive.Core
             }
         }
 
-        private async Task<List<TwitchVariant>> GetHlsVariantsAsync(string channel, TwitchAccessToken accessToken)
+        private async Task<List<TwitchVariant>> GetHlsVariantsAsync(string channel, TwitchAccessToken accessToken, CancellationToken cancellationToken = default(CancellationToken))
         {
             var p = (long)(DateTime.UtcNow.Ticks % 999999L);
             var url = UsherBaseUrl + "/api/v2/channel/hls/" + Uri.EscapeDataString(channel) + ".m3u8"
@@ -428,7 +437,7 @@ namespace AllLive.Core
                 request.Headers.TryAddWithoutValidation("Origin", TwitchOrigin);
                 request.Headers.TryAddWithoutValidation("Referer", TwitchOrigin + "/");
 
-                using (var response = await HttpClient.SendAsync(request))
+                using (var response = await HttpClient.SendAsync(request, cancellationToken: cancellationToken))
                 {
                     var playlist = await response.Content.ReadAsStringAsync();
                     if (!response.IsSuccessStatusCode)

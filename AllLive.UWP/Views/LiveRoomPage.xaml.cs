@@ -58,6 +58,7 @@ namespace AllLive.UWP.Views
         MediaPlayer mediaPlayer;
         private bool initialRoomLoadQueued;
         private bool initialRoomLoadStarted;
+        private bool isPlaybackViewVisible = true;
         internal bool WaitForWindowPresentation { get; set; }
 
         DisplayRequest dispRequest;
@@ -370,12 +371,33 @@ namespace AllLive.UWP.Views
 
         private void LiveRoomPage_Loaded(object sender, RoutedEventArgs e)
         {
+            SetPlaybackViewVisible(Window.Current.Visible);
             QueueInitialRoomLoad();
         }
 
         private void LiveRoomPage_VisibilityChanged(object sender, VisibilityChangedEventArgs e)
         {
+            SetPlaybackViewVisible(e.Visible);
             if (e.Visible) QueueInitialRoomLoad();
+        }
+
+        private void SetPlaybackViewVisible(bool visible)
+        {
+            if (isPageClosing) return;
+            isPlaybackViewVisible = visible;
+            liveRoomVM.SetViewVisible(visible);
+            if (visible && initialRoomLoadStarted)
+            {
+                UpdateUiHeartbeat("Visible");
+                timer_focus.Start();
+                controlTimer.Start();
+            }
+            else
+            {
+                timer_focus.Stop();
+                controlTimer.Stop();
+                if (!visible) DanmuControl.ClearAll();
+            }
         }
 
         internal void NotifyWindowPresented()
@@ -398,8 +420,7 @@ namespace AllLive.UWP.Views
                     if (isPageClosing || initialRoomLoadStarted || WaitForWindowPresentation ||
                         !IsLoaded || !Window.Current.Visible) return;
                     initialRoomLoadStarted = true;
-                    timer_focus.Start();
-                    controlTimer.Start();
+                    SetPlaybackViewVisible(true);
                     liveRoomVM.LoadData(pageArgs.Site, ((LiveRoomItem)pageArgs.Data).RoomID);
                 });
             }
@@ -1040,6 +1061,17 @@ namespace AllLive.UWP.Views
                 (!paceRatio.HasValue || paceRatio.Value < PlaybackSlowRatioThreshold);
             var reason = suspicious ? "SevereStall" : slow ? "SlowProgress" : "Normal";
 
+            var sample = new PlaybackSampleResult
+            {
+                Suspicious = suspicious,
+                Slow = slow,
+                Reason = reason,
+                Url = liveRoomVM?.CurrentLine?.Url ?? lastPlaybackUrl
+            };
+            // Health detection remains active with logging disabled; expensive resource
+            // snapshots, URL analysis and formatting are diagnostic work only.
+            if (!IsDebugDiagnosticsEnabled()) return sample;
+
             var sb = new StringBuilder();
             sb.AppendLine($"播放采样 #{sampleIndex} attempt={attemptVersion}");
             sb.AppendLine($"Utc: {now:O}");
@@ -1083,14 +1115,8 @@ namespace AllLive.UWP.Views
                 sb.AppendLine(urlSummary);
             }
 
-            return new PlaybackSampleResult
-            {
-                Text = sb.ToString().TrimEnd(),
-                Suspicious = suspicious,
-                Slow = slow,
-                Reason = reason,
-                Url = liveRoomVM?.CurrentLine?.Url ?? lastPlaybackUrl
-            };
+            sample.Text = sb.ToString().TrimEnd();
+            return sample;
         }
 
         private void StartPlaybackStallProbe(string url, string sampleText, string reason, int attemptVersion)
@@ -1384,7 +1410,7 @@ namespace AllLive.UWP.Views
         private void LiveRoomVM_AddDanmaku(object sender, LiveMessage e)
         {
 
-            if (DanmuControl.Visibility == Visibility.Visible)
+            if (isPlaybackViewVisible && !isPageClosing && DanmuControl.Visibility == Visibility.Visible)
             {
                 var src = e.Color ?? AllLive.Core.Helper.DanmakuColor.White;
                 var color = ThemeHelper.ResolveDanmakuColor(

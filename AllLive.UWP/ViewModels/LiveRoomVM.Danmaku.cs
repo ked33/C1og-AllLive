@@ -14,11 +14,12 @@ namespace AllLive.UWP.ViewModels
         private Task danmakuStopTask = Task.CompletedTask;
         private CancellationTokenSource danmakuStableCts;
         private ILiveDanmaku closedDanmaku;
-        private bool liveExtrasPaused;
+        private volatile bool liveExtrasPaused;
 
         public void PauseLiveExtras()
         {
             liveExtrasPaused = true;
+            pendingMessages.Clear();
             CancelDanmakuReconnect();
             CancelDanmakuStableReset();
             Interlocked.Exchange(ref deferredLiveExtrasStartState, 0);
@@ -42,7 +43,7 @@ namespace AllLive.UWP.ViewModels
             var version = roomLoadVersion;
             try
             {
-                if (await ConnectDanmakuAsync(CancellationToken.None, version)) return;
+                if (await ConnectDanmakuAsync(RoomRequestToken, version)) return;
             }
             catch (Exception ex)
             {

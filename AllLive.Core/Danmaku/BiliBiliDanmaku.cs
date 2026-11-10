@@ -348,6 +348,7 @@ namespace AllLive.Core.Danmaku
                     }
                     var message = new LiveSuperChatMessage()
                     {
+                        Id = obj["data"]["id"]?.ToString(),
                         BackgroundBottomColor = obj["data"]["background_bottom_color"].ToString(),
                         BackgroundColor = obj["data"]["background_color"].ToString(),
                         EndTime = Utils.TimestampToDateTime(obj["data"]["end_time"].ToInt64()),

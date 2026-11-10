@@ -157,6 +157,11 @@
     <Compile Include="Helper\ImageDimHelper.cs" />
     <Compile Include="Helper\LogHelper.cs" />
     <Compile Include="Helper\PlaybackOperationGate.cs" />
+    <Compile Include="Helper\LiveMessageBuffer.cs" />
+    <Compile Include="Helper\DataImportParser.cs" />
+    <Compile Include="Helper\LocalDatabaseStore.cs" />
+    <Compile Include="Helper\PagedRequestState.cs" />
+    <Compile Include="Helper\FavoriteRefreshGate.cs" />
     <Compile Include="Helper\MessageCenter.cs" />
     <Compile Include="Helper\SettingHelper.cs" />
     <Compile Include="Helper\ThemeHelper.cs" />

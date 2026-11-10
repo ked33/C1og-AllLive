@@ -65,6 +65,7 @@ namespace AllLive.Core.Models
 
     public class LiveSuperChatMessage
     {
+        public string Id { get; set; }
         public string UserName { get; set; }
         public string Face { get; set; }
         public string Message { get; set; }

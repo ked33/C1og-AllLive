@@ -94,8 +94,9 @@ namespace AllLive.Core
         }
 
         /// <summary>等待风控暂停结束（未暂停时立即返回）。</summary>
-        public static async Task WaitAsync()
+        public static async Task WaitAsync(CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var waited = false;
             while (true)
             {
@@ -112,12 +113,12 @@ namespace AllLive.Core
                 }
                 var sliceTicks = Math.Min(remainingTicks, MaxWaitSliceMilliseconds * TimeSpan.TicksPerMillisecond);
                 var delayMilliseconds = (int)Math.Max(1L, sliceTicks / TimeSpan.TicksPerMillisecond);
-                await Task.Delay(delayMilliseconds).ConfigureAwait(false);
+                await Task.Delay(delayMilliseconds, cancellationToken).ConfigureAwait(false);
             }
             if (waited)
             {
                 // 暂停结束后加一点抖动，避免并发请求在同一瞬间集中恢复再次触发风控。
-                await Task.Delay(GetResumeJitterMilliseconds()).ConfigureAwait(false);
+                await Task.Delay(GetResumeJitterMilliseconds(), cancellationToken).ConfigureAwait(false);
             }
         }
 

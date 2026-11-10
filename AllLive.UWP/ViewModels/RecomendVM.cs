@@ -39,34 +39,66 @@ namespace AllLive.UWP.ViewModels
             Items = new ObservableCollection<Core.Models.LiveRoomItem>();
         }
         public ObservableCollection<AllLive.Core.Models.LiveRoomItem> Items { get; set; }
+        private readonly PagedRequestState requests = new PagedRequestState();
+        private bool canLoadMoreBeforeRequest;
+
+        public void CancelLoad()
+        {
+            if (!Loading) return;
+            requests.Cancel();
+            Loading = false;
+            CanLoadMore = canLoadMoreBeforeRequest;
+        }
+
         public async void LoadData()
         {
+            var request = requests.TryBegin();
+            if (request == null) return;
+            canLoadMoreBeforeRequest = CanLoadMore;
             try
             {
                 Loading = true;
                 CanLoadMore = false;
                 IsEmpty = false;
-                var result = await site.LiveSite.GetRecommendRooms(Page);
+                var result = await site.LiveSite.GetRecommendRooms(request.Page, request.Token);
+                if (!requests.IsCurrent(request)) return;
+                var knownRooms = new HashSet<string>(Items.Select(item => item.RoomID), StringComparer.OrdinalIgnoreCase);
+                var added = 0;
                 foreach (var item in result.Rooms)
                 {
-                    Items.Add(item);
+                    if (item != null && knownRooms.Add(item.RoomID))
+                    {
+                        Items.Add(item);
+                        added++;
+                    }
                 }
                 IsEmpty = Items.Count == 0;
-                CanLoadMore = result.HasMore;
-                Page++;
+                CanLoadMore = result.HasMore && added > 0;
+                requests.Accept(request);
+                Page = requests.Page;
+            }
+            catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+            {
             }
             catch (Exception ex)
             {
-                HandleError(ex);
+                if (requests.IsCurrent(request))
+                {
+                    CanLoadMore = canLoadMoreBeforeRequest;
+                    HandleError(ex);
+                }
             }
             finally
             {
-                Loading = false;
+                var current = requests.IsCurrent(request);
+                requests.End(request);
+                if (current) Loading = false;
             }
         }
 
         public override void Refresh()
         {
+            requests.Reset();
             base.Refresh();
             Items.Clear();
             LoadData();
@@ -74,8 +106,7 @@ namespace AllLive.UWP.ViewModels
 
         public override void LoadMore()
         {
-            base.LoadMore();
-            LoadData();
+            if (CanLoadMore && !Loading) LoadData();
         }
     }
 }

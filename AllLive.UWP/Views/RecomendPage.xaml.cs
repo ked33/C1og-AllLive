@@ -34,6 +34,19 @@ namespace AllLive.UWP.Views
             this.InitializeComponent();
         }
 
+        protected override void OnNavigatedTo(NavigationEventArgs e)
+        {
+            base.OnNavigatedTo(e);
+            var selected = pivot.SelectedItem as RecomendItemVM;
+            if (selected != null && !selected.Loading && selected.Items.Count == 0) selected.LoadData();
+        }
+
+        protected override void OnNavigatedFrom(NavigationEventArgs e)
+        {
+            foreach (var item in recomendVM.Items) item.CancelLoad();
+            base.OnNavigatedFrom(e);
+        }
+
         private void MyAdaptiveGridView_ItemClick(object sender, ItemClickEventArgs e)
         {
             var item = e.ClickedItem as AllLive.Core.Models.LiveRoomItem;

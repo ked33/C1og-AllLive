@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AllLive.Core.Helper
@@ -13,7 +14,7 @@ namespace AllLive.Core.Helper
     {
         private const string DefaultBaseUrl = "http://127.0.0.1:8789";
 
-        public static async Task<BilibiliLocalFlvProxyRegistrationResult> RegisterAsync(string upstreamUrl, IDictionary<string, string> requestHeaders)
+        public static async Task<BilibiliLocalFlvProxyRegistrationResult> RegisterAsync(string upstreamUrl, IDictionary<string, string> requestHeaders, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (string.IsNullOrWhiteSpace(upstreamUrl))
             {
@@ -41,7 +42,7 @@ namespace AllLive.Core.Helper
                     client.Timeout = TimeSpan.FromMilliseconds(750);
                     var json = JsonConvert.SerializeObject(payload);
                     using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
-                    using (var response = await LocalServiceClient.PostAsync(client, $"{DefaultBaseUrl}/api/bilibili/stream", content))
+                    using (var response = await LocalServiceClient.PostAsync(client, $"{DefaultBaseUrl}/api/bilibili/stream", content, cancellationToken: cancellationToken))
                     {
                         var body = await response.Content.ReadAsStringAsync();
                         if (!response.IsSuccessStatusCode)
@@ -66,7 +67,7 @@ namespace AllLive.Core.Helper
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 return BilibiliLocalFlvProxyRegistrationResult.Fail($"{ex.GetType().FullName}: {ex.Message}");
             }

@@ -42,13 +42,20 @@ namespace AllLive.UWP.Views
                 if (e.Parameter != null)
                 {
                     searchBox.Text = e.Parameter.ToString();
+                    foreach (var item in searchVM.Items) item.SetQuery(searchBox.Text);
                 }
+            }
+            var selected = pivot.SelectedItem as SearchItemVM;
+            if (selected != null && !selected.Loading && selected.Items.Count == 0 && !string.IsNullOrWhiteSpace(selected.Keyword))
+            {
+                selected.LoadData(selected.Keyword);
             }
         }
 
 
         protected override void OnNavigatedFrom(NavigationEventArgs e)
         {
+            foreach (var item in searchVM.Items) item.CancelLoad();
             if (e.NavigationMode == NavigationMode.Back)
             {
                 this.NavigationCacheMode = NavigationCacheMode.Disabled;
@@ -79,19 +86,18 @@ namespace AllLive.UWP.Views
             }
             foreach (SearchItemVM item in pivot.Items)
             {
-                item.Page = 1;
-                item.Items.Clear();
+                item.SetQuery(searchBox.Text);
             }
             (pivot.SelectedItem as SearchItemVM).LoadData(searchBox.Text);
         }
 
         private void pivot_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (pivot.SelectedItem == null || string.IsNullOrEmpty(searchBox.Text)) return;
             var vm = pivot.SelectedItem as SearchItemVM;
+            if (vm == null || string.IsNullOrWhiteSpace(vm.Keyword)) return;
             if (vm.Loading == false && vm.Items.Count == 0)
             {
-                vm.LoadData(searchBox.Text);
+                vm.LoadData(vm.Keyword);
             }
         }
     }

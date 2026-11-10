@@ -2,6 +2,7 @@
 using AllLive.Core.Models;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using AllLive.Core.Danmaku;
 using AllLive.Core.Helper;
@@ -23,10 +24,10 @@ namespace AllLive.Core
     {
         public string Name => "斗鱼直播";
         public ILiveDanmaku GetDanmaku() => new DouyuDanmaku();
-        public async Task<List<LiveCategory>> GetCategores()
+        public async Task<List<LiveCategory>> GetCategores(CancellationToken cancellationToken = default(CancellationToken))
         {
             List<LiveCategory> categories = new List<LiveCategory>();
-            var result = await HttpUtil.GetString("https://m.douyu.com/api/cate/list");
+            var result = await HttpUtil.GetString("https://m.douyu.com/api/cate/list", cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             var cate1 = obj["data"]["cate1Info"] as JArray;
             var cate2 = obj["data"]["cate2Info"] as JArray;
@@ -61,14 +62,14 @@ namespace AllLive.Core
         }
 
       
-        public async Task<LiveCategoryResult> GetCategoryRooms(LiveSubCategory category, int page = 1)
+        public async Task<LiveCategoryResult> GetCategoryRooms(LiveSubCategory category, int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             LiveCategoryResult categoryResult = new LiveCategoryResult()
             {
                 Rooms = new List<LiveRoomItem>(),
 
             };
-            var result = await HttpUtil.GetString($"https://www.douyu.com/gapi/rkc/directory/mixList/2_{ category.ID}/{page}");
+            var result = await HttpUtil.GetString($"https://www.douyu.com/gapi/rkc/directory/mixList/2_{ category.ID}/{page}", cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
 
             foreach (var item in obj["data"]["rl"])
@@ -86,14 +87,14 @@ namespace AllLive.Core
             categoryResult.HasMore = page < obj["data"]["pgcnt"].ToInt32();
             return categoryResult;
         }
-        public async Task<LiveCategoryResult> GetRecommendRooms(int page = 1)
+        public async Task<LiveCategoryResult> GetRecommendRooms(int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             LiveCategoryResult categoryResult = new LiveCategoryResult()
             {
                 Rooms = new List<LiveRoomItem>(),
 
             };
-            var result = await HttpUtil.GetString($"https://www.douyu.com/japi/weblist/apinc/allpage/6/{page}");
+            var result = await HttpUtil.GetString($"https://www.douyu.com/japi/weblist/apinc/allpage/6/{page}", cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             foreach (var item in obj["data"]["rl"])
             {
@@ -109,17 +110,9 @@ namespace AllLive.Core
             categoryResult.HasMore = page < obj["data"]["pgcnt"].ToInt32();
             return categoryResult;
         }
-        public async Task<LiveRoomDetail> GetRoomDetail(object roomId)
+        public async Task<LiveRoomDetail> GetRoomDetail(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var roomInfo = await GetRoomInfo(roomId.ToString());
-            var jsEncHeaders = new Dictionary<string, string>()
-            {
-                { "referer", $"https://m.douyu.com/{roomId}"},
-                { "user-agent","Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1 Edg/114.0.0.0" },
-            };
-            ApplyDeviceCookie(jsEncHeaders);
-            var jsEncResult = await HttpUtil.GetString($"https://www.douyu.com/swf_api/homeH5Enc?rids={roomId}", jsEncHeaders);
-            var crptext = JObject.Parse(jsEncResult)["data"][$"room{roomId}"].ToString();
+            var roomInfo = await GetRoomInfo(roomId.ToString(), cancellationToken: cancellationToken);
             CoreDebug.Log(() => $"[Douyu] GetRoomDetail roomId={roomId} show_status={roomInfo["show_status"]} videoLoop={roomInfo["videoLoop"]} room_name={roomInfo["room_name"]}");
            
 
@@ -137,10 +130,31 @@ namespace AllLive.Core
                 Notice = "",
                 Status = roomInfo["show_status"].ToInt32() == 1 && roomInfo["videoLoop"].ToInt32() != 1 && !LiveStatusParser.IsReplayRoomName(roomInfo["room_name"]?.ToString()),
                 DanmakuData = roomInfo["room_id"].ToString(),
-                Data = await GetPlayArgs(crptext, roomInfo["room_id"].ToString()),
+                // Playback credentials are prepared lazily; metadata refresh never signs a stream.
+                Data = null,
                 Url = "https://www.douyu.com/" + roomId,
                 IsRecord= roomInfo["videoLoop"].ToInt32() == 1,
             };
+        }
+
+        private async Task<string> EnsurePlayArgsAsync(LiveRoomDetail roomDetail, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var cached = roomDetail.Data as string;
+            if (!string.IsNullOrWhiteSpace(cached)) return cached;
+            var roomId = roomDetail.RoomID;
+            var jsEncHeaders = new Dictionary<string, string>()
+            {
+                { "referer", $"https://m.douyu.com/{roomId}"},
+                { "user-agent","Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1 Edg/114.0.0.0" },
+            };
+            ApplyDeviceCookie(jsEncHeaders);
+            var jsEncResult = await HttpUtil.GetString($"https://www.douyu.com/swf_api/homeH5Enc?rids={roomId}", jsEncHeaders, cancellationToken: cancellationToken);
+            var crptext = JObject.Parse(jsEncResult)["data"][$"room{roomId}"].ToString();
+            var args = await GetPlayArgs(crptext, roomId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!string.IsNullOrWhiteSpace(args)) roomDetail.Data = args;
+            return args;
         }
 
         private static long? TryGetViewerCount(JToken roomInfo)
@@ -160,7 +174,7 @@ namespace AllLive.Core
         }
 
 
-        private async Task<JToken> GetRoomInfo(string roomId)
+        private async Task<JToken> GetRoomInfo(string roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             var headers = new Dictionary<string, string>()
             {
@@ -168,7 +182,7 @@ namespace AllLive.Core
                 { "user-agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43" },
             };
             ApplyDeviceCookie(headers);
-            var result = await HttpUtil.GetString($"https://www.douyu.com/betard/{roomId}", headers);
+            var result = await HttpUtil.GetString($"https://www.douyu.com/betard/{roomId}", headers, cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             return obj["room"];
         }
@@ -183,7 +197,7 @@ namespace AllLive.Core
             }
         }
 
-        private async Task<string> GetPlayArgs(string html, string rid)
+        private async Task<string> GetPlayArgs(string html, string rid, CancellationToken cancellationToken = default(CancellationToken))
         {
             var rawLen = html?.Length ?? 0;
             //取加密的js
@@ -197,7 +211,7 @@ namespace AllLive.Core
 
             if (IsUwpRuntime())
             {
-                return await GetPlayArgsByService(html, rid, "uwp");
+                return await GetPlayArgsByService(html, rid, "uwp", cancellationToken: cancellationToken);
             }
 
             var quickJsResult = TryGetPlayArgsByQuickJs(html, rid, out var quickJsError);
@@ -210,7 +224,7 @@ namespace AllLive.Core
             {
                 CoreDebug.Log(() => $"[Douyu] QuickJS签名失败: {quickJsError}");
             }
-            return await GetPlayArgsByService(html, rid, "fallback");
+            return await GetPlayArgsByService(html, rid, "fallback", cancellationToken: cancellationToken);
         }
 
         private static string TryGetPlayArgsByQuickJs(string html, string rid, out string error)
@@ -317,7 +331,7 @@ namespace AllLive.Core
             }
         }
 
-        private static async Task<string> GetPlayArgsByService(string html, string rid, string reason)
+        private static async Task<string> GetPlayArgsByService(string html, string rid, string reason, CancellationToken cancellationToken = default(CancellationToken))
         {
             var jsonObj = new
             {
@@ -337,7 +351,7 @@ namespace AllLive.Core
                             : TimeSpan.FromSeconds(10);
                         var start = DateTimeOffset.UtcNow;
                         using (var content = new StringContent(payload, Encoding.UTF8, "application/json"))
-                        using (var response = await LocalServiceClient.PostAsync(client, url, content))
+                        using (var response = await LocalServiceClient.PostAsync(client, url, content, cancellationToken: cancellationToken))
                         {
                             var body = await response.Content.ReadAsStringAsync();
                             var elapsedMs = (DateTimeOffset.UtcNow - start).TotalMilliseconds;
@@ -359,7 +373,7 @@ namespace AllLive.Core
                         }
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     CoreDebug.Log(() => $"[Douyu] 签名服务异常 url={url} rid={rid} err={ex.GetType().FullName} 0x{ex.HResult:X8} {ex.Message}");
                 }
@@ -438,14 +452,14 @@ namespace AllLive.Core
             }
         }
 
-        public async Task<LiveSearchResult> Search(string keyword, int page = 1)
+        public async Task<LiveSearchResult> Search(string keyword, int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             LiveSearchResult searchResult = new LiveSearchResult()
             {
                 Rooms = new List<LiveRoomItem>(),
 
             };
-            var result = await HttpUtil.GetString($"https://www.douyu.com/japi/search/api/searchShow?kw={ Uri.EscapeDataString(keyword)}&page={ page}&pageSize=20");
+            var result = await HttpUtil.GetString($"https://www.douyu.com/japi/search/api/searchShow?kw={ Uri.EscapeDataString(keyword)}&page={ page}&pageSize=20", cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
 
             foreach (var item in obj["data"]["relateShow"])
@@ -462,9 +476,9 @@ namespace AllLive.Core
             searchResult.HasMore = ((JArray)obj["data"]["relateShow"]).Count > 0;
             return searchResult;
         }
-        public async Task<List<LivePlayQuality>> GetPlayQuality(LiveRoomDetail roomDetail)
+        public async Task<List<LivePlayQuality>> GetPlayQuality(LiveRoomDetail roomDetail, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var data = roomDetail.Data?.ToString();
+            var data = await EnsurePlayArgsAsync(roomDetail, cancellationToken);
             if (string.IsNullOrWhiteSpace(data))
             {
                 CoreDebug.Log(() => $"[Douyu] GetPlayQuality中止: 播放参数为空 rid={roomDetail.RoomID}");
@@ -473,7 +487,7 @@ namespace AllLive.Core
             data += $"&cdn=&rate=0";
             CoreDebug.Log(() => $"[Douyu] GetPlayQuality rid={roomDetail.RoomID} dataLen={data.Length}");
             List<LivePlayQuality> qualities = new List<LivePlayQuality>();
-            var result = await HttpUtil.PostString($"https://www.douyu.com/lapi/live/getH5Play/{ roomDetail.RoomID}", data);
+            var result = await HttpUtil.PostString($"https://www.douyu.com/lapi/live/getH5Play/{ roomDetail.RoomID}", data, cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             CoreDebug.Log(() => $"[Douyu] GetPlayQuality resp error={obj["error"]} msg={obj["msg"]} cdnCount={(obj["data"]?["cdnsWithName"] as JArray)?.Count ?? 0} rateCount={(obj["data"]?["multirates"] as JArray)?.Count ?? 0}");
             var cdns = new List<string>();
@@ -503,42 +517,66 @@ namespace AllLive.Core
             }
             return qualities;
         }
-        public async Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn)
+        public async Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var args = roomDetail.Data.ToString();
+            var args = await EnsurePlayArgsAsync(roomDetail, cancellationToken);
+            if (string.IsNullOrWhiteSpace(args)) return new List<string>();
             var data = (KeyValuePair<int, List<string>>)qn.Data;
-            List<string> urls = new List<string>();
-            foreach (var item in data.Value)
+            var cdns = (data.Value ?? new List<string>()).Distinct().ToList();
+            // Bound the entire batch, preserve CDN order and keep every successful fallback.
+            using (var slots = new SemaphoreSlim(2, 2))
+            using (var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
-                var url = await GetUrl(roomDetail.RoomID, args, data.Key, item);
-                if (url.Length != 0)
+                budget.CancelAfter(TimeSpan.FromSeconds(10));
+                var tasks = cdns.Select(async cdn =>
                 {
-                    urls.Add(url);
-                }
+                    var acquired = false;
+                    try
+                    {
+                        await slots.WaitAsync(budget.Token).ConfigureAwait(false);
+                        acquired = true;
+                        using (var lineTimeout = CancellationTokenSource.CreateLinkedTokenSource(budget.Token))
+                        {
+                            lineTimeout.CancelAfter(TimeSpan.FromSeconds(5));
+                            return await GetUrl(roomDetail.RoomID, args, data.Key, cdn, lineTimeout.Token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        CoreDebug.Log(() => $"[Douyu] 线路请求超时 rid={roomDetail.RoomID} cdn={cdn}");
+                        return string.Empty;
+                    }
+                    finally
+                    {
+                        if (acquired) slots.Release();
+                    }
+                }).ToArray();
+                var urls = await Task.WhenAll(tasks).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                return urls.Where(url => !string.IsNullOrWhiteSpace(url)).Distinct().ToList();
             }
-            return urls;
         }
 
-        private async Task<string> GetUrl(string rid, string args, int rate, string cdn = "")
+        private async Task<string> GetUrl(string rid, string args, int rate, string cdn = "", CancellationToken cancellationToken = default(CancellationToken))
         {
             try
             {
                 args += $"&cdn={cdn}&rate={rate}";
-                var result = await HttpUtil.PostString($"https://www.douyu.com/lapi/live/getH5Play/{rid}", args);
+                var result = await HttpUtil.PostString($"https://www.douyu.com/lapi/live/getH5Play/{rid}", args, cancellationToken: cancellationToken);
                 var obj = JObject.Parse(result);
                 CoreDebug.Log(() => $"[Douyu] GetUrl rid={rid} cdn={cdn} rate={rate} error={obj["error"]} msg={obj["msg"]}");
                 return obj["data"]["rtmp_url"].ToString() + "/" + System.Net.WebUtility.HtmlDecode(obj["data"]["rtmp_live"].ToString());
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Douyu] GetUrl失败 rid={rid} cdn={cdn} rate={rate} err={ex.GetType().FullName}: {ex.Message}");
                 return "";
             }
 
         }
-        public async Task<bool> GetLiveStatus(object roomId)
+        public async Task<bool> GetLiveStatus(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var roomInfo = await GetRoomInfo(roomId.ToString());
+            var roomInfo = await GetRoomInfo(roomId.ToString(), cancellationToken: cancellationToken);
             var showStatus = roomInfo?["show_status"];
             var loop = roomInfo?["videoLoop"];
             // 官方赛事回放房（room_name 以【回放】开头）即使 show_status=1 也按未开播处理。
@@ -549,7 +587,7 @@ namespace AllLive.Core
             CoreDebug.Log(() => $"[Douyu] GetLiveStatus roomId={roomId} show_status={showStatus} videoLoop={loop} replayRoom={replayRoom} => {live}");
             return live;
         }
-        public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
+        public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult(new List<LiveSuperChatMessage>());
         }

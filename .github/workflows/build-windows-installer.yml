@@ -21,7 +21,11 @@ jobs:
 
       - name: Check playback recovery guards and C# syntax
         shell: pwsh
-        run: ./.github/scripts/Test-PlaybackRecovery.ps1
+        run: |
+          & pwsh -NoLogo -NoProfile -File .github/scripts/Test-PlaybackRecovery.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Playback/network checks failed: $LASTEXITCODE" }
+          & pwsh -NoLogo -NoProfile -File .github/scripts/Test-ListLoading.ps1
+          if ($LASTEXITCODE -ne 0) { throw "List loading checks failed: $LASTEXITCODE" }
 
       - uses: actions/cache@v5
         with:
@@ -32,6 +36,12 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
+
+      - name: Verify database imports and migration
+        shell: pwsh
+        run: |
+          & dotnet run --project .github/tests/Database/Database.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw "Database checks failed: $LASTEXITCODE" }
 
       - name: Verify and publish bundled local service
         shell: pwsh

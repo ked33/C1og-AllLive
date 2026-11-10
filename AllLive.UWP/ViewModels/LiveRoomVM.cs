@@ -27,7 +27,13 @@ namespace AllLive.UWP.ViewModels
         public event EventHandler<LiveMessage> AddDanmaku;
         public event EventHandler<ReconnectStatus> ReconnectStatusChanged;
 
-        private bool isActive;
+        private volatile bool isActive;
+        private volatile bool isViewVisible = true;
+        private readonly LiveMessageBuffer pendingMessages = new LiveMessageBuffer(512);
+        private readonly HashSet<string> superChatKeys = new HashSet<string>(StringComparer.Ordinal);
+        private int messagePumpRunning;
+        private const int MessageBatchSize = 64;
+        private const int AnimatedMessagesPerBatch = 8;
         private System.Threading.CancellationTokenSource danmakuReconnectCts;
         private int danmakuReconnectAttempt;
         private int reconnectInProgress;
@@ -462,32 +468,42 @@ namespace AllLive.UWP.ViewModels
         public async void LoadData(ILiveSite site, object roomId)
         {
             var version = ++roomLoadVersion;
+            var requestToken = ResetRoomRequests();
+            pendingMessages.Clear();
             InvalidatePlayUrlRequests();
             var acquired = false;
             try
             {
                 Loading = true;
                 isActive = true;
+                SetSCTimer();
                 liveExtrasPaused = false;
                 CancelDanmakuStableReset();
                 danmakuReconnectAttempt = 0;
                 System.Threading.Interlocked.Exchange(ref reconnectInProgress, 0);
                 System.Threading.Interlocked.Exchange(ref deferredLiveExtrasStartState, 0);
                 CancelDanmakuReconnect();
+                if (!string.Equals(Site?.Name, site?.Name, StringComparison.Ordinal) ||
+                    !string.Equals(RoomId?.ToString(), roomId?.ToString(), StringComparison.OrdinalIgnoreCase))
+                {
+                    Messages.Clear();
+                    SuperChatMessages.Clear();
+                    superChatKeys.Clear();
+                }
                 Site = site;
 
                 RoomId = roomId;
                 var sourceRoomId = roomId?.ToString();
                 await CleanupOldDanmakuAsync();
                 if (!IsRoomLoadCurrent(version)) return;
-                acquired = await playInfoGate.WaitAsync(TimeSpan.FromSeconds(30));
+                acquired = await playInfoGate.WaitAsync(TimeSpan.FromSeconds(30), requestToken);
                 if (!IsRoomLoadCurrent(version)) return;
                 if (!acquired)
                 {
                     Utils.ShowMessageToast("上一次播放信息请求仍在结束，请稍后刷新");
                     return;
                 }
-                var result = await site.GetRoomDetail(roomId);
+                var result = await site.GetRoomDetail(roomId, requestToken);
                 if (!IsRoomLoadCurrent(version))
                 {
                     return;
@@ -544,7 +560,7 @@ namespace AllLive.UWP.ViewModels
                     {
                         return;
                     }
-                    var qualities = await Site.GetPlayQuality(result);
+                    var qualities = await Site.GetPlayQuality(result, requestToken);
                     if (!IsRoomLoadCurrent(version))
                     {
                         return;
@@ -588,6 +604,7 @@ namespace AllLive.UWP.ViewModels
                 });
 
             }
+            catch (OperationCanceledException) when (requestToken.IsCancellationRequested) { }
             catch (DouyinRoomDataBlockedException ex)
             {
                 if (!IsRoomLoadCurrent(version)) return;
@@ -605,74 +622,47 @@ namespace AllLive.UWP.ViewModels
             }
         }
 
-        Timer scTimer;
+        DispatcherTimer scTimer;
         public void SetSCTimer()
         {
-            if (!isActive || Dispatcher == null)
-            {
-                return;
-            }
             KeepSC = SettingHelper.GetValue<bool>(SettingHelper.LiveDanmaku.KEEP_SUPER_CHAT, true);
-            if (KeepSC)
-            {
-                _ = Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
-                 {
-                     if (!isActive)
-                     {
-                         return;
-                     }
-                     foreach (var item in SuperChatMessages)
-                     {
-                         item.ShowCountdown = false;
-                     }
-                 });
-                StopSCTimer();
-            }
-            else
-            {
-                StopSCTimer();
-                _ = Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
-                {
-                    foreach (var item in SuperChatMessages)
-                    {
-                        item.ShowCountdown = true;
-                        item.CountdownTime = Convert.ToInt32(item.EndTime.Subtract(DateTime.Now).TotalSeconds);
-                    }
-                });
-                scTimer = new Timer(1000);
-                scTimer.Elapsed += (s, e) =>
-                {
-                    if (!isActive || Dispatcher == null)
-                    {
-                        return;
-                    }
-                    _ = Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
-                    {
-                        if (!isActive)
-                        {
-                            return;
-                        }
-                        for (var i = SuperChatMessages.Count - 1; i >= 0; i--)
-                        {
-                            var item = SuperChatMessages[i];
-                            item.CountdownTime--;
-                            if (item.CountdownTime <= 0)
-                            {
-                                // 反向遍历，RemoveAt 不会跳过下一项
-                                SuperChatMessages.RemoveAt(i);
-                            }
-                        }
-                    });
+            StopSCTimer();
+            if (!isActive || !isViewVisible) return;
+            UpdateSuperChatCountdowns();
+            if (KeepSC) return;
+            scTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            scTimer.Tick += SuperChatTimer_Tick;
+            scTimer.Start();
+        }
 
-                };
-                scTimer.Start();
+        private void SuperChatTimer_Tick(object sender, object e)
+        {
+            if (isActive && isViewVisible) UpdateSuperChatCountdowns();
+        }
+
+        private void UpdateSuperChatCountdowns()
+        {
+            var now = DateTime.Now;
+            for (var i = SuperChatMessages.Count - 1; i >= 0; i--)
+            {
+                var item = SuperChatMessages[i];
+                item.ShowCountdown = !KeepSC;
+                if (KeepSC) continue;
+                // Hiding or suspending a window must not extend a paid message.
+                item.CountdownTime = (int)Math.Ceiling((item.EndTime - now).TotalSeconds);
+                if (item.CountdownTime <= 0)
+                {
+                    superChatKeys.Remove(LiveMessageBuffer.GetSuperChatKey(item));
+                    SuperChatMessages.RemoveAt(i);
+                }
             }
         }
 
         private void StopSCTimer()
         {
-            scTimer?.Stop();
-            scTimer?.Dispose();
+            if (scTimer == null) return;
+            scTimer.Stop();
+            scTimer.Tick -= SuperChatTimer_Tick;
             scTimer = null;
         }
 
@@ -1036,7 +1026,7 @@ namespace AllLive.UWP.ViewModels
                 {
                     return;
                 }
-                var data = await Site.GetSuperChatMessages(RoomID);
+                var data = await Site.GetSuperChatMessages(RoomID, RoomRequestToken);
                 if (!IsRoomLoadCurrent(version) || liveExtrasPaused)
                 {
                     return;
@@ -1045,10 +1035,12 @@ namespace AllLive.UWP.ViewModels
                 {
                     foreach (var item in data)
                     {
-                        SuperChatMessages.Insert(0, new SuperChatItem(item, KeepSC ? false : true));
+                        pendingMessages.Enqueue(null, new LiveMessage { Type = LiveMessageType.SuperChat, Data = item });
                     }
+                    TryStartMessagePump();
                 }
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
                 if (!IsRoomLoadCurrent(version) || liveExtrasPaused) return;
@@ -1071,7 +1063,7 @@ namespace AllLive.UWP.ViewModels
 
             try
             {
-                var metrics = await metricSite.GetDeferredAudienceMetrics(roomDetail);
+                var metrics = await metricSite.GetDeferredAudienceMetrics(roomDetail, RoomRequestToken);
                 if (!IsRoomLoadCurrent(version) || liveExtrasPaused || metrics == null || !ReferenceEquals(Site, site)
                     || !ReferenceEquals(detail, roomDetail)
                     || !string.Equals(RoomID, roomId, StringComparison.OrdinalIgnoreCase))
@@ -1127,50 +1119,84 @@ namespace AllLive.UWP.ViewModels
             });
         }
         public CoreDispatcher Dispatcher { get; set; }
-        private async void LiveDanmaku_NewMessage(object sender, LiveMessage e)
+        private void LiveDanmaku_NewMessage(object sender, LiveMessage e)
         {
-            var dispatcher = Dispatcher;
-            if (e == null || !isActive || liveExtrasPaused || !ReferenceEquals(sender, LiveDanmaku) || dispatcher == null)
+            if (e == null || !isActive || liveExtrasPaused || !ReferenceEquals(sender, LiveDanmaku)) return;
+            pendingMessages.Enqueue(sender, e);
+            TryStartMessagePump();
+        }
+
+        public void SetViewVisible(bool visible)
+        {
+            isViewVisible = visible;
+            if (!visible)
             {
+                StopSCTimer();
                 return;
             }
-            await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
-            {
-                if (!isActive || liveExtrasPaused || !ReferenceEquals(sender, LiveDanmaku))
-                {
-                    return;
-                }
-                if (e.Type == LiveMessageType.Online)
-                {
-                    ApplyAudienceMetricUpdate(e);
-                    return;
-                }
-                if (e.Type == LiveMessageType.SuperChat)
-                {
-                    SuperChatMessages.Insert(0, new SuperChatItem(e.Data as LiveSuperChatMessage, KeepSC ? false : true));
-                    return;
-                }
-                if (e.Type == LiveMessageType.Chat)
-                {
-                    // 屏蔽词判断放在最前，被屏蔽的消息不应挤掉历史消息
-                    if (settingVM.ShieldWords != null && settingVM.ShieldWords.Count > 0)
-                    {
-                        if (settingVM.ShieldWords.FirstOrDefault(x => e.Message.Contains(x)) != null) return;
-                    }
-                    if (Messages.Count >= MessageCleanCount)
-                    {
-                        Messages.RemoveAt(0);
-                        //Messages.Clear();
-                    }
-                    if (!Utils.IsXbox)
-                    {
-                        Messages.Add(e);
-                    }
+            SetSCTimer();
+            TryStartMessagePump();
+        }
 
-                    AddDanmaku?.Invoke(this, e);
-                    return;
+        private void TryStartMessagePump()
+        {
+            if (!isActive || !isViewVisible || liveExtrasPaused || Dispatcher == null || !pendingMessages.HasItems ||
+                System.Threading.Interlocked.CompareExchange(ref messagePumpRunning, 1, 0) != 0) return;
+            _ = RunMessagePumpAsync(roomLoadVersion);
+        }
+
+        private async Task RunMessagePumpAsync(int version)
+        {
+            try
+            {
+                while (IsRoomLoadCurrent(version) && isViewVisible && !liveExtrasPaused && pendingMessages.HasItems)
+                {
+                    await Task.Delay(100).ConfigureAwait(false);
+                    var dispatcher = Dispatcher;
+                    if (!IsRoomLoadCurrent(version) || !isViewVisible || liveExtrasPaused || dispatcher == null) return;
+                    // A busy websocket can queue at most one UI callback.
+                    await dispatcher.RunAsync(CoreDispatcherPriority.Low, () =>
+                    {
+                        if (!IsRoomLoadCurrent(version) || !isViewVisible || liveExtrasPaused) return;
+                        var animated = 0;
+                        foreach (var entry in pendingMessages.Drain(MessageBatchSize))
+                        {
+                            if (entry.Source != null && !ReferenceEquals(entry.Source, LiveDanmaku)) continue;
+                            var message = entry.Message;
+                            if (message.Type == LiveMessageType.Online) ApplyAudienceMetricUpdate(message);
+                            else if (message.Type == LiveMessageType.SuperChat) AddSuperChat(message.Data as LiveSuperChatMessage);
+                            else if (message.Type == LiveMessageType.Chat)
+                            {
+                                if (string.IsNullOrEmpty(message.Message) ||
+                                    (settingVM.ShieldWords != null && settingVM.ShieldWords.Any(word =>
+                                        !string.IsNullOrEmpty(word) && message.Message.Contains(word)))) continue;
+                                if (!Utils.IsXbox)
+                                {
+                                    while (Messages.Count >= Math.Max(1, MessageCleanCount)) Messages.RemoveAt(0);
+                                    Messages.Add(message);
+                                }
+                                if (animated++ < AnimatedMessagesPerBatch) AddDanmaku?.Invoke(this, message);
+                            }
+                        }
+                    });
                 }
-            });
+            }
+            catch (Exception ex)
+            {
+                if (IsRoomLoadCurrent(version)) LogHelper.LogDebug(() => "[Danmaku] Batch stopped: " + ex.GetType().Name);
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref messagePumpRunning, 0);
+                TryStartMessagePump();
+            }
+        }
+
+        private void AddSuperChat(LiveSuperChatMessage message)
+        {
+            if (message == null || (!KeepSC && message.EndTime <= DateTime.Now)) return;
+            if (!superChatKeys.Add(LiveMessageBuffer.GetSuperChatKey(message))) return;
+            SuperChatMessages.Insert(0, new SuperChatItem(message, !KeepSC));
         }
 
         private void LogRoomDetail(LiveRoomDetail roomDetail)
@@ -1382,7 +1408,9 @@ namespace AllLive.UWP.ViewModels
         {
             isActive = false;
             roomLoadVersion++;
+            CancelRoomRequests();
             InvalidatePlayUrlRequests();
+            pendingMessages.Clear();
             liveExtrasPaused = true;
             CancelDanmakuStableReset();
             CancelDanmakuReconnect();
@@ -1392,6 +1420,7 @@ namespace AllLive.UWP.ViewModels
             StopSCTimer();
             Messages.Clear();
             SuperChatMessages.Clear();
+            superChatKeys.Clear();
             var cleanup = CleanupOldDanmakuAsync();
 
             allLines = null;
@@ -1454,6 +1483,7 @@ namespace AllLive.UWP.ViewModels
     {
         public SuperChatItem(LiveSuperChatMessage message, bool showCountdown)
         {
+            Id = message.Id;
             UserName = message.UserName;
             Face = message.Face;
             Message = message.Message;

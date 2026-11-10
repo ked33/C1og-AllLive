@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Runtime.ConstrainedExecution;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Tup;
 
@@ -19,11 +20,11 @@ namespace AllLive.Core.Helper
         {
             this.baseUrl = baseUrl;
             this.servantName = servantName;
-            httpClient = new HttpClient();
+            httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
             httpClient.BaseAddress = new Uri(baseUrl);
         }
 
-        public async Task<Resp> GetAsync<Req, Resp>(Req req, string function,Resp proxy)
+        public async Task<Resp> GetAsync<Req, Resp>(Req req, string function,Resp proxy, CancellationToken cancellationToken = default(CancellationToken))
         {
             Resp result = proxy;
             try
@@ -35,20 +36,22 @@ namespace AllLive.Core.Helper
                 uniPacket.setTarsPacketType(Const.PACKET_TYPE_TARSNORMAL);
                 uniPacket.Put("tReq", req);
                 byte[] array = uniPacket.Encode();
-                var reqContent= new ByteArrayContent(array);
-                // 设置content-type
-                reqContent.Headers.Add("Content-Type", "application/x-wup");
-                var response = await httpClient.PostAsync("", reqContent);
-
-                var responseBytes= await response.Content.ReadAsByteArrayAsync();
-                CoreDebug.Log(() => $"[Tars] {function} status={(int)response.StatusCode} len={responseBytes?.Length ?? 0}");
-                TarsUniPacket respPack =new TarsUniPacket();
-                respPack.Decode(responseBytes);
-                var code = respPack.Get("", 0);
-                result = respPack.Get<Resp>("tRsp", result);
-                return result;
+                using (var reqContent = new ByteArrayContent(array))
+                {
+                    // 设置content-type
+                    reqContent.Headers.Add("Content-Type", "application/x-wup");
+                    using (var response = await httpClient.PostAsync("", reqContent, cancellationToken).ConfigureAwait(false))
+                    {
+                        var responseBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                        CoreDebug.Log(() => $"[Tars] {function} status={(int)response.StatusCode} len={responseBytes?.Length ?? 0}");
+                        TarsUniPacket respPack = new TarsUniPacket();
+                        respPack.Decode(responseBytes);
+                        result = respPack.Get<Resp>("tRsp", result);
+                        return result;
+                    }
+                }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Tars] {function} 请求失败: {ex.GetType().FullName} {ex.Message}");
                 return result;

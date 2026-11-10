@@ -1,4 +1,5 @@
 using AllLive.Core.Models;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AllLive.Core.Interface
@@ -8,6 +9,6 @@ namespace AllLive.Core.Interface
     /// </summary>
     public interface IDeferredAudienceMetricSite
     {
-        Task<LiveAudienceMetrics> GetDeferredAudienceMetrics(LiveRoomDetail roomDetail);
+        Task<LiveAudienceMetrics> GetDeferredAudienceMetrics(LiveRoomDetail roomDetail, CancellationToken cancellationToken = default(CancellationToken));
     }
 }

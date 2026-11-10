@@ -97,14 +97,9 @@ namespace AllLive.UWP.ViewModels
         }
 
         private int _refreshVersion = 0;
-        private const int DefaultLiveStatusParallelism = 6;
-        private const int DefaultDouyinLiveStatusParallelism = 2;
         private const string DouyinSiteName = "抖音直播";
-        private readonly object _liveStatusSemaphoreSync = new object();
-        private SemaphoreSlim _liveStatusSemaphore = new SemaphoreSlim(DefaultLiveStatusParallelism, DefaultLiveStatusParallelism);
-        private SemaphoreSlim _douyinLiveStatusSemaphore = new SemaphoreSlim(DefaultDouyinLiveStatusParallelism, DefaultDouyinLiveStatusParallelism);
-        private int _liveStatusSemaphoreSize = DefaultLiveStatusParallelism;
-        private int _douyinLiveStatusSemaphoreSize = DefaultDouyinLiveStatusParallelism;
+        private readonly SemaphoreSlim _refreshRunGate = new SemaphoreSlim(1, 1);
+        private CancellationTokenSource _refreshCancellation;
 
         public async void LoadData()
         {
@@ -114,6 +109,7 @@ namespace AllLive.UWP.ViewModels
         public void CancelRefresh()
         {
             Interlocked.Increment(ref _refreshVersion);
+            _refreshCancellation?.Cancel();
             Loading = false;
             LoaddingLiveStatus = false;
         }
@@ -121,11 +117,21 @@ namespace AllLive.UWP.ViewModels
         private async Task ReloadAsync(bool loadRoomDetail)
         {
             var version = Interlocked.Increment(ref _refreshVersion);
+            var cancellation = new CancellationTokenSource();
+            var token = cancellation.Token;
+            var previous = Interlocked.Exchange(ref _refreshCancellation, cancellation);
+            previous?.Cancel();
+            var gateTaken = false;
             // 保留上一轮开播状态/标题，避免刷新时整表闪成「未开播」再统一蹦出。
             var previousTitleStates = CaptureFavoriteTitleSnapshots();
             try
             {
                 Loading = true;
+                // Wait for the canceled generation to release its actual requests before
+                // applying updated limits. Cancellation does not create a second quota.
+                await _refreshRunGate.WaitAsync(token);
+                gateTaken = true;
+                token.ThrowIfCancellationRequested();
                 var list = await DatabaseHelper.GetFavorites();
                 if (version != _refreshVersion)
                 {
@@ -139,7 +145,7 @@ namespace AllLive.UWP.ViewModels
                     return;
                 }
                 LoaddingLiveStatus = true;
-                var failedCount = await UpdateLiveStatusAsync(list, version, loadRoomDetail);
+                var failedCount = await UpdateLiveStatusAsync(list, version, loadRoomDetail, token);
                 if (version != _refreshVersion)
                 {
                     return;
@@ -153,12 +159,19 @@ namespace AllLive.UWP.ViewModels
                         : $"{failedCount} 个直播间的开播状态获取失败");
                 }
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Navigation or a newer refresh retired this generation.
+            }
             catch (Exception ex)
             {
-                HandleError(ex);
+                if (version == _refreshVersion) HandleError(ex);
             }
             finally
             {
+                if (gateTaken) _refreshRunGate.Release();
+                Interlocked.CompareExchange(ref _refreshCancellation, null, cancellation);
+                cancellation.Dispose();
                 if (version == _refreshVersion)
                 {
                     Loading = false;
@@ -303,63 +316,33 @@ namespace AllLive.UWP.ViewModels
         }
 
         // 返回开播状态获取失败的关注项数量。
-        private async Task<int> UpdateLiveStatusAsync(IList<FavoriteItem> items, int refreshVersion, bool loadRoomDetail)
+        private async Task<int> UpdateLiveStatusAsync(IList<FavoriteItem> items, int refreshVersion, bool loadRoomDetail, CancellationToken token)
         {
-            GetLiveStatusSemaphores(out var liveStatusSemaphore, out var douyinLiveStatusSemaphore);
+            var gate = new FavoriteRefreshGate(
+                SettingHelper.GetFavoriteLiveStatusParallelism(),
+                SettingHelper.GetFavoriteDouyinLiveStatusParallelism());
             var tasks = new List<Task<bool>>(items.Count);
             foreach (var item in items)
             {
-                tasks.Add(UpdateLiveStatusAsync(item, refreshVersion, loadRoomDetail, liveStatusSemaphore, douyinLiveStatusSemaphore));
+                tasks.Add(UpdateLiveStatusAsync(item, refreshVersion, loadRoomDetail, gate, token));
             }
             var results = await Task.WhenAll(tasks);
             return results.Count(failed => failed);
         }
 
-        // 并发数设置即时生效：每轮刷新读取一次，容量变化时才整体替换信号量（旧信号量由在跑任务自行释放）。
-        private void GetLiveStatusSemaphores(out SemaphoreSlim liveStatusSemaphore, out SemaphoreSlim douyinLiveStatusSemaphore)
-        {
-            var parallelism = SettingHelper.GetFavoriteLiveStatusParallelism();
-            var douyinParallelism = SettingHelper.GetFavoriteDouyinLiveStatusParallelism();
-            lock (_liveStatusSemaphoreSync)
-            {
-                if (parallelism != _liveStatusSemaphoreSize)
-                {
-                    _liveStatusSemaphore = new SemaphoreSlim(parallelism, parallelism);
-                    _liveStatusSemaphoreSize = parallelism;
-                }
-                if (douyinParallelism != _douyinLiveStatusSemaphoreSize)
-                {
-                    _douyinLiveStatusSemaphore = new SemaphoreSlim(douyinParallelism, douyinParallelism);
-                    _douyinLiveStatusSemaphoreSize = douyinParallelism;
-                }
-                liveStatusSemaphore = _liveStatusSemaphore;
-                douyinLiveStatusSemaphore = _douyinLiveStatusSemaphore;
-            }
-        }
-
         // 返回 true 表示该关注项的开播状态获取失败（用于在刷新结束后统一提示）。
         // 仅 GetLiveStatus 失败才算开播状态获取失败；已拿到开播状态、仅房间详情失败不计入。
-        private async Task<bool> UpdateLiveStatusAsync(FavoriteItem item, int refreshVersion, bool loadRoomDetail, SemaphoreSlim liveStatusSemaphore, SemaphoreSlim douyinLiveStatusSemaphore)
+        private async Task<bool> UpdateLiveStatusAsync(FavoriteItem item, int refreshVersion, bool loadRoomDetail, FavoriteRefreshGate gate, CancellationToken token)
         {
             if (refreshVersion != _refreshVersion)
             {
                 return false;
             }
             var isDouyin = string.Equals(item.SiteName, DouyinSiteName, StringComparison.Ordinal);
-            var douyinSlotTaken = false;
-            await liveStatusSemaphore.WaitAsync();
-            try
+            using (await gate.EnterAsync(isDouyin, token))
             {
-                if (refreshVersion != _refreshVersion)
-                {
-                    return false;
-                }
-                if (isDouyin)
-                {
-                    // 抖音在「全站并发」之下再受「抖音并发」子上限约束（嵌套获取，释放顺序相反，无死锁）。
-                    await douyinLiveStatusSemaphore.WaitAsync();
-                    douyinSlotTaken = true;
-                }
+                token.ThrowIfCancellationRequested();
+                if (refreshVersion != _refreshVersion) return false;
                 var site = MainVM.Sites.FirstOrDefault(x => x.Name == item.SiteName);
                 if (site == null)
                 {
@@ -369,7 +352,11 @@ namespace AllLive.UWP.ViewModels
                 bool status;
                 try
                 {
-                    status = await site.LiveSite.GetLiveStatus(item.RoomID);
+                    status = await site.LiveSite.GetLiveStatus(item.RoomID, token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -396,7 +383,7 @@ namespace AllLive.UWP.ViewModels
 
                 try
                 {
-                    var detail = await site.LiveSite.GetRoomDetail(item.RoomID);
+                    var detail = await site.LiveSite.GetRoomDetail(item.RoomID, token);
                     if (refreshVersion != _refreshVersion)
                     {
                         return false;
@@ -414,6 +401,10 @@ namespace AllLive.UWP.ViewModels
                         await ApplyItemLiveInfoAsync(item, refreshVersion, liveStatus: true, liveTitle: string.Empty);
                     }
                 }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     // 开播状态已获取成功，仅房间详情失败，标题留空，不计入失败提示。
@@ -424,14 +415,6 @@ namespace AllLive.UWP.ViewModels
                     }
                 }
                 return false;
-            }
-            finally
-            {
-                if (douyinSlotTaken)
-                {
-                    douyinLiveStatusSemaphore.Release();
-                }
-                liveStatusSemaphore.Release();
             }
         }
 
@@ -638,25 +621,8 @@ namespace AllLive.UWP.ViewModels
                 try
                 {
                     var json = await FileIO.ReadTextAsync(file);
-                    var items = Newtonsoft.Json.JsonConvert.DeserializeObject<List<FavoriteJsonItem>>(json);
-                    foreach (var item in items)
-                    {
-                        var favoriteItem = new FavoriteItem()
-                        {
-                            SiteName = item.SiteName,
-                            RoomID = item.RoomId,
-                            UserName = item.UserName,
-                            Photo = item.Face,
-                            SortOrder = item.Sort
-                        };
-                        var existId = DatabaseHelper.CheckFavorite(favoriteItem.RoomID, favoriteItem.SiteName);
-                        if (existId != null)
-                        {
-                            DatabaseHelper.UpdateFavoriteSort(existId.Value, favoriteItem.SortOrder);
-                            continue;
-                        }
-                        DatabaseHelper.AddFavorite(favoriteItem);
-                    }
+                    var items = DataImportParser.ParseFavorites(json);
+                    await DatabaseHelper.ImportFavoritesAsync(items);
                     Utils.ShowMessageToast("导入成功");
                     RefreshLiveStatusOnly();
                 }

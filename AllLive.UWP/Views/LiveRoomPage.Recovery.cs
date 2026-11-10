@@ -259,7 +259,7 @@ namespace AllLive.UWP.Views
             {
                 recoveryStatusKey = key;
                 recoveryStatusAge = Stopwatch.StartNew();
-                recoveryStatusTask = ObserveRecoveryLiveStatusAsync();
+                recoveryStatusTask = ObserveRecoveryLiveStatusAsync(token);
             }
             // An old room's query keeps its slot until the underlying request ends.
             if (recoveryStatusKey != key) return null;
@@ -281,9 +281,17 @@ namespace AllLive.UWP.Views
             return status;
         }
 
-        private async Task<bool?> ObserveRecoveryLiveStatusAsync()
+        private async Task<bool?> ObserveRecoveryLiveStatusAsync(CancellationToken token)
         {
-            try { return await liveRoomVM.ReadLiveStatusAsync(); }
+            try
+            {
+                using (var request = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    request.CancelAfter(RemainingRecoveryTime(RecoveryStatusTimeout));
+                    return await liveRoomVM.ReadLiveStatusAsync(request.Token);
+                }
+            }
+            catch (OperationCanceledException) { return null; }
             catch (Exception ex)
             {
                 if (LogHelper.Enabled) LogRecoveryEvent("StatusUnknown", ex.GetType().Name);

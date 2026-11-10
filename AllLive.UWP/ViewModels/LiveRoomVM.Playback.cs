@@ -14,9 +14,28 @@ namespace AllLive.UWP.ViewModels
         // Keep the slot until the actual API call ends, even if its caller stops waiting.
         private readonly SemaphoreSlim playInfoGate = new SemaphoreSlim(1, 1);
         private CancellationTokenSource playUrlCts;
+        private CancellationTokenSource roomRequestCts;
         private int roomLoadVersion;
         private int playUrlRequestVersion;
         private bool applyingPlayInfo;
+
+        private CancellationToken RoomRequestToken => roomRequestCts?.Token ?? CancellationToken.None;
+
+        private CancellationToken ResetRoomRequests()
+        {
+            CancelRoomRequests();
+            roomRequestCts = new CancellationTokenSource();
+            return roomRequestCts.Token;
+        }
+
+        private void CancelRoomRequests()
+        {
+            var previous = roomRequestCts;
+            roomRequestCts = null;
+            if (previous == null) return;
+            previous.Cancel();
+            previous.Dispose();
+        }
 
         private bool IsRoomLoadCurrent(int version)
         {
@@ -35,17 +54,19 @@ namespace AllLive.UWP.ViewModels
         public void PausePlaybackRequests()
         {
             roomLoadVersion++;
+            ResetRoomRequests();
             InvalidatePlayUrlRequests();
             Loading = false;
         }
 
-        public Task<bool> ReadLiveStatusAsync()
+        public async Task<bool> ReadLiveStatusAsync(CancellationToken cancellationToken = default(CancellationToken))
         {
             var site = Site;
             var roomId = RoomID;
             if (!isActive || site == null || string.IsNullOrWhiteSpace(roomId))
                 throw new InvalidOperationException("No active live room.");
-            return site.GetLiveStatus(roomId);
+            using (var owner = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, RoomRequestToken))
+                return await site.GetLiveStatus(roomId, owner.Token);
         }
 
         public async void LoadPlayUrl()
@@ -57,7 +78,7 @@ namespace AllLive.UWP.ViewModels
         {
             if (!isActive || Site == null || detail == null || token.IsCancellationRequested) return false;
             InvalidatePlayUrlRequests();
-            var owner = CancellationTokenSource.CreateLinkedTokenSource(token);
+            var owner = CancellationTokenSource.CreateLinkedTokenSource(token, RoomRequestToken);
             playUrlCts = owner;
             var requestVersion = playUrlRequestVersion;
             var loadVersion = roomLoadVersion;
@@ -81,11 +102,11 @@ namespace AllLive.UWP.ViewModels
                 List<LivePlayQuality> refreshedQualities = null;
                 if (refreshRoom)
                 {
-                    roomDetail = await site.GetRoomDetail(roomId);
+                    roomDetail = await site.GetRoomDetail(roomId, owner.Token);
                     if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site)) return false;
                     // Only the dedicated, validated status query may declare a room offline.
                     if (roomDetail == null || !roomDetail.Status) return false;
-                    refreshedQualities = await site.GetPlayQuality(roomDetail);
+                    refreshedQualities = await site.GetPlayQuality(roomDetail, owner.Token);
                     if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site)) return false;
                     if (site.Name == "虎牙直播")
                         refreshedQualities = refreshedQualities?.Where(x => x != null && x.Quality?.Contains("HDR") != true).ToList();
@@ -94,7 +115,7 @@ namespace AllLive.UWP.ViewModels
                 }
                 if (quality == null) return false;
 
-                var data = await site.GetPlayUrls(roomDetail, quality);
+                var data = await site.GetPlayUrls(roomDetail, quality, owner.Token);
                 if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site)) return false;
                 if (data == null || data.Count == 0)
                 {

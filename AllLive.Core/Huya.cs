@@ -2,6 +2,7 @@
 using AllLive.Core.Models;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using AllLive.Core.Danmaku;
 using AllLive.Core.Helper;
@@ -26,7 +27,7 @@ namespace AllLive.Core
         public ILiveDanmaku GetDanmaku() => new HuyaDanmaku();
         TupHttpHelper tupHttpHelper = new TupHttpHelper("http://wup.huya.com", "liveui");
         TupHttpHelper wupuiTupHttpHelper = new TupHttpHelper("http://wup.huya.com", "wupui");
-        public async Task<List<LiveCategory>> GetCategores()
+        public async Task<List<LiveCategory>> GetCategores(CancellationToken cancellationToken = default(CancellationToken))
         {
             List<LiveCategory> categories = new List<LiveCategory>() {
                 new LiveCategory() {
@@ -48,15 +49,15 @@ namespace AllLive.Core
             };
             foreach (var item in categories)
             {
-                item.Children = await GetSubCategories(item.ID);
+                item.Children = await GetSubCategories(item.ID, cancellationToken: cancellationToken);
             }
             return categories;
         }
 
-        private async Task<List<LiveSubCategory>> GetSubCategories(string id)
+        private async Task<List<LiveSubCategory>> GetSubCategories(string id, CancellationToken cancellationToken = default(CancellationToken))
         {
             List<LiveSubCategory> subs = new List<LiveSubCategory>();
-            var result = await HttpUtil.GetString($"https://live.cdn.huya.com/liveconfig/game/bussLive?bussType={id}");
+            var result = await HttpUtil.GetString($"https://live.cdn.huya.com/liveconfig/game/bussLive?bussType={id}", cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             foreach (var item in obj["data"])
             {
@@ -70,14 +71,14 @@ namespace AllLive.Core
             }
             return subs;
         }
-        public async Task<LiveCategoryResult> GetCategoryRooms(LiveSubCategory category, int page = 1)
+        public async Task<LiveCategoryResult> GetCategoryRooms(LiveSubCategory category, int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             LiveCategoryResult categoryResult = new LiveCategoryResult()
             {
                 Rooms = new List<LiveRoomItem>(),
 
             };
-            var result = await HttpUtil.GetString($"https://www.huya.com/cache.php?m=LiveList&do=getLiveListByPage&tagAll=0&gameId={category.ID}&page={page}");
+            var result = await HttpUtil.GetString($"https://www.huya.com/cache.php?m=LiveList&do=getLiveListByPage&tagAll=0&gameId={category.ID}&page={page}", cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             foreach (var item in obj["data"]["datas"])
             {
@@ -103,14 +104,14 @@ namespace AllLive.Core
             categoryResult.HasMore = obj["data"]["page"].ToInt32() < obj["data"]["totalPage"].ToInt32();
             return categoryResult;
         }
-        public async Task<LiveCategoryResult> GetRecommendRooms(int page = 1)
+        public async Task<LiveCategoryResult> GetRecommendRooms(int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             LiveCategoryResult categoryResult = new LiveCategoryResult()
             {
                 Rooms = new List<LiveRoomItem>(),
 
             };
-            var result = await HttpUtil.GetString($"https://www.huya.com/cache.php?m=LiveList&do=getLiveListByPage&tagAll=0&page={page}");
+            var result = await HttpUtil.GetString($"https://www.huya.com/cache.php?m=LiveList&do=getLiveListByPage&tagAll=0&page={page}", cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
 
             foreach (var item in obj["data"]["datas"])
@@ -137,9 +138,9 @@ namespace AllLive.Core
             categoryResult.HasMore = obj["data"]["page"].ToInt32() < obj["data"]["totalPage"].ToInt32();
             return categoryResult;
         }
-        public async Task<LiveRoomDetail> GetRoomDetail(object roomId)
+        public async Task<LiveRoomDetail> GetRoomDetail(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var jsonObj = await GetRoomInfo(roomId);
+            var jsonObj = await GetRoomInfo(roomId, cancellationToken: cancellationToken);
             var topSid = jsonObj["topSid"].ToInt64();
             var subSid = jsonObj["subSid"].ToInt64();
 
@@ -149,7 +150,7 @@ namespace AllLive.Core
                 title = jsonObj["roomInfo"]["tLiveInfo"]["sRoomName"].ToString();
             }
 
-            var uid = await GetUid();
+            var uid = await GetUid(cancellationToken: cancellationToken);
             var uuid = GetUuid();
             CoreDebug.Log(() => $"[Huya] GetRoomDetail roomId={roomId} uid={uid} uuid={uuid}");
             var huyaLines = new List<HuyaLineModel>();
@@ -256,7 +257,7 @@ namespace AllLive.Core
             };
         }
 
-        public async Task<LiveAudienceMetrics> GetDeferredAudienceMetrics(LiveRoomDetail roomDetail)
+        public async Task<LiveAudienceMetrics> GetDeferredAudienceMetrics(LiveRoomDetail roomDetail, CancellationToken cancellationToken = default(CancellationToken))
         {
             var urlData = roomDetail?.Data as HuyaUrlDataModel;
             if (roomDetail == null || !roomDetail.Status || urlData == null)
@@ -268,7 +269,7 @@ namespace AllLive.Core
             }
 
             CoreDebug.Log(() => $"[Huya] 首次Playing后开始请求真实人数 roomId={roomDetail.RoomID} pid={urlData.PresenterUid}");
-            var viewerCount = await GetViewerCount(urlData.PresenterUid, urlData.Uid);
+            var viewerCount = await GetViewerCount(urlData.PresenterUid, urlData.Uid, cancellationToken: cancellationToken);
             if (viewerCount.HasValue)
             {
                 return new LiveAudienceMetrics()
@@ -279,7 +280,7 @@ namespace AllLive.Core
                 };
             }
 
-            var vipCount = await GetVipCount(urlData.PresenterUid, urlData.Uid);
+            var vipCount = await GetVipCount(urlData.PresenterUid, urlData.Uid, cancellationToken: cancellationToken);
             return new LiveAudienceMetrics()
             {
                 VipCount = vipCount,
@@ -288,7 +289,7 @@ namespace AllLive.Core
             };
         }
 
-        private async Task<long?> GetViewerCount(long presenterUid, string uid)
+        private async Task<long?> GetViewerCount(long presenterUid, string uid, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (presenterUid <= 0)
             {
@@ -306,7 +307,7 @@ namespace AllLive.Core
                 }
             };
 
-            var resp = await wupuiTupHttpHelper.GetAsync(req, "getUserOnlineRank", new GetUserOnlineRankRsp());
+            var resp = await wupuiTupHttpHelper.GetAsync(req, "getUserOnlineRank", new GetUserOnlineRankRsp(), cancellationToken);
             CoreDebug.Log(() => $"[Huya] UserOnlineRank pid={presenterUid} iTotal={resp?.iTotal} msg={resp?.sMsg}");
             if (resp != null && resp.iTotal > 0)
             {
@@ -316,7 +317,7 @@ namespace AllLive.Core
             return null;
         }
 
-        private async Task<long?> GetVipCount(long presenterUid, string uid)
+        private async Task<long?> GetVipCount(long presenterUid, string uid, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (presenterUid <= 0)
             {
@@ -325,16 +326,16 @@ namespace AllLive.Core
             }
 
             var userUid = uid.ToInt64();
-            var webResult = await GetVipCount(presenterUid, userUid, "webh5&0&websocket");
+            var webResult = await GetVipCount(presenterUid, userUid, "webh5&0&websocket", cancellationToken: cancellationToken);
             if (webResult.HasValue)
             {
                 return webResult;
             }
 
-            return await GetVipCount(presenterUid, userUid, "pc_exe&7060000&official");
+            return await GetVipCount(presenterUid, userUid, "pc_exe&7060000&official", cancellationToken: cancellationToken);
         }
 
-        private async Task<long?> GetVipCount(long presenterUid, long userUid, string huyaUa)
+        private async Task<long?> GetVipCount(long presenterUid, long userUid, string huyaUa, CancellationToken cancellationToken = default(CancellationToken))
         {
             var req = new VipListStatReq()
             {
@@ -346,7 +347,7 @@ namespace AllLive.Core
                 }
             };
 
-            var resp = await tupHttpHelper.GetAsync(req, "getVipBarListStat", new VipBarListStatInfo());
+            var resp = await tupHttpHelper.GetAsync(req, "getVipBarListStat", new VipBarListStatInfo(), cancellationToken: cancellationToken);
             var total = 0;
             if (resp != null)
             {
@@ -393,11 +394,11 @@ namespace AllLive.Core
             return 0;
         }
 
-        private async Task<JToken> GetRoomInfo(object roomId)
+        private async Task<JToken> GetRoomInfo(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             Dictionary<string, string> headers = new Dictionary<string, string>();
             headers.Add("user-agent", "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36 Edg/117.0.0.0");
-            var result = await HttpUtil.GetString($"https://m.huya.com/{roomId}", headers);
+            var result = await HttpUtil.GetString($"https://m.huya.com/{roomId}", headers, cancellationToken: cancellationToken);
             var jsonStr = Regex.Match(result, @"window\.HNF_GLOBAL_INIT.=.\{[\s\S]*?\}[\s\S]*?</script>", RegexOptions.Singleline).Groups[0].Value;
             jsonStr = Regex.Replace(jsonStr, @"window\.HNF_GLOBAL_INIT.=.", "").Replace("</script>", "");
             jsonStr = Regex.Replace(jsonStr, @"function.*?\(.*?\).\{[\s\S]*?\}", "\"\"");
@@ -417,16 +418,16 @@ namespace AllLive.Core
         {
             return (long)((DateTimeOffset.Now.ToUnixTimeMilliseconds() % 10000000000 * 1000 + (1000 * new Random().Next(0, int.MaxValue))) % uint.MaxValue);
         }
-        private async Task<string> GetUid()
+        private async Task<string> GetUid(CancellationToken cancellationToken = default(CancellationToken))
         {
             var data = "{\"appId\":5002,\"byPass\":3,\"context\":\"\",\"version\":\"2.4\",\"data\":{}}";
-            var result = await HttpUtil.PostJsonString($"https://udblgn.huya.com/web/anonymousLogin", data);
+            var result = await HttpUtil.PostJsonString($"https://udblgn.huya.com/web/anonymousLogin", data, cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
 
             return obj["data"]["uid"].ToString();
         }
 
-        public async Task<LiveSearchResult> Search(string keyword, int page = 1)
+        public async Task<LiveSearchResult> Search(string keyword, int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             LiveSearchResult searchResult = new LiveSearchResult()
             {
@@ -439,7 +440,7 @@ namespace AllLive.Core
                 { "referer", "https://www.huya.com/"}
             };
 
-            var result = await HttpUtil.GetUtf8String($"https://search.cdn.huya.com/?m=Search&do=getSearchContent&q={Uri.EscapeDataString(keyword)}&uid=0&v=4&typ=-5&livestate=0&rows=20&start={(page - 1) * 20}", headers);
+            var result = await HttpUtil.GetUtf8String($"https://search.cdn.huya.com/?m=Search&do=getSearchContent&q={Uri.EscapeDataString(keyword)}&uid=0&v=4&typ=-5&livestate=0&rows=20&start={(page - 1) * 20}", headers, cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
 
             foreach (var item in obj["response"]["3"]["docs"])
@@ -461,7 +462,7 @@ namespace AllLive.Core
             searchResult.HasMore = obj["response"]["3"]["numFound"].ToInt32() > (page * 20);
             return searchResult;
         }
-        public Task<List<LivePlayQuality>> GetPlayQuality(LiveRoomDetail roomDetail)
+        public Task<List<LivePlayQuality>> GetPlayQuality(LiveRoomDetail roomDetail, CancellationToken cancellationToken = default(CancellationToken))
         {
             List<LivePlayQuality> qualities = new List<LivePlayQuality>();
             var urlData = roomDetail.Data as HuyaUrlDataModel;
@@ -669,13 +670,13 @@ namespace AllLive.Core
             return high | rotatedLow;
         }
 
-        public async Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn)
+        public async Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn, CancellationToken cancellationToken = default(CancellationToken))
         {
             var data = qn.Data as HuyaQualityData;
             var urls = new List<string>();
             foreach (var line in data.Lines)
             {
-                var wupUrl = await GetRealUrl(line, data.BitRate);
+                var wupUrl = await GetRealUrl(line, data.BitRate, cancellationToken: cancellationToken);
                 if (!string.IsNullOrEmpty(wupUrl))
                 {
                     urls.Add(wupUrl);
@@ -712,10 +713,10 @@ namespace AllLive.Core
             return url;
         }
 
-        private async Task<string> GetRealUrl(HuyaLineModel line, int bitrate)
+        private async Task<string> GetRealUrl(HuyaLineModel line, int bitrate, CancellationToken cancellationToken = default(CancellationToken))
         {
             CoreDebug.Log(() => $"[Huya] GetRealUrl line={line.Line} stream={line.StreamName} cdnType={line.CdnType} bitrate={bitrate}");
-            var token = await GetCdnTokenInfoEx(line);
+            var token = await GetCdnTokenInfoEx(line, cancellationToken: cancellationToken);
             if (string.IsNullOrEmpty(token))
             {
                 CoreDebug.Log(() => "[Huya] TokenEx为空，回退到旧token生成");
@@ -731,7 +732,7 @@ namespace AllLive.Core
             return url;
         }
 
-        private async Task<string> GetCdnTokenInfoEx(HuyaLineModel line)
+        private async Task<string> GetCdnTokenInfoEx(HuyaLineModel line, CancellationToken cancellationToken = default(CancellationToken))
         {
             var req = new HYGetCdnTokenExReq();
             req.sStreamName = line.StreamName;
@@ -742,7 +743,7 @@ namespace AllLive.Core
             {
                 sHuYaUA = "pc_exe&7060000&official"
             };
-            var resp = await tupHttpHelper.GetAsync(req, "getCdnTokenInfoEx", new HYGetCdnTokenExResp());
+            var resp = await tupHttpHelper.GetAsync(req, "getCdnTokenInfoEx", new HYGetCdnTokenExResp(), cancellationToken: cancellationToken);
             var token = resp?.sFlvToken ?? "";
             CoreDebug.Log(() => $"[Huya] TokenExResp len={token.Length} exp={resp?.iExpireTime}");
             if (!string.IsNullOrEmpty(token))
@@ -765,17 +766,17 @@ namespace AllLive.Core
             return token;
         }
 
-        public async Task<bool> GetLiveStatus(object roomId)
+        public async Task<bool> GetLiveStatus(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             // 优先走 mp.huya.com 轻量 JSON 接口（data.liveStatus 文本状态，避免整页 HTML 正则解析）；
             // 接口不可用或状态未知时回退到 m.huya.com 页面解析。
-            var cacheLive = await TryGetLiveStatusFromCacheAsync(roomId);
+            var cacheLive = await TryGetLiveStatusFromCacheAsync(roomId, cancellationToken: cancellationToken);
             if (cacheLive.HasValue)
             {
                 return cacheLive.Value;
             }
 
-            var roomInfo = await GetRoomInfo(roomId.ToString());
+            var roomInfo = await GetRoomInfo(roomId.ToString(), cancellationToken: cancellationToken);
             var statusToken = roomInfo?["roomInfo"]?["eLiveStatus"];
             // eLiveStatus：2=直播中；0/1=未开播；3=回放/轮播（与斗鱼 videoLoop 一致，按未开播处理）。
             var live = LiveStatusParser.IsLive(statusToken, 2, 0, 1, 3);
@@ -785,7 +786,7 @@ namespace AllLive.Core
 
         // 虎牙 mp.huya.com 轻量状态接口：liveStatus 文本（ON=直播中，REPLAY=回放/轮播，OFF 等=未开播）。
         // 返回 null 表示接口不可用或状态未知，由调用方回退 HTML 页面解析；请求异常一律吞掉并回退。
-        private async Task<bool?> TryGetLiveStatusFromCacheAsync(object roomId)
+        private async Task<bool?> TryGetLiveStatusFromCacheAsync(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             try
             {
@@ -796,7 +797,7 @@ namespace AllLive.Core
                     { "referer", "https://www.huya.com/" },
                     { "accept", "application/json, text/plain, */*" },
                 };
-                var result = await HttpUtil.GetString($"https://mp.huya.com/cache.php?m=Live&do=profileRoom&roomid={roomId}&showSecret=1", headers);
+                var result = await HttpUtil.GetString($"https://mp.huya.com/cache.php?m=Live&do=profileRoom&roomid={roomId}&showSecret=1", headers, cancellationToken: cancellationToken);
                 var obj = JObject.Parse(result);
                 var statusCode = obj["status"]?.ToInt32();
                 if (statusCode != 200)
@@ -820,13 +821,13 @@ namespace AllLive.Core
                 CoreDebug.Log(() => $"[Huya] GetLiveStatus roomId={roomId} source=cache liveStatus={liveStatus} => {live.Value}");
                 return live;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Huya] GetLiveStatus(cache)请求失败 roomId={roomId} err={ex.GetType().Name}: {ex.Message}，回退HTML");
                 return null;
             }
         }
-        public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
+        public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult(new List<LiveSuperChatMessage>());
         }

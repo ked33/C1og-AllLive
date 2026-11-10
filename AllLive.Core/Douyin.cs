@@ -12,6 +12,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 using System.Xml.Linq;
@@ -50,7 +51,8 @@ namespace AllLive.Core
             TimeSpan.FromSeconds(30),
         };
 
-        Dictionary<string, string> headers = new Dictionary<string, string>
+        private readonly object headersSync = new object();
+        private readonly Dictionary<string, string> headers = new Dictionary<string, string>
         {
             { "User-Agent", USER_AGENT },
             { "Referer", REFERER },
@@ -62,26 +64,37 @@ namespace AllLive.Core
         // web_rid ↔ 19 位 room_id 的会话内映射：reflow/info（免签名）第二通道需要 19 位 room_id。
         private readonly ConcurrentDictionary<string, string> _webRidRoomIds = new ConcurrentDictionary<string, string>();
 
-        private async Task<Dictionary<string, string>> GetRequestHeaders()
+        private async Task<Dictionary<string, string>> GetRequestHeaders(CancellationToken cancellationToken = default(CancellationToken))
         {
+            var requestHeaders = SnapshotRequestHeaders();
             var manualCookie = CoreConfig.GetDouyinCookie();
-            if (!string.IsNullOrWhiteSpace(manualCookie))
+            if (string.IsNullOrWhiteSpace(manualCookie)
+                && (requestHeaders.ContainsKey("Cookie") || requestHeaders.ContainsKey("cookie")))
             {
-                headers["Cookie"] = await ResolveCookieAsync();
-                return headers;
+                return requestHeaders;
             }
-            if (headers.ContainsKey("Cookie") || headers.ContainsKey("cookie"))
+            var cookie = await ResolveCookieAsync(cancellationToken: cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            requestHeaders["Cookie"] = cookie;
+            lock (headersSync)
             {
-                return headers;
+                headers["Cookie"] = cookie;
             }
-            headers["Cookie"] = await ResolveCookieAsync();
-            return headers;
+            return requestHeaders;
         }
 
-        public async Task<List<LiveCategory>> GetCategores()
+        private Dictionary<string, string> SnapshotRequestHeaders()
+        {
+            lock (headersSync)
+            {
+                return new Dictionary<string, string>(headers);
+            }
+        }
+
+        public async Task<List<LiveCategory>> GetCategores(CancellationToken cancellationToken = default(CancellationToken))
         {
             List<LiveCategory> categories = new List<LiveCategory>();
-            var resp = await HttpUtil.GetString("https://live.douyin.com/", await GetRequestHeaders());
+            var resp = await HttpUtil.GetString("https://live.douyin.com/", await GetRequestHeaders(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
 
             var renderData = ExtractCategoryRenderData(resp);
             if (string.IsNullOrEmpty(renderData))
@@ -93,7 +106,7 @@ namespace AllLive.Core
             {
                 renderDataJson = JObject.Parse(renderData);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Douyin] 分类数据解析失败: {ex.GetType().FullName}: {ex.Message}");
                 throw;
@@ -177,7 +190,7 @@ namespace AllLive.Core
             }
         }
 
-        public async Task<LiveCategoryResult> GetCategoryRooms(LiveSubCategory category, int page = 1)
+        public async Task<LiveCategoryResult> GetCategoryRooms(LiveSubCategory category, int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             var ids = category.ID.Split(',');
             var partitionId = ids[0];
@@ -205,10 +218,10 @@ namespace AllLive.Core
                 };
             var url = $"https://live.douyin.com/webcast/web/partition/detail/room/v2/?{Utils.BuildQueryString(reqParams)}";
 
-            var requestUrl = await GetABougs(url);
+            var requestUrl = await GetABougs(url, cancellationToken: cancellationToken);
             var resp = await HttpUtil.GetString(requestUrl,
-                headers: await GetRequestHeaders()
-            );
+                headers: await GetRequestHeaders(cancellationToken: cancellationToken),
+                cancellationToken: cancellationToken);
             var json = JObject.Parse(resp);
             var hasMore = (json["data"]["data"] as JArray).Count >= 15;
             var items = new List<LiveRoomItem>();
@@ -230,7 +243,7 @@ namespace AllLive.Core
                 Rooms = items
             };
         }
-        public async Task<LiveCategoryResult> GetRecommendRooms(int page = 1)
+        public async Task<LiveCategoryResult> GetRecommendRooms(int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             var reqParams = new Dictionary<string, string> {
                     {"aid","6383"},
@@ -255,10 +268,10 @@ namespace AllLive.Core
                 };
             var url = $"https://live.douyin.com/webcast/web/partition/detail/room/v2/?{Utils.BuildQueryString(reqParams)}";
 
-            var requestUrl = await GetABougs(url);
+            var requestUrl = await GetABougs(url, cancellationToken: cancellationToken);
             var resp = await HttpUtil.GetString(requestUrl,
-                headers: await GetRequestHeaders()
-            );
+                headers: await GetRequestHeaders(cancellationToken: cancellationToken),
+                cancellationToken: cancellationToken);
 
             var json = JObject.Parse(resp);
             var hasMore = (json["data"]["data"] as JArray).Count >= 15;
@@ -281,7 +294,7 @@ namespace AllLive.Core
                 Rooms = items
             };
         }
-        public async Task<LiveRoomDetail> GetRoomDetail(object roomId)
+        public async Task<LiveRoomDetail> GetRoomDetail(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             // 有两种roomId，一种是webRid，一种是roomId
             // roomId是一次性的，用户每次重新开播都会生成一个新的roomId
@@ -292,10 +305,10 @@ namespace AllLive.Core
             if (roomId.ToString().Length <= 16)
             {
                 var webRid = roomId as string;
-                return await GetRoomDetailByWebRid(webRid);
+                return await GetRoomDetailByWebRid(webRid, cancellationToken: cancellationToken);
             }
 
-            return await GetRoomDetailByRoomID(roomId as string);
+            return await GetRoomDetailByRoomID(roomId as string, cancellationToken: cancellationToken);
         }
         /// <summary>
         /// 通过RoomId获取直播间详情
@@ -305,9 +318,9 @@ namespace AllLive.Core
         /// roomId一般长度为19位，例如：7376429659866598196
         /// </param>
         /// <returns></returns>
-        private async Task<LiveRoomDetail> GetRoomDetailByRoomID(string roomId)
+        private async Task<LiveRoomDetail> GetRoomDetailByRoomID(string roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var roomData = await GetRoomDataByRoomID(roomId);
+            var roomData = await GetRoomDataByRoomID(roomId, cancellationToken: cancellationToken);
             // 通过房间信息获取WebRid
             var webRid = roomData["data"]["room"]["owner"]["web_rid"].ToString();
             // 读取用户唯一ID，用于弹幕连接
@@ -321,12 +334,12 @@ namespace AllLive.Core
             // 所以如果roomId对应的直播间状态不是直播中，就通过webRid获取直播间信息
             if (status == 4)
             {
-                var result = await GetRoomDetailByWebRid(webRid);
+                var result = await GetRoomDetailByWebRid(webRid, cancellationToken: cancellationToken);
                 return result;
             }
             var roomStatus = status == 2;
             // 主要是为了获取cookie,用于弹幕websocket连接
-            var headers = await GetRequestHeaders();
+            var headers = await GetRequestHeaders(cancellationToken: cancellationToken);
             return new LiveRoomDetail()
             {
                 RoomID = webRid,
@@ -363,7 +376,7 @@ namespace AllLive.Core
         /// webRid一般长度为11-12位，例如：416144012050
         /// </param>
         /// <returns></returns>
-        private async Task<LiveRoomDetail> GetRoomDetailByWebRid(string webRid)
+        private async Task<LiveRoomDetail> GetRoomDetailByWebRid(string webRid, CancellationToken cancellationToken = default(CancellationToken))
         {
             Exception lastBlockedException = null;
             var totalAttempts = RoomDetailRetryDelays.Length + 1;
@@ -375,7 +388,7 @@ namespace AllLive.Core
                     {
                         CoreDebug.Log(() => $"[Douyin] 房间详情重试开始 webRid={webRid} attempt={attempt}/{totalAttempts}");
                     }
-                    return await GetRoomDetailByWebRidOnce(webRid);
+                    return await GetRoomDetailByWebRidOnce(webRid, cancellationToken: cancellationToken);
                 }
                 catch (DouyinRoomDataBlockedException ex)
                 {
@@ -387,18 +400,18 @@ namespace AllLive.Core
 
                     var delay = RoomDetailRetryDelays[attempt - 1];
                     CoreDebug.Log(() => $"[Douyin] 房间详情被风控/验证码拦截，准备重试 webRid={webRid} attempt={attempt}/{totalAttempts} delayMs={(int)delay.TotalMilliseconds} err={ex.Message}");
-                    await Task.Delay(delay);
+                    await Task.Delay(delay, cancellationToken: cancellationToken);
                 }
             }
 
             throw new DouyinRoomDataBlockedException($"已重试{totalAttempts}次仍无法读取直播间数据", lastBlockedException);
         }
 
-        private async Task<LiveRoomDetail> GetRoomDetailByWebRidOnce(string webRid)
+        private async Task<LiveRoomDetail> GetRoomDetailByWebRidOnce(string webRid, CancellationToken cancellationToken = default(CancellationToken))
         {
             try
             {
-                var result = await GetRoomDetailByWebRidApi(webRid);
+                var result = await GetRoomDetailByWebRidApi(webRid, cancellationToken: cancellationToken);
                 return result;
             }
             catch (DouyinRoomDataBlockedException)
@@ -406,18 +419,18 @@ namespace AllLive.Core
                 // 命中风控（444/验证码）时不再回退HTML：暂停期结束后由重试循环再次尝试，避免暂停期重复请求加重风控。
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Douyin] GetRoomDetailByWebRidApi失败 webRid={webRid} err={ex.GetType().FullName}: {ex.Message}");
             }
-            return await GetRoomDetailByWebRidHtml(webRid);
+            return await GetRoomDetailByWebRidHtml(webRid, cancellationToken: cancellationToken);
         }
 
-        private async Task<LiveRoomDetail> GetRoomDetailByWebRidApi(string webRid)
+        private async Task<LiveRoomDetail> GetRoomDetailByWebRidApi(string webRid, CancellationToken cancellationToken = default(CancellationToken))
         {
             // 读取房间信息
             //var data = await _getRoomDataByApi(webRid);
-            var data = await GetRoomDataApi(webRid);
+            var data = await GetRoomDataApi(webRid, cancellationToken: cancellationToken);
             var roomData = data["data"][0];
 
             var userData = data["user"];
@@ -433,7 +446,7 @@ namespace AllLive.Core
             var roomStatus = roomData["status"].ToObject<int>() == 2;
 
             // 主要是为了获取cookie,用于弹幕websocket连接
-            var headers = await GetRequestHeaders();
+            var headers = await GetRequestHeaders(cancellationToken: cancellationToken);
             return new LiveRoomDetail()
             {
                 RoomID = webRid,
@@ -466,9 +479,9 @@ namespace AllLive.Core
 
         }
 
-        private async Task<LiveRoomDetail> GetRoomDetailByWebRidHtml(string webRid)
+        private async Task<LiveRoomDetail> GetRoomDetailByWebRidHtml(string webRid, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var roomData = await GetRoomDataHtml(webRid);
+            var roomData = await GetRoomDataHtml(webRid, cancellationToken: cancellationToken);
             var roomId = roomData["roomStore"]["roomInfo"]["room"]["id_str"].ToString();
             var userUniqueId =
                 roomData["userStore"]["odin"]["user_unique_id"].ToString();
@@ -479,7 +492,7 @@ namespace AllLive.Core
             var roomStatus = room["status"].ToObject<int>() == 2;
 
             // 主要是为了获取cookie,用于弹幕websocket连接
-            var headers = await GetRequestHeaders();
+            var headers = await GetRequestHeaders(cancellationToken: cancellationToken);
             return new LiveRoomDetail()
             {
                 RoomID = webRid,
@@ -539,9 +552,9 @@ namespace AllLive.Core
         /// </summary>
         /// <param name="webRid">直播间RID</param>
         /// <returns></returns>
-        private async Task<string> GetWebCookie(string webRid)
+        private async Task<string> GetWebCookie(string webRid, CancellationToken cancellationToken = default(CancellationToken))
         {
-            return await ResolveCookieAsync(webRid);
+            return await ResolveCookieAsync(webRid, cancellationToken: cancellationToken);
         }
 
         /// <summary>
@@ -550,16 +563,16 @@ namespace AllLive.Core
         /// </summary>
         /// <param name="webRid"></param>
         /// <returns></returns>
-        private async Task<string> GetUserUniqueId(string webRid)
+        private async Task<string> GetUserUniqueId(string webRid, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var webInfo = await GetRoomDataHtml(webRid);
+            var webInfo = await GetRoomDataHtml(webRid, cancellationToken: cancellationToken);
             return webInfo["userStore"]["odin"]["user_unique_id"].ToString();
         }
 
-        private async Task<JToken> GetRoomDataHtml(string webRid)
+        private async Task<JToken> GetRoomDataHtml(string webRid, CancellationToken cancellationToken = default(CancellationToken))
         {
-            await DouyinRequestGate.WaitAsync();
-            var dyCookie = await GetWebCookie(webRid);
+            await DouyinRequestGate.WaitAsync(cancellationToken: cancellationToken);
+            var dyCookie = await GetWebCookie(webRid, cancellationToken: cancellationToken);
             CoreDebug.Log(() => $"[Douyin] GetRoomDataHtml webRid={webRid} cookieLen={dyCookie?.Length ?? 0}");
             using (var response = await HttpUtil.Get($"https://live.douyin.com/{webRid}",
                 headers: new Dictionary<string, string>
@@ -571,8 +584,8 @@ namespace AllLive.Core
                     { "Accept-Language", ACCEPT_LANGUAGE },
                     { "Cookie", dyCookie }
                 },
-                ensureSuccess: false
-            ))
+                ensureSuccess: false,
+                cancellationToken: cancellationToken))
             {
                 var resp = await response.Content.ReadAsStringAsync();
                 var statusCode = (int)response.StatusCode;
@@ -609,9 +622,9 @@ namespace AllLive.Core
             }
         }
 
-        private async Task<JToken> GetRoomDataApi(string webRid)
+        private async Task<JToken> GetRoomDataApi(string webRid, CancellationToken cancellationToken = default(CancellationToken))
         {
-            await DouyinRequestGate.WaitAsync();
+            await DouyinRequestGate.WaitAsync(cancellationToken: cancellationToken);
             var reqParams = new Dictionary<string, string> {
                     {"aid","6383" },
                     {"app_name","douyin_web" },
@@ -634,12 +647,12 @@ namespace AllLive.Core
                 };
             var url = $"https://live.douyin.com/webcast/room/web/enter/?{Utils.BuildQueryString(reqParams)}";
 
-            var requestUrl = await GetABougs(url);
+            var requestUrl = await GetABougs(url, cancellationToken: cancellationToken);
             string resp;
             using (var response = await HttpUtil.Get(requestUrl,
-                headers: await GetRequestHeaders(),
-                ensureSuccess: false
-            ))
+                headers: await GetRequestHeaders(cancellationToken: cancellationToken),
+                ensureSuccess: false,
+                cancellationToken: cancellationToken))
             {
                 resp = await response.Content.ReadAsStringAsync();
                 var statusCode = (int)response.StatusCode;
@@ -660,12 +673,12 @@ namespace AllLive.Core
             return JObject.Parse(resp)["data"];
         }
 
-        private async Task<JToken> GetRoomDataByRoomID(string roomId)
+        private async Task<JToken> GetRoomDataByRoomID(string roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             // reflow/info 属于抖音直播间数据请求，同样服从风控暂停闸门。
-            await DouyinRequestGate.WaitAsync();
+            await DouyinRequestGate.WaitAsync(cancellationToken: cancellationToken);
             var resp = await HttpUtil.GetString($"https://webcast.amemv.com/webcast/room/reflow/info/",
-                headers: await GetRequestHeaders(),
+                headers: await GetRequestHeaders(cancellationToken: cancellationToken),
                 queryParameters: new Dictionary<string, string>
                 {
                     {"type_id","0" },
@@ -674,12 +687,12 @@ namespace AllLive.Core
                     {"sec_user_id","" },
                     {"version_code","99.99.99" },
                     {"app_id","6383" },
-                }
-            );
+                },
+                cancellationToken: cancellationToken);
             return JObject.Parse(resp);
         }
 
-        public Task<List<LivePlayQuality>> GetPlayQuality(LiveRoomDetail roomDetail)
+        public Task<List<LivePlayQuality>> GetPlayQuality(LiveRoomDetail roomDetail, CancellationToken cancellationToken = default(CancellationToken))
         {
             List<LivePlayQuality> qualities = new List<LivePlayQuality>();
             if (roomDetail.Data == null)
@@ -740,7 +753,7 @@ namespace AllLive.Core
             return Task.FromResult(qualities);
         }
 
-        public Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn)
+        public Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn, CancellationToken cancellationToken = default(CancellationToken))
         {
             var urls = qn?.Data as List<string> ?? new List<string>();
             CoreDebug.Log(() => $"[Douyin] 播放URL选择 roomId={roomDetail?.RoomID} quality={qn?.Quality} total={urls.Count} flv={urls.Count(IsFlvUrl)} hls={urls.Count(IsHlsUrl)} first={BuildDouyinUrlBrief(urls.FirstOrDefault())}");
@@ -1107,7 +1120,7 @@ namespace AllLive.Core
             return url.IndexOf(".m3u8", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        public async Task<LiveSearchResult> Search(string keyword, int page = 1)
+        public async Task<LiveSearchResult> Search(string keyword, int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             var query = new Dictionary<string, string>
             {
@@ -1147,7 +1160,7 @@ namespace AllLive.Core
             };
 
             var requestUrl = $"https://www.douyin.com/aweme/v1/web/live/search/?{Utils.BuildQueryString(query)}";
-            var cookie = (await GetRequestHeaders())["Cookie"];
+            var cookie = (await GetRequestHeaders(cancellationToken: cancellationToken))["Cookie"];
             var headers = new Dictionary<string, string>
             {
                 { "accept", "application/json, text/plain, */*" },
@@ -1163,7 +1176,7 @@ namespace AllLive.Core
                 { "sec-fetch-site", "same-origin" },
                 { "user-agent", USER_AGENT }
             };
-            var resp = await HttpUtil.GetString(requestUrl, headers);
+            var resp = await HttpUtil.GetString(requestUrl, headers, cancellationToken: cancellationToken);
             var json = JObject.Parse(resp);
             var items = new List<LiveRoomItem>();
             foreach (var item in json["data"])
@@ -1185,7 +1198,7 @@ namespace AllLive.Core
                 Rooms = items
             };
         }
-        public async Task<bool> GetLiveStatus(object roomId)
+        public async Task<bool> GetLiveStatus(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             var id = roomId?.ToString();
             if (string.IsNullOrWhiteSpace(id))
@@ -1194,10 +1207,10 @@ namespace AllLive.Core
             }
             if (id.Length <= 16)
             {
-                return await GetLiveStatusByWebRid(id);
+                return await GetLiveStatusByWebRid(id, cancellationToken: cancellationToken);
             }
 
-            var roomData = await GetRoomDataByRoomID(id);
+            var roomData = await GetRoomDataByRoomID(id, cancellationToken: cancellationToken);
             var room = roomData?["data"]?["room"];
             var status = LiveStatusParser.ReadRequiredNumber(room?["status"]);
             var webRid = TryGetRoomWebRid(room);
@@ -1206,7 +1219,7 @@ namespace AllLive.Core
             {
                 if (!string.IsNullOrWhiteSpace(webRid))
                 {
-                    return await GetLiveStatusByWebRid(webRid);
+                    return await GetLiveStatusByWebRid(webRid, cancellationToken: cancellationToken);
                 }
             }
             return LiveStatusParser.IsLive(room?["status"], 2, 4);
@@ -1259,11 +1272,11 @@ namespace AllLive.Core
             return owner["web_rid"]?.ToString();
         }
 
-        private async Task<bool> GetLiveStatusByWebRid(string webRid)
+        private async Task<bool> GetLiveStatusByWebRid(string webRid, CancellationToken cancellationToken = default(CancellationToken))
         {
             try
             {
-                var data = await GetRoomDataApi(webRid);
+                var data = await GetRoomDataApi(webRid, cancellationToken: cancellationToken);
                 var roomData = data?["data"]?[0];
                 var statusToken = roomData?["status"];
                 RememberWebRidRoomId(webRid, GetRoomIdFromRoomToken(roomData));
@@ -1276,7 +1289,7 @@ namespace AllLive.Core
                 // 命中风控时不回退HTML（暂停期请求会再次被拦），本轮直接失败，下一轮刷新重试。
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Douyin] GetLiveStatusByWebRidApi失败 webRid={webRid} err={ex.GetType().FullName}: {ex.Message}");
             }
@@ -1287,7 +1300,7 @@ namespace AllLive.Core
             {
                 try
                 {
-                    var reflowData = await GetRoomDataByRoomID(reflowRoomId);
+                    var reflowData = await GetRoomDataByRoomID(reflowRoomId, cancellationToken: cancellationToken);
                     var reflowRoom = reflowData?["data"]?["room"];
                     var reflowStatus = LiveStatusParser.ReadRequiredNumber(reflowRoom?["status"]);
                     if (reflowStatus == 2)
@@ -1298,7 +1311,7 @@ namespace AllLive.Core
                     // 已结束(4)/其他值不能直接判未开播：主播可能已在新房间开播，继续走HTML兜底确认。
                     CoreDebug.Log(() => $"[Douyin] GetLiveStatus reflow第二通道未确认开播 webRid={webRid} roomId={reflowRoomId} status={reflowStatus}，继续HTML兜底");
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     CoreDebug.Log(() => $"[Douyin] GetLiveStatus reflow第二通道失败 webRid={webRid} roomId={reflowRoomId} err={ex.GetType().FullName}: {ex.Message}");
                 }
@@ -1308,12 +1321,12 @@ namespace AllLive.Core
                 CoreDebug.Log(() => $"[Douyin] GetLiveStatus reflow第二通道跳过 webRid={webRid} reason=暂无room_id映射");
             }
 
-            var roomDataHtml = await GetRoomDataHtml(webRid);
+            var roomDataHtml = await GetRoomDataHtml(webRid, cancellationToken: cancellationToken);
             var room = roomDataHtml?["roomStore"]?["roomInfo"]?["room"];
             RememberWebRidRoomId(webRid, GetRoomIdFromRoomToken(room));
             return LiveStatusParser.IsLive(room?["status"], 2, 4);
         }
-        public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
+        public Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult(new List<LiveSuperChatMessage>());
         }
@@ -1336,7 +1349,7 @@ namespace AllLive.Core
             return sb.ToString();
         }
 
-        private Task<string> GetABougs(string url)
+        private Task<string> GetABougs(string url, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (string.IsNullOrWhiteSpace(url))
             {
@@ -1352,7 +1365,7 @@ namespace AllLive.Core
                 }
                 CoreDebug.Log(() => "[Douyin] GetABogus local empty");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Douyin] GetABogus local failed err={ex.GetType().FullName}: {ex.Message}");
             }
@@ -1437,7 +1450,7 @@ namespace AllLive.Core
             return cookie;
         }
 
-        private async Task<string> ResolveCookieAsync(string webRid = null)
+        private async Task<string> ResolveCookieAsync(string webRid = null, CancellationToken cancellationToken = default(CancellationToken))
         {
             var cookieMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var manualCookie = CoreConfig.GetDouyinCookie();
@@ -1447,8 +1460,9 @@ namespace AllLive.Core
             }
             else
             {
+                var requestHeaders = SnapshotRequestHeaders();
                 string existingCookie;
-                if ((headers.TryGetValue("Cookie", out existingCookie) || headers.TryGetValue("cookie", out existingCookie))
+                if ((requestHeaders.TryGetValue("Cookie", out existingCookie) || requestHeaders.TryGetValue("cookie", out existingCookie))
                     && !string.IsNullOrWhiteSpace(existingCookie))
                 {
                     cookieMap = ParseCookie(existingCookie);
@@ -1457,7 +1471,7 @@ namespace AllLive.Core
 
             if (!cookieMap.ContainsKey("ttwid"))
             {
-                using (var resp = await TryHeadAsync("https://live.douyin.com"))
+                using (var resp = await TryHeadAsync("https://live.douyin.com", cancellationToken: cancellationToken))
                 {
                     MergeCookiesFromResponse(cookieMap, resp);
                 }
@@ -1468,7 +1482,7 @@ namespace AllLive.Core
                 var url = string.IsNullOrWhiteSpace(webRid)
                     ? "https://live.douyin.com"
                     : $"https://live.douyin.com/{webRid}";
-                using (var resp = await TryHeadAsync(url))
+                using (var resp = await TryHeadAsync(url, cancellationToken: cancellationToken))
                 {
                     MergeCookiesFromResponse(cookieMap, resp);
                 }
@@ -1477,13 +1491,13 @@ namespace AllLive.Core
             return BuildCookie(cookieMap);
         }
 
-        private async Task<HttpResponseMessage> TryHeadAsync(string url)
+        private async Task<HttpResponseMessage> TryHeadAsync(string url, CancellationToken cancellationToken = default(CancellationToken))
         {
             try
             {
-                return await HttpUtil.Head(url, headers);
+                return await HttpUtil.Head(url, SnapshotRequestHeaders(), cancellationToken: cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 Console.WriteLine(ex.Message);
                 return null;

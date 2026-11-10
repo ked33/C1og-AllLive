@@ -128,21 +128,21 @@ namespace AllLive.UWP.ViewModels
                 return;
             }
 
-            activeConnection.On<bool, string>("onFavoriteReceived", (overlay, content) =>
+            activeConnection.On<bool, string>("onFavoriteReceived", async (overlay, content) =>
             {
                 if (!IsCurrentConnection(activeConnection))
                 {
                     return;
                 }
-                ReceiveFavorite(overlay, content);
+                await ReceiveFavoriteAsync(overlay, content);
             });
-            activeConnection.On<bool, string>("onHistoryReceived", (overlay, content) =>
+            activeConnection.On<bool, string>("onHistoryReceived", async (overlay, content) =>
             {
                 if (!IsCurrentConnection(activeConnection))
                 {
                     return;
                 }
-                ReceiveHistory(overlay, content);
+                await ReceiveHistoryAsync(overlay, content);
             });
             activeConnection.On<bool, string>("onShieldWordReceived", (overlay, content) =>
             {
@@ -192,70 +192,35 @@ namespace AllLive.UWP.ViewModels
 
         }
 
-        private void ReceiveFavorite(bool overlay, string content)
+        private async Task ReceiveFavoriteAsync(bool overlay, string content)
         {
             try
             {
-                var items = JsonConvert.DeserializeObject<List<FavoriteJsonItem>>(content);
-                if (items == null)
-                {
-                    throw new JsonSerializationException("关注列表内容为空或格式无效");
-                }
-
-                if (overlay)
-                {
-                    DatabaseHelper.DeleteFavorite();
-                }
-                foreach (var item in items)
-                {
-                    if (string.IsNullOrWhiteSpace(item.SiteId) || string.IsNullOrWhiteSpace(item.RoomId))
-                    {
-                        continue;
-                    }
-                    if (DatabaseHelper.CheckFavorite(item.RoomId, item.SiteName) == null)
-                    {
-                        DatabaseHelper.AddFavorite(new FavoriteItem()
-                        {
-                            SiteName = item.SiteName,
-                            RoomID = item.RoomId,
-                            UserName = item.UserName,
-                            Photo = item.Face,
-                            SortOrder = item.Sort,
-                        });
-                    }
-                }
+                var items = DataImportParser.ParseFavorites(content);
+                await DatabaseHelper.ImportFavoritesAsync(items, replace: overlay, updateExistingSort: false);
                 ShowMessage("已同步关注列表");
-                _ = Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
-                 {
-                     MessageCenter.UpdateFavorite();
-                 });
+                _ = Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => MessageCenter.UpdateFavorite());
             }
             catch (Exception ex)
             {
                 LogHelper.Log("接收关注列表失败", LogType.ERROR, ex);
-                ShowMessage("接收关注列表失败，请稍后重试");
+                ShowMessage("接收关注列表失败，原数据已保留");
             }
         }
 
-        private void ReceiveHistory(bool overlay, string content)
+        private async Task ReceiveHistoryAsync(bool overlay, string content)
         {
-            if (overlay)
+            try
             {
-                DatabaseHelper.DeleteHistory();
+                var items = DataImportParser.ParseHistory(content);
+                await DatabaseHelper.ImportHistoryAsync(items, replace: overlay);
+                ShowMessage("已同步历史记录");
             }
-            var items = Newtonsoft.Json.JsonConvert.DeserializeObject<List<HistoryJsonItem>>(content);
-            foreach (var item in items)
+            catch (Exception ex)
             {
-                DatabaseHelper.AddHistory(new HistoryItem()
-                {
-                    WatchTime = DateTime.Parse(item.UpdateTime),
-                    SiteName = item.SiteName,
-                    RoomID = item.RoomId,
-                    UserName = item.UserName,
-                    Photo = item.Face,
-                });
+                LogHelper.Log("接收历史记录失败", LogType.ERROR, ex);
+                ShowMessage("接收历史记录失败，原数据已保留");
             }
-            ShowMessage("已同步历史记录");
         }
 
         private void ReceiveShieldWord(bool overlay, string content)
@@ -691,7 +656,7 @@ namespace AllLive.UWP.ViewModels
                     RoomId = item.RoomID,
                     UserName = item.UserName,
                     Face = item.Photo,
-                    UpdateTime = item.WatchTime.ToString("yyyy-MM-dd HH:mm:ss.M"),
+                    UpdateTime = item.WatchTime.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
                 });
             }
             var json = Newtonsoft.Json.JsonConvert.SerializeObject(items);

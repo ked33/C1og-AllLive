@@ -37,12 +37,12 @@ namespace AllLive.Core
 
         private string buvid3 = "";
         private string buvid4 = "";
-        private async Task<Dictionary<string, string>> GetRequestHeader()
+        private async Task<Dictionary<string, string>> GetRequestHeader(CancellationToken cancellationToken = default(CancellationToken))
         {
 
             if (string.IsNullOrEmpty(buvid3))
             {
-                var buvid = await GetBuvid();
+                var buvid = await GetBuvid(cancellationToken: cancellationToken);
                 buvid3 = buvid.Item1;
                 buvid4 = buvid.Item2;
             }
@@ -71,10 +71,10 @@ namespace AllLive.Core
             return _cookie;
         }
 
-        public async Task<List<LiveCategory>> GetCategores()
+        public async Task<List<LiveCategory>> GetCategores(CancellationToken cancellationToken = default(CancellationToken))
         {
             List<LiveCategory> categories = new List<LiveCategory>();
-            var result = await HttpUtil.GetString("https://api.live.bilibili.com/room/v1/Area/getList?need_entrance=1&parent_id=0", headers: await GetRequestHeader());
+            var result = await HttpUtil.GetString("https://api.live.bilibili.com/room/v1/Area/getList?need_entrance=1&parent_id=0", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             foreach (var item in obj["data"])
             {
@@ -99,7 +99,7 @@ namespace AllLive.Core
             }
             return categories;
         }
-        public async Task<LiveCategoryResult> GetCategoryRooms(LiveSubCategory category, int page = 1)
+        public async Task<LiveCategoryResult> GetCategoryRooms(LiveSubCategory category, int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             LiveCategoryResult categoryResult = new LiveCategoryResult()
             {
@@ -107,10 +107,10 @@ namespace AllLive.Core
 
             };
             var url = $"https://api.live.bilibili.com/xlive/web-interface/v1/second/getList";
-            var accessId = await GetAssessId();
+            var accessId = await GetAssessId(cancellationToken: cancellationToken);
             var query = $"platform=web&parent_area_id={category.ParentID}&area_id={category.ID}&sort_type=&page={page}&w_webid={accessId}";
-            query = await GetWbiSign(query);
-            var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader());
+            query = await GetWbiSign(query, cancellationToken: cancellationToken);
+            var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
 
             var obj = JObject.Parse(result);
             categoryResult.HasMore = obj["data"]["has_more"].ToInt32() == 1;
@@ -127,7 +127,7 @@ namespace AllLive.Core
             }
             return categoryResult;
         }
-        public async Task<LiveCategoryResult> GetRecommendRooms(int page = 1)
+        public async Task<LiveCategoryResult> GetRecommendRooms(int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             LiveCategoryResult categoryResult = new LiveCategoryResult()
             {
@@ -136,8 +136,8 @@ namespace AllLive.Core
             };
             var url = $"https://api.live.bilibili.com/xlive/web-interface/v1/second/getListByArea";
             var query = $"platform=web&sort=online&page_size=30&page={page}";
-            query = await GetWbiSign(query);
-            var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader());
+            query = await GetWbiSign(query, cancellationToken: cancellationToken);
+            var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             categoryResult.HasMore = ((JArray)obj["data"]["list"]).Count > 0;
             foreach (var item in obj["data"]["list"])
@@ -153,12 +153,12 @@ namespace AllLive.Core
             }
             return categoryResult;
         }
-        public async Task<LiveRoomDetail> GetRoomDetail(object roomId)
+        public async Task<LiveRoomDetail> GetRoomDetail(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             var url = "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom";
             var query = $"room_id={roomId}";
-            query = await GetWbiSign(query);
-            var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader());
+            query = await GetWbiSign(query, cancellationToken: cancellationToken);
+            var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             var data = obj["data"];
             if (data == null || data.Type != JTokenType.Object)
@@ -222,7 +222,7 @@ namespace AllLive.Core
             };
         }
 
-        private async Task<InitialViewerCountResult> GetInitialViewerCount(int roomId)
+        private async Task<InitialViewerCountResult> GetInitialViewerCount(int roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (roomId <= 0)
             {
@@ -231,7 +231,7 @@ namespace AllLive.Core
 
             try
             {
-                var danmuInfo = await GetDanmuInfo(roomId);
+                var danmuInfo = await GetDanmuInfo(roomId, cancellationToken: cancellationToken);
                 var token = danmuInfo?["token"]?.ToString();
                 var host = (danmuInfo?["host_list"] as JArray)?.LastOrDefault()?["host"]?.ToString();
                 if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(host))
@@ -329,7 +329,8 @@ namespace AllLive.Core
                         }
                     });
 
-                    var completed = await Task.WhenAny(resultSource.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+                    var completed = await Task.WhenAny(resultSource.Task, Task.Delay(TimeSpan.FromSeconds(2), cancellationToken: cancellationToken));
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (completed == resultSource.Task)
                     {
                         return await resultSource.Task;
@@ -347,7 +348,7 @@ namespace AllLive.Core
                     try { ws.Close(); } catch { }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Bilibili] 初始房间观众数获取失败 roomId={roomId} err={ex.GetType().FullName} {ex.Message}");
                 return InitialViewerCountResult.Failed("获取失败");
@@ -388,12 +389,12 @@ namespace AllLive.Core
             }
         }
 
-        private async Task<JToken> GetDanmuInfo(int roomId)
+        private async Task<JToken> GetDanmuInfo(int roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             var url = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
             var query = $"id={roomId}&type=0&web_location=444.8";
-            query = await GetWbiSign(query);
-            var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader());
+            query = await GetWbiSign(query, cancellationToken: cancellationToken);
+            var result = await HttpUtil.GetString($"{url}?{query}", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             if (obj["code"]?.ToInt32() != 0)
             {
@@ -553,14 +554,14 @@ namespace AllLive.Core
             return (int)value;
         }
 
-        public async Task<LiveSearchResult> Search(string keyword, int page = 1)
+        public async Task<LiveSearchResult> Search(string keyword, int page = 1, CancellationToken cancellationToken = default(CancellationToken))
         {
             LiveSearchResult searchResult = new LiveSearchResult()
             {
                 Rooms = new List<LiveRoomItem>(),
 
             };
-            var result = await HttpUtil.GetString($"https://api.bilibili.com/x/web-interface/search/type?context=&search_type=live&cover_type=user_cover&page={page}&order=&keyword={Uri.EscapeDataString(keyword)}&category_id=&__refresh__=true&_extra=&highlight=0&single_column=0", headers: await GetRequestHeader());
+            var result = await HttpUtil.GetString($"https://api.bilibili.com/x/web-interface/search/type?context=&search_type=live&cover_type=user_cover&page={page}&order=&keyword={Uri.EscapeDataString(keyword)}&category_id=&__refresh__=true&_extra=&highlight=0&single_column=0", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
 
             foreach (var item in obj["data"]["result"]["live_room"])
@@ -577,41 +578,41 @@ namespace AllLive.Core
             searchResult.HasMore = searchResult.Rooms.Count > 0;
             return searchResult;
         }
-        public async Task<List<LivePlayQuality>> GetPlayQuality(LiveRoomDetail roomDetail)
+        public async Task<List<LivePlayQuality>> GetPlayQuality(LiveRoomDetail roomDetail, CancellationToken cancellationToken = default(CancellationToken))
         {
             try
             {
-                var qualities = await GetPlayQualityNew(roomDetail.RoomID);
+                var qualities = await GetPlayQualityNew(roomDetail.RoomID, cancellationToken: cancellationToken);
                 if (qualities != null && qualities.Count > 0)
                 {
                     return qualities;
                 }
                 CoreDebug.Log(() => $"[Bilibili] GetPlayQualityNew返回空列表 roomId={roomDetail?.RoomID}，回退旧接口");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Bilibili] GetPlayQualityNew失败 roomId={roomDetail?.RoomID} err={ex.GetType().FullName} {ex.Message}，回退旧接口");
             }
-            return await GetPlayQualityOld(roomDetail.RoomID);
+            return await GetPlayQualityOld(roomDetail.RoomID, cancellationToken: cancellationToken);
         }
         /// <summary>
         /// 新的获取清晰度方式，优先走 web-room playinfo
         /// </summary>
         /// <param name="roomID"></param>
         /// <returns></returns>
-        private async Task<List<LivePlayQuality>> GetPlayQualityNew(string roomID)
+        private async Task<List<LivePlayQuality>> GetPlayQualityNew(string roomID, CancellationToken cancellationToken = default(CancellationToken))
         {
             List<LivePlayQuality> qualities = new List<LivePlayQuality>();
-            var client = await CreateBilibiliPlayInfoHttpClientAsync();
+            var client = await CreateBilibiliPlayInfoHttpClientAsync(cancellationToken: cancellationToken);
             using (client)
             {
-                var playurl = await RequestBilibiliPlayUrlAsync(client, roomID, null, "0");
+                var playurl = await RequestBilibiliPlayUrlAsync(client, roomID, null, "0", cancellationToken: cancellationToken);
                 var qualitiesMap = GetBilibiliQualityDescriptions(playurl);
                 var acceptQnList = GetBilibiliAcceptQnList(playurl);
                 if (acceptQnList.Count == 0)
                 {
                     CoreDebug.Log(() => $"[Bilibili] AVC清晰度为空，尝试HEVC兜底 roomId={roomID}");
-                    playurl = await RequestBilibiliPlayUrlAsync(client, roomID, null, "0,1");
+                    playurl = await RequestBilibiliPlayUrlAsync(client, roomID, null, "0,1", cancellationToken: cancellationToken);
                     qualitiesMap = GetBilibiliQualityDescriptions(playurl);
                     acceptQnList = GetBilibiliAcceptQnList(playurl);
                 }
@@ -638,11 +639,11 @@ namespace AllLive.Core
         /// </summary>
         /// <param name="roomID"></param>
         /// <returns></returns>
-        private async Task<List<LivePlayQuality>> GetPlayQualityOld(string roomID)
+        private async Task<List<LivePlayQuality>> GetPlayQualityOld(string roomID, CancellationToken cancellationToken = default(CancellationToken))
         {
 
             List<LivePlayQuality> qualities = new List<LivePlayQuality>();
-            var result = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/playUrl?cid={roomID}&qn=&platform=web", headers: await GetRequestHeader());
+            var result = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/playUrl?cid={roomID}&qn=&platform=web", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             if (obj["code"]?.ToObject<int>() != 0)
             {
@@ -666,37 +667,37 @@ namespace AllLive.Core
             return qualities;
         }
 
-        public async Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn)
+        public async Task<List<string>> GetPlayUrls(LiveRoomDetail roomDetail, LivePlayQuality qn, CancellationToken cancellationToken = default(CancellationToken))
         {
             try
             {
-                var urls = await GetPlayUrlsNew(roomDetail.RoomID, qn.Data);
+                var urls = await GetPlayUrlsNew(roomDetail.RoomID, qn.Data, cancellationToken: cancellationToken);
                 if (urls != null && urls.Count > 0)
                 {
                     return urls;
                 }
                 CoreDebug.Log(() => $"[Bilibili] GetPlayUrlsNew返回空列表 roomId={roomDetail?.RoomID} qn={qn?.Data}，回退旧接口");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Bilibili] GetPlayUrlsNew失败 roomId={roomDetail?.RoomID} qn={qn?.Data} err={ex.GetType().FullName} {ex.Message}，回退旧接口");
             }
-            return await GetPlayUrlsOld(roomDetail.RoomID, qn.Data);
+            return await GetPlayUrlsOld(roomDetail.RoomID, qn.Data, cancellationToken: cancellationToken);
         }
-        private async Task<List<string>> GetPlayUrlsNew(string roomID, object qn)
+        private async Task<List<string>> GetPlayUrlsNew(string roomID, object qn, CancellationToken cancellationToken = default(CancellationToken))
         {
             var qnValue = TryConvertToInt(qn);
 
-            var client = await CreateBilibiliPlayInfoHttpClientAsync();
+            var client = await CreateBilibiliPlayInfoHttpClientAsync(cancellationToken: cancellationToken);
             using (client)
             {
-                var playurl = await RequestBilibiliPlayUrlAsync(client, roomID, qnValue, "0");
+                var playurl = await RequestBilibiliPlayUrlAsync(client, roomID, qnValue, "0", cancellationToken: cancellationToken);
                 var candidates = ParseBilibiliPlayUrlCandidates(playurl);
                 LogBilibiliCandidateSummary(roomID, qnValue, candidates, "AVC");
                 if (candidates.Count == 0)
                 {
                     CoreDebug.Log(() => $"[Bilibili] AVC播放流为空，尝试HEVC兜底 roomId={roomID} qn={qnValue?.ToString() ?? "null"}");
-                    playurl = await RequestBilibiliPlayUrlAsync(client, roomID, qnValue, "0,1");
+                    playurl = await RequestBilibiliPlayUrlAsync(client, roomID, qnValue, "0,1", cancellationToken: cancellationToken);
                     candidates = ParseBilibiliPlayUrlCandidates(playurl);
                     LogBilibiliCandidateSummary(roomID, qnValue, candidates, "AVC+HEVC");
                 }
@@ -709,23 +710,23 @@ namespace AllLive.Core
                     // 直达媒体列表、避开不可达 smtcdns 子列表的概率。
                     try
                     {
-                        var refreshedPlayurl = await RequestBilibiliPlayUrlAsync(client, roomID, qnValue, "0");
+                        var refreshedPlayurl = await RequestBilibiliPlayUrlAsync(client, roomID, qnValue, "0", cancellationToken: cancellationToken);
                         var refreshedCandidates = ParseBilibiliPlayUrlCandidates(refreshedPlayurl);
                         LogBilibiliCandidateSummary(roomID, qnValue, refreshedCandidates, "AVC-HLS-REFRESH");
                         candidates = MergeBilibiliPlayUrlCandidates(candidates, refreshedCandidates);
                         CoreDebug.Log(() => $"[Bilibili] HLS双批候选合并 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={candidates.Count}");
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                     {
                         // 刷新只是提高 CDN 多样性的可选优化，失败时必须保留首批有效签名地址。
                         CoreDebug.Log(() => $"[Bilibili] HLS第二批PlayInfo获取失败，继续首批候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} err={ex.GetType().FullName} {ex.Message}");
                     }
                 }
 
-                var selectedCandidates = await SelectBilibiliPlayUrlCandidatesAsync(client, roomID, qnValue, candidates);
+                var selectedCandidates = await SelectBilibiliPlayUrlCandidatesAsync(client, roomID, qnValue, candidates, cancellationToken: cancellationToken);
                 // HLS-only：保留更多异构 CDN，供播中卡顿自动换线；有 FLV 时保持原排序不裁切。
                 selectedCandidates = DiversifyBilibiliPlayUrlCandidates(selectedCandidates, maxTotal: 6, maxPerHostFamily: 2);
-                var urls = await BuildBilibiliPlayUrlsWithLocalProxyFallbackAsync(roomID, qnValue, selectedCandidates);
+                var urls = await BuildBilibiliPlayUrlsWithLocalProxyFallbackAsync(roomID, qnValue, selectedCandidates, cancellationToken: cancellationToken);
                 CoreDebug.Log(() => $"[Bilibili] PlayInfo直出 roomId={roomID} qn={qnValue?.ToString() ?? "null"} total={urls.Count} flv={selectedCandidates.Count(x => x.IsFlv)} hls={selectedCandidates.Count(x => x.IsHls)} hevc={selectedCandidates.Count(x => x.IsHevc)}");
                 return urls;
             }
@@ -736,10 +737,10 @@ namespace AllLive.Core
         /// <param name="roomID"></param>
         /// <param name="qn"></param>
         /// <returns></returns>
-        private async Task<List<string>> GetPlayUrlsOld(string roomID, object qn)
+        private async Task<List<string>> GetPlayUrlsOld(string roomID, object qn, CancellationToken cancellationToken = default(CancellationToken))
         {
             List<string> urls = new List<string>();
-            var result = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/playUrl?cid={roomID}&qn={qn}&platform=web", headers: await GetRequestHeader());
+            var result = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/playUrl?cid={roomID}&qn={qn}&platform=web", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             var obj = JObject.Parse(result);
             if (obj["code"]?.ToObject<int>() != 0)
             {
@@ -781,9 +782,9 @@ namespace AllLive.Core
             public int HlsMasterDepth { get; set; }
         }
 
-        private async Task<HttpClient> CreateBilibiliPlayInfoHttpClientAsync()
+        private async Task<HttpClient> CreateBilibiliPlayInfoHttpClientAsync(CancellationToken cancellationToken = default(CancellationToken))
         {
-            var headers = await GetRequestHeader();
+            var headers = await GetRequestHeader(cancellationToken: cancellationToken);
             var handler = new HttpClientHandler()
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
@@ -799,7 +800,7 @@ namespace AllLive.Core
             return client;
         }
 
-        private async Task<JObject> RequestBilibiliPlayUrlAsync(HttpClient client, string roomID, int? qn, string codec)
+        private async Task<JObject> RequestBilibiliPlayUrlAsync(HttpClient client, string roomID, int? qn, string codec, CancellationToken cancellationToken = default(CancellationToken))
         {
             var queryParameters = new Dictionary<string, string>()
             {
@@ -816,7 +817,7 @@ namespace AllLive.Core
             }
             var query = string.Join("&", queryParameters.Select(x => $"{x.Key}={Uri.EscapeDataString(x.Value ?? string.Empty)}"));
             var requestUrl = $"https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?{query}";
-            using (var response = await client.GetAsync(requestUrl))
+            using (var response = await client.GetAsync(requestUrl, cancellationToken: cancellationToken))
             {
                 response.EnsureSuccessStatusCode();
                 var result = await response.Content.ReadAsStringAsync();
@@ -1149,7 +1150,7 @@ namespace AllLive.Core
             }
         }
 
-        private async Task<List<BilibiliPlayUrlCandidate>> SelectBilibiliPlayUrlCandidatesAsync(HttpClient client, string roomID, int? qnValue, List<BilibiliPlayUrlCandidate> candidates)
+        private async Task<List<BilibiliPlayUrlCandidate>> SelectBilibiliPlayUrlCandidatesAsync(HttpClient client, string roomID, int? qnValue, List<BilibiliPlayUrlCandidate> candidates, CancellationToken cancellationToken = default(CancellationToken))
         {
             var all = candidates ?? new List<BilibiliPlayUrlCandidate>();
             var flvCandidates = all.Where(x => x != null && x.IsFlv).ToList();
@@ -1175,14 +1176,14 @@ namespace AllLive.Core
             var probePool = avcCandidates.Count > 0 ? avcCandidates : hlsCandidates;
             var probeCandidates = OrderBilibiliPlayUrlCandidates(probePool).Take(4).ToList();
             CoreDebug.Log(() => $"[Bilibili] 未获得FLV，轻量探测HLS候选 roomId={roomID} qn={qnValue?.ToString() ?? "null"} probe={probeCandidates.Count}/{probePool.Count} hls={hlsCandidates.Count}");
-            var verified = await VerifyBilibiliHlsCandidatesAsync(client, roomID, probeCandidates);
+            var verified = await VerifyBilibiliHlsCandidatesAsync(client, roomID, probeCandidates, cancellationToken: cancellationToken);
             var ordered = OrderBilibiliPlayUrlCandidates(all);
             var first = ordered.FirstOrDefault();
             CoreDebug.Log(() => $"[Bilibili] HLS探测完成 roomId={roomID} qn={qnValue?.ToString() ?? "null"} verified={verified.Count}/{probeCandidates.Count} first={(first != null ? BuildBilibiliUrlBrief(first) : "无")}");
             return ordered;
         }
 
-        private async Task<List<string>> BuildBilibiliPlayUrlsWithLocalProxyFallbackAsync(string roomID, int? qnValue, List<BilibiliPlayUrlCandidate> selectedCandidates)
+        private async Task<List<string>> BuildBilibiliPlayUrlsWithLocalProxyFallbackAsync(string roomID, int? qnValue, List<BilibiliPlayUrlCandidate> selectedCandidates, CancellationToken cancellationToken = default(CancellationToken))
         {
             var urls = new List<string>();
             var dedupe = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1194,8 +1195,8 @@ namespace AllLive.Core
             // 有 FLV 时：本地代理优先（桌面网络栈更稳），再官方直连，最后才 HLS。
             if (firstFlv != null)
             {
-                var headers = await GetRequestHeader();
-                var proxyResult = await BilibiliLocalFlvProxyClient.RegisterAsync(firstFlv.Url, headers);
+                var headers = await GetRequestHeader(cancellationToken: cancellationToken);
+                var proxyResult = await BilibiliLocalFlvProxyClient.RegisterAsync(firstFlv.Url, headers, cancellationToken: cancellationToken);
                 if (proxyResult.Success && !string.IsNullOrWhiteSpace(proxyResult.Url))
                 {
                     if (dedupe.Add(proxyResult.Url))
@@ -1298,7 +1299,7 @@ namespace AllLive.Core
             return result;
         }
 
-        private async Task<List<BilibiliPlayUrlCandidate>> VerifyBilibiliHlsCandidatesAsync(HttpClient client, string roomID, IEnumerable<BilibiliPlayUrlCandidate> candidates)
+        private async Task<List<BilibiliPlayUrlCandidate>> VerifyBilibiliHlsCandidatesAsync(HttpClient client, string roomID, IEnumerable<BilibiliPlayUrlCandidate> candidates, CancellationToken cancellationToken = default(CancellationToken))
         {
             var targets = (candidates ?? Enumerable.Empty<BilibiliPlayUrlCandidate>())
                 .Where(x => !string.IsNullOrWhiteSpace(x?.Url))
@@ -1311,8 +1312,9 @@ namespace AllLive.Core
             // 轻量探测：共享 2.5s 总预算；playlist HTTP 成功即标 verified（加快首帧）。
             // 任一成功立即取消其余，避免等最慢线路。
             var winnerSelected = 0;
-            using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2500)))
+            using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
+                cts.CancelAfter(TimeSpan.FromMilliseconds(2500));
                 var tasks = targets.Select(async candidate =>
                 {
                     try
@@ -1342,7 +1344,7 @@ namespace AllLive.Core
                             CoreDebug.Log(() => $"[Bilibili] HLS探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=timeout err={ex.GetType().FullName} {ex.Message}");
                         }
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                     {
                         CoreDebug.Log(() => $"[Bilibili] HLS探测未确认 roomId={roomID} url={BuildBilibiliUrlBrief(candidate)} reason=exception err={ex.GetType().FullName} {ex.Message}");
                     }
@@ -1351,6 +1353,7 @@ namespace AllLive.Core
 
                 await Task.WhenAll(tasks);
             }
+            cancellationToken.ThrowIfCancellationRequested();
             return targets.Where(x => x.Verified).ToList();
         }
 
@@ -1837,9 +1840,9 @@ namespace AllLive.Core
             return body.Length <= 200 ? body : body.Substring(0, 200);
         }
 
-        public async Task<bool> GetLiveStatus(object roomId)
+        public async Task<bool> GetLiveStatus(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var resp = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/get_info?room_id={roomId}", headers: await GetRequestHeader());
+            var resp = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/get_info?room_id={roomId}", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             var obj = JObject.Parse(resp);
             var data = obj["data"];
             JToken liveStatusToken = null;
@@ -1853,7 +1856,7 @@ namespace AllLive.Core
             if (live && CoreConfig.GetBilibiliFilterHiddenRooms())
             {
                 // 隐藏/加密房间在 get_info 中仍可能返回 live_status=1，开启过滤时用 room_init 复核。
-                var shouldFilter = await GetRoomInitFilterAsync(roomId);
+                var shouldFilter = await GetRoomInitFilterAsync(roomId, cancellationToken: cancellationToken);
                 if (shouldFilter == true)
                 {
                     live = false;
@@ -1865,28 +1868,28 @@ namespace AllLive.Core
 
         // 返回 room_init 的过滤结论：true 过滤，false 不过滤，null 判定失败（保持 get_info 结果）。
         // 请求或解析失败时不抛异常，避免影响关注列表刷新。
-        private async Task<bool?> GetRoomInitFilterAsync(object roomId)
+        private async Task<bool?> GetRoomInitFilterAsync(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             try
             {
-                var resp = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/room_init?id={roomId}", headers: await GetRequestHeader());
+                var resp = await HttpUtil.GetString($"https://api.live.bilibili.com/room/v1/Room/room_init?id={roomId}", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
                 var obj = JObject.Parse(resp);
                 var data = obj["data"];
                 var shouldFilter = BilibiliRoomFilter.ShouldFilter(data);
                 CoreDebug.Log(() => $"[Bilibili] room_init roomId={roomId} code={obj["code"]} is_hidden={data?["is_hidden"]} is_locked={data?["is_locked"]} encrypted={data?["encrypted"]} pwd_verified={data?["pwd_verified"]} shouldFilter={shouldFilter}");
                 return shouldFilter;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 CoreDebug.Log(() => $"[Bilibili] room_init 请求失败 roomId={roomId} err={ex.GetType().Name}: {ex.Message}，保持 get_info 结果");
                 return null;
             }
         }
 
-        public async Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId)
+        public async Task<List<LiveSuperChatMessage>> GetSuperChatMessages(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
 
-            var resp = await HttpUtil.GetString($"https://api.live.bilibili.com/av/v1/SuperChat/getMessageList?room_id={roomId}", headers: await GetRequestHeader());
+            var resp = await HttpUtil.GetString($"https://api.live.bilibili.com/av/v1/SuperChat/getMessageList?room_id={roomId}", headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             var obj = JObject.Parse(resp);
             List<LiveSuperChatMessage> list = new List<LiveSuperChatMessage>();
             if (obj["data"]["list"].Type == JTokenType.Array)
@@ -1895,6 +1898,7 @@ namespace AllLive.Core
                 {
                     list.Add(new LiveSuperChatMessage()
                     {
+                        Id = item["id"]?.ToString(),
                         BackgroundBottomColor = item["background_bottom_color"].ToString(),
                         BackgroundColor = item["background_color"].ToString(),
                         EndTime = Utils.TimestampToDateTime(item["end_time"].ToInt64()),
@@ -1919,7 +1923,7 @@ namespace AllLive.Core
             61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
             36, 20, 34, 44, 52
         };
-        private async Task<(string, string)> GetWbiKeys()
+        private async Task<(string, string)> GetWbiKeys(CancellationToken cancellationToken = default(CancellationToken))
         {
             if (_imgKey != null && _subKey != null)
             {
@@ -1928,7 +1932,7 @@ namespace AllLive.Core
             // 获取最新的 img_key 和 sub_key
             var response = await HttpUtil.GetString(
                 "https://api.bilibili.com/x/web-interface/nav",
-                headers: await GetRequestHeader());
+                headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             var obj = JObject.Parse(response);
 
             var imgUrl = obj["data"]["wbi_img"]["img_url"].ToString();
@@ -1948,9 +1952,9 @@ namespace AllLive.Core
             return mixinKeyEncTab.Aggregate("", (s, i) => s + origin[i]).Substring(0, 32);
         }
 
-        public async Task<string> GetWbiSign(string url)
+        public async Task<string> GetWbiSign(string url, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var (imgKey, subKey) = await GetWbiKeys();
+            var (imgKey, subKey) = await GetWbiKeys(cancellationToken: cancellationToken);
 
             // 为请求参数进行 wbi 签名
             var mixinKey = GetMixinKey(imgKey + subKey);
@@ -1971,7 +1975,7 @@ namespace AllLive.Core
             return $"{query}&w_rid={wbi_sign}";
         }
 
-        private async Task<(string, string)> GetBuvid()
+        private async Task<(string, string)> GetBuvid(CancellationToken cancellationToken = default(CancellationToken))
         {
             try
             {
@@ -1979,19 +1983,19 @@ namespace AllLive.Core
                     headers: string.IsNullOrEmpty(Cookie) ? null : new Dictionary<string, string>
                     {
                         { "cookie", Cookie }
-                    }
-                  );
+                    },
+                cancellationToken: cancellationToken);
                 var obj = JObject.Parse(result);
 
                 return (obj["data"]["b_3"].ToString(), obj["data"]["b_4"].ToString());
             }
-            catch (Exception)
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
                 return ("", "");
             }
         }
 
-        private async Task<string> GetAssessId()
+        private async Task<string> GetAssessId(CancellationToken cancellationToken = default(CancellationToken))
         {
             if (!string.IsNullOrEmpty(_accessId))
             {
@@ -2000,7 +2004,7 @@ namespace AllLive.Core
 
             var response = await HttpUtil.GetString(
                 "https://live.bilibili.com/lol",
-                headers: await GetRequestHeader());
+                headers: await GetRequestHeader(cancellationToken: cancellationToken), cancellationToken: cancellationToken);
             // 通过正则表达式"access_id":"(.*?)"提取
             var match = Regex.Match(response, "\"access_id\":\"(.*?)\"");
             if (match.Success)

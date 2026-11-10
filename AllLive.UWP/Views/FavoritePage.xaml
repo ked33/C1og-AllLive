@@ -149,7 +149,7 @@
                                     Grid.ColumnSpan="2"
                                     Margin="0,4,0,0"
                                     FontSize="12"
-                                    Text="{x:Bind Path=LiveTitle}"
+                                    Text="{x:Bind Path=LiveTitle, Mode=OneWay}"
                                     TextTrimming="CharacterEllipsis"
                                     Visibility="{x:Bind Path=HasLiveTitle, Mode=OneWay}" />
                             </Grid>

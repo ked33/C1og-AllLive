@@ -533,29 +533,9 @@ namespace AllLive.UWP.Views
             return favorites.Select(CreateFavoriteJsonItem).ToList();
         }
 
-        private static void ApplyFavoriteBackup(IEnumerable<FavoriteJsonItem> items)
+        private static async Task ApplyFavoriteBackupAsync(IEnumerable<FavoriteItem> items)
         {
-            DatabaseHelper.DeleteFavorite();
-            foreach (var item in items ?? Enumerable.Empty<FavoriteJsonItem>())
-            {
-                if (item == null || string.IsNullOrWhiteSpace(item.RoomId))
-                {
-                    continue;
-                }
-                var siteName = item.SiteName;
-                if (string.IsNullOrWhiteSpace(siteName) || siteName == "未知")
-                {
-                    continue;
-                }
-                DatabaseHelper.AddFavorite(new FavoriteItem()
-                {
-                    SiteName = siteName,
-                    RoomID = item.RoomId,
-                    UserName = item.UserName,
-                    Photo = item.Face,
-                    SortOrder = item.Sort
-                });
-            }
+            await DatabaseHelper.ImportFavoritesAsync(items, replace: true);
             MessageCenter.UpdateFavorite();
         }
 
@@ -664,6 +644,9 @@ namespace AllLive.UWP.Views
             {
                 return;
             }
+            // Validate the full favorites batch before changing settings or replacing data.
+            var favoriteBackup = data.Favorites == null ? null
+                : DataImportParser.ParseFavorites(JsonConvert.SerializeObject(data.Favorites));
             var theme = ThemeHelper.NormalizeTheme(data.Theme ?? SettingHelper.GetValue<int>(SettingHelper.THEME, 0));
             var xboxMode = ClampInt(data.XboxMode ?? SettingHelper.GetValue<int>(SettingHelper.XBOX_MODE, 0), 0, 1);
             var paneDisplayMode = ClampInt(data.PaneDisplayMode ?? SettingHelper.GetValue<int>(SettingHelper.PANE_DISPLAY_MODE, 0), 0, 1);
@@ -758,7 +741,7 @@ namespace AllLive.UWP.Views
             ApplyBiliSettingsBackup(data);
             if (data.Favorites != null)
             {
-                ApplyFavoriteBackup(data.Favorites);
+                await ApplyFavoriteBackupAsync(favoriteBackup);
             }
 
             cbTheme.SelectedIndex = theme;

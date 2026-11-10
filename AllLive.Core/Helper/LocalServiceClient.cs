@@ -25,28 +25,29 @@ namespace AllLive.Core.Helper
                 || (uri.Port == 8789 && uri.AbsolutePath == "/api/bilibili/stream");
         }
 
-        public static Task<HttpResponseMessage> PostAsync(HttpClient client, string url, HttpContent content)
+        public static Task<HttpResponseMessage> PostAsync(HttpClient client, string url, HttpContent content, CancellationToken cancellationToken = default(CancellationToken))
         {
-            return SendAsync(client, url, HttpMethod.Post, content, false);
+            return SendAsync(client, url, HttpMethod.Post, content, false, cancellationToken);
         }
 
-        public static Task<HttpResponseMessage> GetHealthAsync(HttpClient client, string serviceUrl)
+        public static Task<HttpResponseMessage> GetHealthAsync(HttpClient client, string serviceUrl, CancellationToken cancellationToken = default(CancellationToken))
         {
-            return SendAsync(client, serviceUrl, HttpMethod.Get, null, true);
+            return SendAsync(client, serviceUrl, HttpMethod.Get, null, true, cancellationToken);
         }
 
         private static async Task<HttpResponseMessage> SendAsync(HttpClient client, string url,
-            HttpMethod method, HttpContent content, bool health)
+            HttpMethod method, HttpContent content, bool health, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var factory = ConnectionFactory;
-            var connection = factory != null && IsBuiltInUrl(url) ? await factory().ConfigureAwait(false) : null;
+            var connection = factory != null && IsBuiltInUrl(url) ? await WaitForConnectionAsync(factory(), cancellationToken).ConfigureAwait(false) : null;
             var original = new Uri(url);
             var target = connection == null ? original : new Uri(connection.BaseUrl + original.AbsolutePath);
             if (health) target = new Uri(target.GetLeftPart(UriPartial.Authority) + "/health");
             using (var request = new HttpRequestMessage(method, target) { Content = content })
-            using (var timeout = new CancellationTokenSource())
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
-                if (connection == null) return await client.SendAsync(request).ConfigureAwait(false);
+                if (connection == null) return await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
                 request.Headers.Add("X-AllLive-Session", connection.SessionId);
                 if (client.Timeout != Timeout.InfiniteTimeSpan) timeout.CancelAfter(client.Timeout);
                 try
@@ -58,6 +59,22 @@ namespace AllLive.Core.Helper
                     ConnectionFailed?.Invoke(connection.SessionId);
                     throw;
                 }
+            }
+        }
+        private static async Task<LocalServiceConnection> WaitForConnectionAsync(Task<LocalServiceConnection> startup, CancellationToken cancellationToken)
+        {
+            if (!cancellationToken.CanBeCanceled) return await startup.ConfigureAwait(false);
+            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (cancellationToken.Register(() => cancelled.TrySetResult(true)))
+            {
+                if (await Task.WhenAny(startup, cancelled.Task).ConfigureAwait(false) != startup)
+                {
+                    // Startup is shared by other windows; cancel only this caller's wait.
+                    _ = startup.ContinueWith(task => { var observed = task.Exception; },
+                        CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                return await startup.ConfigureAwait(false);
             }
         }
     }

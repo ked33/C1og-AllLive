@@ -1,4 +1,5 @@
-﻿using AllLive.Core.Interface;
+﻿using AllLive.UWP.Helper;
+using AllLive.Core.Interface;
 using AllLive.Core.Models;
 using System;
 using System.Collections.Generic;
@@ -32,36 +33,75 @@ namespace AllLive.UWP.ViewModels
             set { _category = value; }
         }
 
+        private readonly PagedRequestState requests = new PagedRequestState();
+        private bool canLoadMoreBeforeRequest;
+
+        public void CancelLoad()
+        {
+            if (!Loading) return;
+            requests.Cancel();
+            Loading = false;
+            CanLoadMore = canLoadMoreBeforeRequest;
+        }
+
         public async void LoadData(ILiveSite site, LiveSubCategory category)
         {
-            try
+            if (site == null || category == null) return;
+            if (!ReferenceEquals(Site, site) || !ReferenceEquals(Category, category))
             {
+                requests.Reset();
+                Items.Clear();
+                Page = 1;
                 Site = site;
                 Category = category;
+            }
+            var request = requests.TryBegin();
+            if (request == null) return;
+            canLoadMoreBeforeRequest = CanLoadMore;
+            try
+            {
                 Loading = true;
                 CanLoadMore = false;
                 IsEmpty = false;
-                var result = await site.GetCategoryRooms(category, Page);
+                var result = await site.GetCategoryRooms(category, request.Page, request.Token);
+                if (!requests.IsCurrent(request)) return;
+                var knownRooms = new HashSet<string>(Items.Select(item => item.RoomID), StringComparer.OrdinalIgnoreCase);
+                var added = 0;
                 foreach (var item in result.Rooms)
                 {
-                    Items.Add(item);
+                    if (item != null && knownRooms.Add(item.RoomID))
+                    {
+                        Items.Add(item);
+                        added++;
+                    }
                 }
                 IsEmpty = Items.Count == 0;
-                CanLoadMore = result.HasMore;
-                Page++;
+                CanLoadMore = result.HasMore && added > 0;
+                requests.Accept(request);
+                Page = requests.Page;
+            }
+            catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+            {
             }
             catch (Exception ex)
             {
-                HandleError(ex);
+                if (requests.IsCurrent(request))
+                {
+                    CanLoadMore = canLoadMoreBeforeRequest;
+                    HandleError(ex);
+                }
             }
             finally
             {
-                Loading = false;
+                var current = requests.IsCurrent(request);
+                requests.End(request);
+                if (current) Loading = false;
             }
         }
 
         public override void Refresh()
         {
+            requests.Reset();
             base.Refresh();
             Items.Clear();
             LoadData(_site, _category);
@@ -69,8 +109,7 @@ namespace AllLive.UWP.ViewModels
 
         public override void LoadMore()
         {
-            base.LoadMore();
-            LoadData(_site, _category);
+            if (CanLoadMore && !Loading) LoadData(_site, _category);
         }
     }
 }

@@ -58,12 +58,15 @@ namespace AllLive.UWP.Views
             else if (e.NavigationMode == NavigationMode.Back)
             {
                 MessageCenter.ChangeTitle(categoryDetailVM.Category.Name, categoryDetailVM.Site);
+                if (!categoryDetailVM.Loading && categoryDetailVM.Items.Count == 0)
+                    categoryDetailVM.LoadData(categoryDetailVM.Site, categoryDetailVM.Category);
 
             }
         }
 
         protected override void OnNavigatedFrom(NavigationEventArgs e)
         {
+            categoryDetailVM.CancelLoad();
             base.OnNavigatedFrom(e);
             if (e.NavigationMode == NavigationMode.Back)
             {

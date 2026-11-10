@@ -10,6 +10,8 @@ $sources = @(
     (Join-Path $repoRoot 'AllLive.Core\BilibiliRoomFilter.cs'),
     (Join-Path $repoRoot 'AllLive.Core\DouyinRequestGate.cs'),
     (Join-Path $repoRoot 'AllLive.Core\Helper\CoreDebug.cs'),
+    (Join-Path $repoRoot 'AllLive.Core\Helper\HttpUtil.cs'),
+    (Join-Path $repoRoot '.github\tests\NetworkOptimizationTests.cs'),
     (Join-Path $repoRoot '.github\tests\PlaybackRecoveryTests.cs'),
     (Join-Path $repoRoot '.github\tests\DouyinRequestGateTests.cs'),
     (Join-Path $repoRoot '.github\tests\BilibiliRoomFilterTests.cs')
@@ -21,6 +23,7 @@ Add-Type -Path $sources -ReferencedAssemblies $references -CompilerOptions '/now
 [AllLive.Tests.PlaybackRecoveryTests]::RunAsync().GetAwaiter().GetResult()
 [AllLive.Tests.DouyinRequestGateTests]::RunAsync().GetAwaiter().GetResult()
 [AllLive.Tests.BilibiliRoomFilterTests]::RunAsync().GetAwaiter().GetResult()
+[AllLive.Tests.NetworkOptimizationTests]::RunAsync().GetAwaiter().GetResult()
 
 # Syntax and project inclusion checks do not replace the UWP/WinRT cloud build.
 [xml]$project = Get-Content -LiteralPath (Join-Path $repoRoot 'AllLive.UWP\AllLive.UWP.csproj') -Raw
