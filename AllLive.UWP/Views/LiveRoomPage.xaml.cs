@@ -1,4 +1,5 @@
 ﻿using AllLive.UWP.Models;
+using AllLive.Core;
 using AllLive.UWP.ViewModels;
 using System;
 using System.Collections.Generic;
@@ -97,8 +98,6 @@ namespace AllLive.UWP.Views
         private int streamReconnectInProgress;
         private bool isNetworkDown;
         private bool playbackRecoveryStopped;
-        private System.Threading.CancellationTokenSource stablePlaybackCts;
-        private static readonly TimeSpan StablePlaybackDuration = TimeSpan.FromSeconds(30);
         private DispatcherTimer bufferingTimer;
         private readonly object setPlayerRequestLock = new object();
         private bool isPageClosing;
@@ -145,7 +144,6 @@ namespace AllLive.UWP.Views
         private static readonly TimeSpan DuplicateSetPlayerWindow = TimeSpan.FromSeconds(2);
         private static readonly TimeSpan PlaybackSampleInterval = TimeSpan.FromSeconds(2);
         private static readonly TimeSpan PlaybackSampleDuration = TimeSpan.FromSeconds(30);
-        private static readonly TimeSpan PlaybackHealthMonitorDuration = TimeSpan.FromMinutes(30);
         private static readonly TimeSpan PlaybackSlowWallThreshold = TimeSpan.FromSeconds(1.5);
         private static readonly TimeSpan UiHeartbeatDelayLogThreshold = TimeSpan.FromSeconds(2.5);
         private static readonly TimeSpan ProbeReadTimeout = TimeSpan.FromSeconds(6);
@@ -192,6 +190,8 @@ namespace AllLive.UWP.Views
             public bool Slow { get; set; }
             public string Reason { get; set; }
             public string Url { get; set; }
+            public TimeSpan? Position { get; set; }
+            public PlaybackHealthObservation Health { get; set; }
         }
 
         private sealed class ProbeReadResult
@@ -648,10 +648,9 @@ namespace AllLive.UWP.Views
                     }
                     if (sender.PlaybackState == MediaPlaybackState.Playing)
                     {
-                        _ = ResetReconnectAfterStablePlaybackAsync();
                         lastPlaybackStartUtc = DateTimeOffset.UtcNow;
                         lastPlaybackUrl = liveRoomVM?.CurrentLine?.Url;
-                        // 健康监控始终开启：卡顿时仅提示手动切换；详细采样日志仍受调试开关控制。
+                        // 健康监控始终开启；持续异常有限恢复，详细采样日志仍受调试开关控制。
                         StartPlaybackHealthMonitor(System.Threading.Volatile.Read(ref mediaSourceAttemptVersion));
                         if (IsDebugDiagnosticsEnabled())
                         {
@@ -881,6 +880,7 @@ namespace AllLive.UWP.Views
             }
 
             CancelPlaybackSampling();
+            playbackHealth = new PlaybackHealthTracker();
             playbackDiagnosticProbeCount = 0;
             consecutiveSlowProgressCount = 0;
             consecutiveSevereStallCount = 0;
@@ -899,7 +899,8 @@ namespace AllLive.UWP.Views
         {
             var token = cts.Token;
             var startedUtc = DateTimeOffset.UtcNow;
-            DateTimeOffset? previousUtc = null;
+            var samplingClock = Stopwatch.StartNew();
+            TimeSpan? previousElapsed = null;
             TimeSpan? previousPosition = null;
             var sampleIndex = 0;
 
@@ -907,8 +908,7 @@ namespace AllLive.UWP.Views
             {
                 while (!token.IsCancellationRequested &&
                     !isPageClosing &&
-                    IsMediaSourceAttemptCurrent(attemptVersion) &&
-                    DateTimeOffset.UtcNow - startedUtc < PlaybackHealthMonitorDuration)
+                    IsMediaSourceAttemptCurrent(attemptVersion))
                 {
                     await Task.Delay(PlaybackSampleInterval, token);
                     if (token.IsCancellationRequested ||
@@ -919,7 +919,7 @@ namespace AllLive.UWP.Views
                     }
 
                     PlaybackSampleResult sample = null;
-                    var dispatchQueuedUtc = DateTimeOffset.UtcNow;
+                    var dispatchQueuedElapsed = samplingClock.Elapsed;
                     await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                     {
                         if (token.IsCancellationRequested ||
@@ -929,24 +929,27 @@ namespace AllLive.UWP.Views
                             return;
                         }
                         var now = DateTimeOffset.UtcNow;
-                        var uiDispatchDelay = now - dispatchQueuedUtc;
+                        var elapsed = samplingClock.Elapsed;
+                        var uiDispatchDelay = elapsed - dispatchQueuedElapsed;
                         sampleIndex++;
-                        sample = BuildPlaybackSample(sampleIndex, now, previousUtc, previousPosition, uiDispatchDelay, attemptVersion);
+                        sample = BuildPlaybackSample(sampleIndex, now, previousElapsed.HasValue ? elapsed - previousElapsed.Value : (TimeSpan?)null, previousPosition, uiDispatchDelay, attemptVersion);
                         if (sample != null && !string.IsNullOrEmpty(sample.Text) && IsDebugDiagnosticsEnabled())
                         {
                             // 调试：前 30s 全量采样；之后仅记录异常节奏，避免长时噪音。
                             var withinVerboseWindow = now - startedUtc <= PlaybackSampleDuration;
-                            if (withinVerboseWindow || sample.Suspicious || sample.Slow)
+                            if (withinVerboseWindow || sample.Suspicious || sample.Slow ||
+                                sample.Health.Reason == "TimestampDiscontinuity" || sampleIndex % 30 == 0)
                             {
                                 AddPlaybackSampleHistory(sample.Text);
                                 LogHelper.Log(sample.Text, LogType.DEBUG);
                             }
                         }
-                        previousUtc = now;
-                        previousPosition = TryReadPlaybackPosition(mediaPlayer?.PlaybackSession);
+                        previousElapsed = elapsed;
+                        previousPosition = sample?.Position;
+                        HandlePlaybackHealth(sample, attemptVersion);
                     });
 
-                    if (sample == null)
+                    if (sample == null || !IsMediaSourceAttemptCurrent(attemptVersion))
                     {
                         continue;
                     }
@@ -972,7 +975,7 @@ namespace AllLive.UWP.Views
                             StartPlaybackStallProbe(sample.Url, sample.Text, sample.Reason, attemptVersion);
                         }
 
-                        // 不自动换线 / 不自动改解码器 / 不自动重建：仅提示用户手动处理。
+                        // 自动恢复受独立预算限制；其余情况继续提示手动处理。
                         var pastGrace = !playbackHealthMonitorStartedUtc.HasValue ||
                             (DateTimeOffset.UtcNow - playbackHealthMonitorStartedUtc.Value) >= StallTipGracePeriod;
                         var shouldTip = pastGrace &&
@@ -1029,7 +1032,7 @@ namespace AllLive.UWP.Views
             LogDebugIfEnabled(() => $"已提示手动切换 context={context}");
         }
 
-        private PlaybackSampleResult BuildPlaybackSample(int sampleIndex, DateTimeOffset now, DateTimeOffset? previousUtc, TimeSpan? previousPosition, TimeSpan uiDispatchDelay, int attemptVersion)
+        private PlaybackSampleResult BuildPlaybackSample(int sampleIndex, DateTimeOffset now, TimeSpan? wallDelta, TimeSpan? previousPosition, TimeSpan uiDispatchDelay, int attemptVersion)
         {
             var session = mediaPlayer?.PlaybackSession;
             if (session == null)
@@ -1039,7 +1042,6 @@ namespace AllLive.UWP.Views
 
             var position = TryReadPlaybackPosition(session);
             var state = TryReadPlaybackState(session);
-            var wallDelta = previousUtc.HasValue ? now - previousUtc.Value : (TimeSpan?)null;
             var positionDelta = previousPosition.HasValue && position.HasValue ? position.Value - previousPosition.Value : (TimeSpan?)null;
             double? paceRatio = null;
             if (wallDelta.HasValue &&
@@ -1048,9 +1050,12 @@ namespace AllLive.UWP.Views
             {
                 paceRatio = positionDelta.Value.TotalMilliseconds / wallDelta.Value.TotalMilliseconds;
             }
-            var canClassifyPace = state == MediaPlaybackState.Playing &&
-                wallDelta.HasValue &&
-                wallDelta.Value >= PlaybackSlowWallThreshold;
+            var eligible = state == MediaPlaybackState.Playing && isPlaybackViewVisible &&
+                !isNetworkDown && uiDispatchDelay.TotalMilliseconds <= 250 &&
+                Math.Abs(session.PlaybackRate - 1) < 0.01;
+            var health = playbackHealth.Observe(wallDelta?.TotalSeconds ?? 0, positionDelta?.TotalSeconds, eligible);
+            var canClassifyPace = eligible && wallDelta.HasValue &&
+                wallDelta.Value >= PlaybackSlowWallThreshold && wallDelta.Value.TotalSeconds <= 5;
             var suspicious = canClassifyPace &&
                 (!positionDelta.HasValue ||
                  positionDelta.Value.TotalSeconds < 0.3 ||
@@ -1066,7 +1071,9 @@ namespace AllLive.UWP.Views
                 Suspicious = suspicious,
                 Slow = slow,
                 Reason = reason,
-                Url = liveRoomVM?.CurrentLine?.Url ?? lastPlaybackUrl
+                Url = liveRoomVM?.CurrentLine?.Url ?? lastPlaybackUrl,
+                Position = position,
+                Health = health
             };
             // Health detection remains active with logging disabled; expensive resource
             // snapshots, URL analysis and formatting are diagnostic work only.
@@ -1094,6 +1101,11 @@ namespace AllLive.UWP.Views
                 sb.AppendLine($"ProgressPaceRatio: {paceRatio.Value:F3}");
             }
             sb.AppendLine($"UiDispatchDelayMs: {uiDispatchDelay.TotalMilliseconds:F0}");
+            sb.AppendLine($"HealthEligible: {eligible}");
+            sb.AppendLine($"HealthReason: {health.Reason}");
+            sb.AppendLine($"HealthWindowMs: {health.WindowSeconds * 1000:F0}");
+            sb.AppendLine($"HealthProgressMs: {health.WindowProgressSeconds * 1000:F0}");
+            sb.AppendLine($"HealthDeficitMs: {(health.WindowSeconds - health.WindowProgressSeconds) * 1000:F0}");
             sb.AppendLine($"疑似进度慢推进: {slow}");
             sb.AppendLine($"疑似进度停滞: {suspicious}");
             AppendPlaybackValue(sb, "BufferingProgress", () => session.BufferingProgress.ToString("P"));
@@ -1570,7 +1582,9 @@ namespace AllLive.UWP.Views
 
         private void LiveRoomVM_ChangedPlayUrl(object sender, string e)
         {
-            // 自动换线/刷新地址也会触发此事件，保留故障期间的累计预算。
+            // Manual line selection wins over pending recovery; automatic changes keep its owner.
+            if (streamReconnectInProgress != 0 && !applyingRecoveryLine && !liveRoomVM.IsApplyingPlayInfo)
+                CancelStreamReconnect();
             QueueSetPlayer(e, "ChangedPlayUrl");
         }
 
@@ -1579,7 +1593,8 @@ namespace AllLive.UWP.Views
             if (isPageClosing) return;
             if (string.Equals(e?.PropertyName, "CurrentQuality", StringComparison.Ordinal))
             {
-                // 用户手动切换清晰度：重置卡顿自愈预算（不自动改画质，仅响应用户操作）。
+                if (!liveRoomVM.IsApplyingPlayInfo) CancelStreamReconnect();
+                // 手动换画质重置提示；保留本次进房的自动恢复上限。
                 ResetStallTipState();
                 return;
             }
@@ -1699,40 +1714,7 @@ namespace AllLive.UWP.Views
 
         private void CancelStablePlaybackReset()
         {
-            var cts = stablePlaybackCts;
-            stablePlaybackCts = null;
-            if (cts != null) { try { cts.Cancel(); } catch { } }
-        }
-
-        private async Task ResetReconnectAfterStablePlaybackAsync()
-        {
-            CancelStablePlaybackReset();
-            var cts = new System.Threading.CancellationTokenSource();
-            stablePlaybackCts = cts;
-            var version = System.Threading.Volatile.Read(ref mediaSourceAttemptVersion);
-            var initialPosition = TryReadPlaybackPosition(mediaPlayer?.PlaybackSession);
-            try
-            {
-                await Task.Delay(StablePlaybackDuration, cts.Token);
-                var position = TryReadPlaybackPosition(mediaPlayer?.PlaybackSession);
-                if (!cts.IsCancellationRequested && stablePlaybackCts == cts &&
-                    IsMediaSourceAttemptCurrent(version) && !isNetworkDown &&
-                    mediaPlayer?.PlaybackSession?.PlaybackState == MediaPlaybackState.Playing &&
-                    initialPosition.HasValue && position.HasValue &&
-                    position.Value - initialPosition.Value >= TimeSpan.FromSeconds(15))
-                {
-                    streamReconnectAttempt = 0;
-                    recoveryElapsed = null;
-                    recoveryGeneration++;
-                    LogDebugIfEnabled("连续稳定播放 30s，重置重连预算");
-                }
-            }
-            catch (OperationCanceledException) { }
-            finally
-            {
-                if (stablePlaybackCts == cts) stablePlaybackCts = null;
-                cts.Dispose();
-            }
+            playbackHealth.ResetStability();
         }
 
         private void StopPlaybackAfterFailure(string message)
@@ -1751,6 +1733,7 @@ namespace AllLive.UWP.Views
 
         private void QueueSetPlayer(string url, string source)
         {
+            if (source == "DecoderChanged") CancelStreamReconnect();
             if (isPageClosing || isNetworkDown || playbackRecoveryStopped)
             {
                 return;
@@ -2119,6 +2102,9 @@ namespace AllLive.UWP.Views
             var sb = new StringBuilder();
             sb.AppendLine("FFmpeg配置:");
             sb.AppendLine($"VideoDecoderMode: {config.Video?.VideoDecoderMode}");
+            sb.AppendLine($"ReadAheadBufferEnabled: {config.General.ReadAheadBufferEnabled}");
+            sb.AppendLine($"ReadAheadBufferSizePerStream: {config.General.ReadAheadBufferSize}");
+            sb.AppendLine($"ReadAheadBufferDurationPerStream: {config.General.ReadAheadBufferDuration}");
             if (config.FFmpegOptions != null && config.FFmpegOptions.Count > 0)
             {
                 foreach (var kv in config.FFmpegOptions)
@@ -3508,35 +3494,14 @@ namespace AllLive.UWP.Views
             }
         }
 
-        /// <summary>
-        /// 兼容不同 FFmpegInteropX 版本的缓冲相关属性（存在才设置，避免编译期绑死 API）。
-        /// </summary>
+        // FFmpegInteropX 2.0.0: settings live on General; the byte limit is Int64.
+        // Upper bounds for read-ahead, not a mandatory eight-second startup wait.
         private static void TryConfigureMediaSourceBuffering(MediaSourceConfig config, string url)
         {
-            if (config == null || !IsHlsUrl(url))
-            {
-                return;
-            }
-
-            try
-            {
-                var type = config.GetType();
-                // 部分版本提供更大读前缓冲（字节），约 3Mbps * 3s ≈ 1.1MB，取 4MB 更稳。
-                var maxBuffer = type.GetProperty("MaxBufferBytes") ?? type.GetProperty("ReadAheadBufferSize");
-                if (maxBuffer != null && maxBuffer.CanWrite && maxBuffer.PropertyType == typeof(uint))
-                {
-                    maxBuffer.SetValue(config, (uint)(4 * 1024 * 1024));
-                }
-
-                var streamBuffering = type.GetProperty("StreamBuffering");
-                if (streamBuffering != null && streamBuffering.CanWrite && streamBuffering.PropertyType == typeof(bool))
-                {
-                    streamBuffering.SetValue(config, true);
-                }
-            }
-            catch
-            {
-            }
+            if (config == null || !IsHlsUrl(url)) return;
+            config.General.ReadAheadBufferEnabled = true;
+            config.General.ReadAheadBufferSize = 16L * 1024 * 1024;
+            config.General.ReadAheadBufferDuration = TimeSpan.FromSeconds(8);
         }
 
         private static string TryGetHost(string url)

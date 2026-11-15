@@ -18,6 +18,7 @@ namespace AllLive.UWP.ViewModels
         private int roomLoadVersion;
         private int playUrlRequestVersion;
         private bool applyingPlayInfo;
+        internal bool IsApplyingPlayInfo => applyingPlayInfo;
 
         private CancellationToken RoomRequestToken => roomRequestCts?.Token ?? CancellationToken.None;
 
@@ -74,7 +75,7 @@ namespace AllLive.UWP.ViewModels
             await LoadPlayUrlAsync(CancellationToken.None, refreshRoom: false);
         }
 
-        public async Task<bool> LoadPlayUrlAsync(CancellationToken token, bool refreshRoom)
+        public async Task<bool> LoadPlayUrlAsync(CancellationToken token, bool refreshRoom, string requiredCodec = null)
         {
             if (!isActive || Site == null || detail == null || token.IsCancellationRequested) return false;
             InvalidatePlayUrlRequests();
@@ -136,6 +137,12 @@ namespace AllLive.UWP.ViewModels
                     });
                 }
                 if (newLines.Count == 0) return false;
+                if (!string.IsNullOrEmpty(requiredCodec))
+                {
+                    // A health refresh must preserve the playing codec even when the API order changes.
+                    if (!newLines.Any(x => x.Codec == requiredCodec)) return false;
+                    newLines = newLines.OrderBy(x => x.Codec == requiredCodec ? 0 : 1).ToList();
+                }
 
                 applyingPlayInfo = true;
                 try

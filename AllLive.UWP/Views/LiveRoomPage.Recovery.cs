@@ -1,5 +1,6 @@
 using AllLive.UWP.Helper;
 using AllLive.UWP.Models;
+using AllLive.UWP.ViewModels;
 using System;
 using System.Diagnostics;
 using System.Threading;
@@ -119,10 +120,11 @@ namespace AllLive.UWP.Views
             return remaining < maximum ? remaining : maximum;
         }
 
-        private bool TryScheduleStreamReconnect(string reason)
+        private bool TryScheduleStreamReconnect(string reason, PlayurlLine preferredLine = null)
         {
             if (isPageClosing || isNetworkDown || playbackRecoveryStopped) return true;
             if (liveRoomVM?.detail == null) return false;
+            if (reason != "MediaEnded" && reason != "NetworkRestored") ForgetCurrentCdnPreference();
             CancelStablePlaybackReset();
             if (Interlocked.CompareExchange(ref streamReconnectInProgress, 1, 0) != 0)
             {
@@ -135,13 +137,16 @@ namespace AllLive.UWP.Views
             var owner = new CancellationTokenSource();
             streamReconnectCts = owner;
             LogRecoveryEvent("Scheduled", reason);
-            _ = ReconnectStreamAsync(reason, owner);
+            _ = ReconnectStreamAsync(reason, owner, preferredLine);
             return true;
         }
 
-        private async Task ReconnectStreamAsync(string reason, CancellationTokenSource owner)
+        private async Task ReconnectStreamAsync(string reason, CancellationTokenSource owner, PlayurlLine preferredLine)
         {
             var token = owner.Token;
+            var healthRecovery = reason.StartsWith("HlsHealth/", StringComparison.Ordinal);
+            var refreshHls = healthRecovery && preferredLine == null;
+            var healthCodec = healthRecovery ? liveRoomVM.CurrentLine?.Codec : null;
             try
             {
                 while (IsRecoveryCurrent(owner))
@@ -176,23 +181,29 @@ namespace AllLive.UWP.Views
                     recoveryPlaybackResult = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                     var resultTask = recoveryPlaybackResult.Task;
 
-                    if (!TryFallbackBilibiliCodec(reason))
+                    if (preferredLine != null && liveRoomVM.Lines?.Contains(preferredLine) == true)
+                    {
+                        SelectRecoveryLine(preferredLine);
+                        preferredLine = null;
+                    }
+                    else if (healthRecovery || !TrySelectRecoveryCodec(reason))
                     {
                         var current = liveRoomVM.CurrentLine;
                         var lines = liveRoomVM.Lines;
                         var index = lines?.IndexOf(current) ?? -1;
-                        var canSwitch = index >= 0 && index + 1 < lines.Count;
-                        if (canSwitch && (streamReconnectAttempt > 1 || reason == "SourceFailed"))
+                        var canSwitch = index >= 0 && index + 1 < lines.Count &&
+                            (!healthRecovery || lines[index + 1].Codec == healthCodec);
+                        if (!refreshHls && canSwitch && (streamReconnectAttempt > 1 || reason == "SourceFailed"))
                         {
-                            liveRoomVM.CurrentLine = lines[index + 1];
+                            SelectRecoveryLine(lines[index + 1]);
                         }
-                        else if (current != null && streamReconnectAttempt == 1 && reason != "SourceFailed")
+                        else if (!refreshHls && current != null && streamReconnectAttempt == 1 && reason != "SourceFailed")
                         {
                             QueueSetPlayer(current.Url, "Recovery");
                         }
                         else
                         {
-                            var refresh = liveRoomVM.LoadPlayUrlAsync(token, refreshRoom: true);
+                            var refresh = liveRoomVM.LoadPlayUrlAsync(token, refreshRoom: !healthRecovery, requiredCodec: healthCodec);
                             using (var wait = CancellationTokenSource.CreateLinkedTokenSource(token))
                             {
                                 var timeout = Task.Delay(RemainingRecoveryTime(TimeSpan.FromSeconds(20)), wait.Token);
@@ -206,6 +217,7 @@ namespace AllLive.UWP.Views
                                 var refreshed = await refresh;
                                 if (!IsRecoveryCurrent(owner)) return;
                                 if (!refreshed) continue;
+                                refreshHls = false;
                             }
                         }
                     }

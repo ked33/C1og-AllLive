@@ -901,7 +901,7 @@ namespace AllLive.UWP.ViewModels
             {
                 filtered = filtered.Where(x => string.Equals(x?.Codec, SelectedCodec, StringComparison.OrdinalIgnoreCase));
             }
-            var newLines = filtered.ToList();
+            var newLines = PlaybackCdnPreferenceStore.Order(SiteName, detail?.RoomID, filtered.ToList());
             Lines = newLines;
 
             if (newLines.Count == 0)

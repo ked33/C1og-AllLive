@@ -157,6 +157,10 @@
     <Compile Include="Helper\ImageDimHelper.cs" />
     <Compile Include="Helper\LogHelper.cs" />
     <Compile Include="Helper\PlaybackOperationGate.cs" />
+    <Compile Include="Helper\PlaybackCdnPreferenceStore.cs" />
+    <Compile Include="Views\LiveRoomPage.Health.cs">
+      <DependentUpon>LiveRoomPage.xaml</DependentUpon>
+    </Compile>
     <Compile Include="Helper\LiveMessageBuffer.cs" />
     <Compile Include="Helper\DataImportParser.cs" />
     <Compile Include="Helper\LocalDatabaseStore.cs" />
