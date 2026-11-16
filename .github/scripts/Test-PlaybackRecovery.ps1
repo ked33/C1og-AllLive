@@ -3,6 +3,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+& (Join-Path $PSScriptRoot 'Test-PackageManifests.ps1')
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $sources = @(
     (Join-Path $repoRoot 'AllLive.UWP\Helper\PlaybackOperationGate.cs'),
