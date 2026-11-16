@@ -13,6 +13,8 @@ namespace AllLive.Core.Models
         /// 清晰度
         /// </summary>
         public string Quality { get; set; }
+        // Stable platform identifier; display names may change between refreshes.
+        public string Id { get; set; }
         /// <summary>
         /// 清晰度信息
         /// </summary>

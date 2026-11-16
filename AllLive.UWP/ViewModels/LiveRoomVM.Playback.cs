@@ -18,6 +18,22 @@ namespace AllLive.UWP.ViewModels
         private int roomLoadVersion;
         private int playUrlRequestVersion;
         private bool applyingPlayInfo;
+        private bool actualQualityPending;
+        public string ActualQualityText
+        {
+            get
+            {
+                if (Site?.Name != "斗鱼直播") return "";
+                if (actualQualityPending) return "正在确认实际画质…";
+                var info = CurrentLine?.PlayInfo;
+                if (info?.AppliedRate == null) return "实际画质未确认";
+                var actual = string.IsNullOrWhiteSpace(info.AppliedQuality) ? "平台档位 " + info.AppliedRate : info.AppliedQuality;
+                var requested = info.RequestedQuality;
+                return "实际：" + actual + (info.AppliedRate != info.RequestedRate && !string.IsNullOrWhiteSpace(requested)
+                    ? "（请求：" + requested + "）" : "");
+            }
+        }
+
         internal bool IsApplyingPlayInfo => applyingPlayInfo;
 
         private CancellationToken RoomRequestToken => roomRequestCts?.Token ?? CancellationToken.None;
@@ -46,6 +62,8 @@ namespace AllLive.UWP.ViewModels
         public void InvalidatePlayUrlRequests()
         {
             playUrlRequestVersion++;
+            actualQualityPending = false;
+            DoPropertyChanged(nameof(ActualQualityText));
             var previous = playUrlCts;
             playUrlCts = null;
             // The async owner disposes its CTS after the underlying API has returned.
@@ -86,38 +104,49 @@ namespace AllLive.UWP.ViewModels
             var site = Site;
             var roomId = RoomID;
             var roomDetail = detail;
+            var douyuSession = site.Name == "斗鱼直播" ? AllLive.Core.Helper.DouyuAccountState.Capture() : null;
             var quality = CurrentQuality;
             var acquired = false;
+            actualQualityPending = true;
+            DoPropertyChanged(nameof(ActualQualityText));
             try
             {
                 acquired = await playInfoGate.WaitAsync(TimeSpan.FromSeconds(30), owner.Token);
                 if (!acquired)
                 {
                     LogHelper.LogDebug(() => $"[PlaybackRecovery] event=PlayInfoBusy request={requestVersion}");
-                    if (!refreshRoom && IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site))
+                    if (!refreshRoom && IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site, douyuSession))
                         Utils.ShowMessageToast("上一次播放信息请求仍在结束，请稍后重试");
                     return false;
                 }
-                if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site)) return false;
+                if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site, douyuSession)) return false;
 
                 List<LivePlayQuality> refreshedQualities = null;
                 if (refreshRoom)
                 {
                     roomDetail = await site.GetRoomDetail(roomId, owner.Token);
-                    if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site)) return false;
+                    if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site, douyuSession)) return false;
                     // Only the dedicated, validated status query may declare a room offline.
                     if (roomDetail == null || !roomDetail.Status) return false;
                     refreshedQualities = await site.GetPlayQuality(roomDetail, owner.Token);
-                    if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site)) return false;
+                    if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site, douyuSession)) return false;
                     if (site.Name == "虎牙直播")
                         refreshedQualities = refreshedQualities?.Where(x => x != null && x.Quality?.Contains("HDR") != true).ToList();
                     if (refreshedQualities == null || refreshedQualities.Count == 0) return false;
-                    quality = refreshedQualities.FirstOrDefault(x => x.Quality == quality?.Quality) ?? refreshedQualities[0];
+                    quality = refreshedQualities.FirstOrDefault(x => !string.IsNullOrEmpty(quality?.Id) && x.Id == quality.Id)
+                        ?? refreshedQualities.FirstOrDefault(x => x.Quality == quality?.Quality) ?? refreshedQualities[0];
                 }
                 if (quality == null) return false;
 
-                var data = await site.GetPlayUrls(roomDetail, quality, owner.Token);
-                if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site)) return false;
+                List<LivePlayUrl> playInfo = null;
+                List<string> data;
+                if (site is ILivePlayInfoSite metadataSite)
+                {
+                    playInfo = await metadataSite.GetPlayUrlsWithInfoAsync(roomDetail, quality, owner.Token);
+                    data = playInfo?.Select(x => x.Url).ToList();
+                }
+                else data = await site.GetPlayUrls(roomDetail, quality, owner.Token);
+                if (!IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site, douyuSession)) return false;
                 if (data == null || data.Count == 0)
                 {
                     LogHelper.LogDebug(() => $"[PlaybackRecovery] event=EmptyPlayUrls request={requestVersion}");
@@ -133,7 +162,8 @@ namespace AllLive.UWP.ViewModels
                     {
                         Name = $"线路{newLines.Count + 1}",
                         Url = url,
-                        Codec = DetectCodecLabel(url, site.Name)
+                        Codec = DetectCodecLabel(url, site.Name),
+                        PlayInfo = playInfo?.FirstOrDefault(x => x.Url == url)
                     });
                 }
                 if (newLines.Count == 0) return false;
@@ -165,7 +195,7 @@ namespace AllLive.UWP.ViewModels
             catch (OperationCanceledException) { return false; }
             catch (Exception ex)
             {
-                if (IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site))
+                if (IsPlayUrlRequestCurrent(owner, requestVersion, loadVersion, site, douyuSession))
                 {
                     LogHelper.LogDebug(() => $"[PlaybackRecovery] event=PlayUrlFailed request={requestVersion} error={ex.GetType().Name}");
                     if (!refreshRoom) Utils.ShowMessageToast("加载播放地址失败");
@@ -175,17 +205,23 @@ namespace AllLive.UWP.ViewModels
             finally
             {
                 if (acquired) playInfoGate.Release();
-                if (playUrlCts == owner) playUrlCts = null;
+                if (playUrlCts == owner)
+                {
+                    playUrlCts = null;
+                    actualQualityPending = false;
+                    DoPropertyChanged(nameof(ActualQualityText));
+                }
                 owner.Dispose();
             }
         }
 
         private bool IsPlayUrlRequestCurrent(CancellationTokenSource owner, int requestVersion,
-            int loadVersion, ILiveSite site)
+            int loadVersion, ILiveSite site, AllLive.Core.Helper.DouyuAccountSession douyuSession)
         {
             return !owner.IsCancellationRequested && playUrlCts == owner &&
                 requestVersion == playUrlRequestVersion && IsRoomLoadCurrent(loadVersion) &&
-                ReferenceEquals(Site, site);
+                ReferenceEquals(Site, site) &&
+                (douyuSession == null || AllLive.Core.Helper.DouyuAccountState.IsCurrent(douyuSession));
         }
     }
 }

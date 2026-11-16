@@ -14,6 +14,13 @@ $sources = @(
     (Join-Path $repoRoot 'AllLive.Core\DouyinRequestGate.cs'),
     (Join-Path $repoRoot 'AllLive.Core\Helper\CoreDebug.cs'),
     (Join-Path $repoRoot 'AllLive.Core\Helper\HttpUtil.cs'),
+    (Join-Path $repoRoot 'AllLive.Core\Helper\CoreConfig.cs'),
+    (Join-Path $repoRoot 'AllLive.Core\Helper\DouyuAccountState.cs'),
+    (Join-Path $repoRoot 'AllLive.Core\Helper\DouyuAuthClient.cs'),
+    (Join-Path $repoRoot 'AllLive.Core\DouyuPlaybackClient.cs'),
+    (Join-Path $repoRoot 'AllLive.Core\Models\LivePlayQuality.cs'),
+    (Join-Path $repoRoot 'AllLive.Core\Models\LivePlayUrl.cs'),
+    (Join-Path $repoRoot '.github\tests\DouyuAccountTests.cs'),
     (Join-Path $repoRoot '.github\tests\NetworkOptimizationTests.cs'),
     (Join-Path $repoRoot '.github\tests\PlaybackRecoveryTests.cs'),
     (Join-Path $repoRoot '.github\tests\DouyinRequestGateTests.cs'),
@@ -31,6 +38,7 @@ Add-Type -Path $sources -ReferencedAssemblies $references -CompilerOptions '/now
 [AllLive.Tests.NetworkOptimizationTests]::RunAsync().GetAwaiter().GetResult()
 [AllLive.Tests.HlsPlaybackTests]::RunAsync().GetAwaiter().GetResult()
 [AllLive.Tests.HlsPreferenceStoreTests]::RunAsync().GetAwaiter().GetResult()
+[AllLive.Tests.DouyuAccountTests]::RunAsync().GetAwaiter().GetResult()
 
 # Syntax and project inclusion checks do not replace the UWP/WinRT cloud build.
 [xml]$project = Get-Content -LiteralPath (Join-Path $repoRoot 'AllLive.UWP\AllLive.UWP.csproj') -Raw

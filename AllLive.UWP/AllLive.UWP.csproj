@@ -134,6 +134,10 @@
     <Compile Include="BaseFramePage.xaml.cs">
       <DependentUpon>BaseFramePage.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Controls\DouyuLoginDialog.xaml.cs">
+      <DependentUpon>DouyuLoginDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Helper\DouyuAccount.cs" />
     <Compile Include="Controls\BiliLoginDialog.xaml.cs">
       <DependentUpon>BiliLoginDialog.xaml</DependentUpon>
     </Compile>
@@ -303,6 +307,10 @@
       <SubType>Designer</SubType>
     </ApplicationDefinition>
     <Page Include="BaseFramePage.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="Controls\DouyuLoginDialog.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>

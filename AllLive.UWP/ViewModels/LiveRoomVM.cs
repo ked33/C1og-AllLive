@@ -384,6 +384,7 @@ namespace AllLive.UWP.ViewModels
                 if (!applyingPlayInfo) InvalidatePlayUrlRequests();
                 currentLine = value;
                 DoPropertyChanged("CurrentLine");
+                DoPropertyChanged(nameof(ActualQualityText));
                 if (value != null)
                 {
                     ChangedPlayUrl?.Invoke(this, value.Url);
@@ -575,7 +576,7 @@ namespace AllLive.UWP.ViewModels
                         LogHelper.Log($"获取清晰度失败: 返回空列表。站点:{Site?.Name} 房间ID:{RoomID}", LogType.ERROR);
                         if (Site?.Name == "斗鱼直播")
                         {
-                            Utils.ShowMessageToast("斗鱼签名服务不可用，无法获取播放地址");
+                            Utils.ShowMessageToast("斗鱼播放信息暂不可用，请刷新或检查登录状态");
                         }
                         else
                         {
@@ -1463,6 +1464,7 @@ namespace AllLive.UWP.ViewModels
         public string Name { get; set; }
         public string Url { get; set; }
         public string Codec { get; set; }
+        public LivePlayUrl PlayInfo { get; set; }
     }
     public class ReconnectStatus
     {

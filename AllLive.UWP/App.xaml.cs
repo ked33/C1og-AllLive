@@ -148,6 +148,8 @@ namespace AllLive.UWP
             //初始化数据库
             await DatabaseHelper.InitializeDatabase();
             await ApplyDouyinCookieSettingAsync();
+            await DouyuAccount.InitializeAsync();
+            _ = DouyuAccount.RefreshAsync();
             //初始化弹幕DPI
             NSDanmaku.Controls.Danmaku.InitDanmakuDpi();
             if (Utils.IsXbox)

@@ -306,6 +306,7 @@
                     </Grid>
                     <Grid
                         x:Name="SettingsDouyuSignSwitch"
+                        Visibility="Collapsed"
                         Margin="0,8,0,0"
                         Padding="8,12"
                         Background="{ThemeResource LayerFillColorDefaultBrush}"
@@ -324,6 +325,7 @@
                     </Grid>
                     <Grid
                         x:Name="SettingsDouyuSign"
+                        Visibility="Collapsed"
                         Margin="0,8,0,0"
                         Padding="8,12"
                         Background="{ThemeResource LayerFillColorDefaultBrush}"
@@ -343,6 +345,7 @@
                     </Grid>
                     <Grid
                         x:Name="SettingsDouyuSignStatus"
+                        Visibility="Collapsed"
                         Margin="0,8,0,0"
                         Padding="8,12"
                         Background="{ThemeResource LayerFillColorDefaultBrush}"
@@ -435,6 +438,20 @@
                         </StackPanel>
                     </Grid>
                     <TextBlock Margin="4,12" FontSize="18">账号</TextBlock>
+                    <Grid Margin="0,0,0,8" Padding="8,12"
+                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                            <TextBlock Text="斗鱼" />
+                            <TextBlock x:Name="txtDouyuAccount" FontSize="12" Foreground="Gray" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Button x:Name="BtnLoginDouyu" Grid.Column="1" Content="扫码登录" Click="BtnLoginDouyu_Click" />
+                        <Button x:Name="BtnLogoutDouyu" Grid.Column="1" Content="退出登录" Click="BtnLogoutDouyu_Click" Visibility="Collapsed" />
+                    </Grid>
                     <Grid
                         Padding="8,12"
                         Background="{ThemeResource LayerFillColorDefaultBrush}"

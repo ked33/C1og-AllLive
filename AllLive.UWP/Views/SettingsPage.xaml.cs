@@ -68,6 +68,7 @@ namespace AllLive.UWP.Views
                 return;
             }
             BiliAccount.Instance.OnAccountChanged += BiliAccount_OnAccountChanged;
+            DouyuAccount.Changed += DouyuAccount_Changed;
             isBiliAccountChangedSubscribed = true;
         }
 
@@ -78,6 +79,7 @@ namespace AllLive.UWP.Views
                 return;
             }
             BiliAccount.Instance.OnAccountChanged -= BiliAccount_OnAccountChanged;
+            DouyuAccount.Changed -= DouyuAccount_Changed;
             isBiliAccountChangedSubscribed = false;
         }
 
@@ -88,6 +90,7 @@ namespace AllLive.UWP.Views
 
         private void UpdateBiliAccountUi()
         {
+            UpdateDouyuAccountUi();
             if (BiliAccount.Instance.Logined)
             {
                 txtBili.Text = string.IsNullOrWhiteSpace(BiliAccount.Instance.UserName)
@@ -278,29 +281,9 @@ namespace AllLive.UWP.Views
                 });
             });
 
+            // Keep legacy backup fields readable; V1 playback no longer uses the JS signing service.
             swDouyuSignService.IsOn = SettingHelper.GetValue<bool>(SettingHelper.DOUYU_SIGN_ENABLED, true);
-            swDouyuSignService.Toggled += new RoutedEventHandler((obj, args) =>
-            {
-                SettingHelper.SetValue(SettingHelper.DOUYU_SIGN_ENABLED, swDouyuSignService.IsOn);
-                txtDouyuSignUrl.IsEnabled = swDouyuSignService.IsOn;
-                ApplyDouyuSignServiceSetting(txtDouyuSignUrl.Text, swDouyuSignService.IsOn);
-                _ = UpdateDouyuSignStatusAsync();
-            });
-
-            //斗鱼签名服务地址
             txtDouyuSignUrl.Text = SettingHelper.GetValue<string>(SettingHelper.DOUYU_SIGN_URL, SettingHelper.DOUYU_SIGN_URL_DEFAULT);
-            txtDouyuSignUrl.IsEnabled = swDouyuSignService.IsOn;
-            ApplyDouyuSignServiceSetting(txtDouyuSignUrl.Text, swDouyuSignService.IsOn);
-            _ = UpdateDouyuSignStatusAsync();
-            txtDouyuSignUrl.Loaded += new RoutedEventHandler((sender, e) =>
-            {
-                txtDouyuSignUrl.TextChanged += new TextChangedEventHandler((obj, args) =>
-                {
-                    var value = txtDouyuSignUrl.Text?.Trim() ?? "";
-                    SettingHelper.SetValue(SettingHelper.DOUYU_SIGN_URL, value);
-                    ApplyDouyuSignServiceSetting(value, swDouyuSignService.IsOn);
-                });
-            });
 
             swDouyinSignService.IsOn = SettingHelper.GetValue<bool>(SettingHelper.DOUYIN_SIGN_ENABLED, true);
             swDouyinSignService.Toggled += new RoutedEventHandler((obj, args) =>
@@ -775,7 +758,6 @@ namespace AllLive.UWP.Views
             LogHelper.SetEnabled(logEnabled);
             ApplyDouyuSignServiceSetting(txtDouyuSignUrl.Text, swDouyuSignService.IsOn);
             ApplyDouyinSignServiceSetting(txtDouyinSignUrl.Text, swDouyinSignService.IsOn);
-            _ = UpdateDouyuSignStatusAsync();
             _ = UpdateDouyinSignStatusAsync();
         }
 
@@ -1069,6 +1051,44 @@ namespace AllLive.UWP.Views
             Windows.Storage.StorageFolder storageFolder = Windows.Storage.ApplicationData.Current.LocalFolder;
             var logFolder = await storageFolder.CreateFolderAsync("log", Windows.Storage.CreationCollisionOption.OpenIfExists);
             await Launcher.LaunchFolderAsync(logFolder);
+        }
+
+        private void UpdateDouyuAccountUi()
+        {
+            var session = AllLive.Core.Helper.DouyuAccountState.Capture();
+            txtDouyuAccount.Text = session.HasLogin
+                ? (string.IsNullOrWhiteSpace(session.UserName) ? "已保存登录状态" : "已登录：" + session.UserName)
+                : "登录后可获取账号允许的高清档位";
+            BtnLoginDouyu.Visibility = session.HasLogin ? Visibility.Collapsed : Visibility.Visible;
+            BtnLogoutDouyu.Visibility = session.HasLogin ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private async void DouyuAccount_Changed(object sender, EventArgs args)
+        {
+            try
+            {
+                await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () =>
+                {
+                    if (isBiliAccountChangedSubscribed) UpdateDouyuAccountUi();
+                });
+            }
+            catch (Exception) { /* The settings window may have closed. */ }
+        }
+
+        private async void BtnLoginDouyu_Click(object sender, RoutedEventArgs e)
+        {
+            BtnLoginDouyu.IsEnabled = false;
+            try { await new AllLive.UWP.Controls.DouyuLoginDialog().ShowAsync(); }
+            catch (Exception) { Utils.ShowMessageToast("暂时无法打开斗鱼登录窗口"); }
+            finally { BtnLoginDouyu.IsEnabled = true; UpdateDouyuAccountUi(); }
+        }
+
+        private async void BtnLogoutDouyu_Click(object sender, RoutedEventArgs e)
+        {
+            BtnLogoutDouyu.IsEnabled = false;
+            try { await DouyuAccount.LogoutAsync(); }
+            catch (Exception) { Utils.ShowMessageToast("退出登录失败，请重试"); }
+            finally { BtnLogoutDouyu.IsEnabled = true; UpdateDouyuAccountUi(); }
         }
 
         private async void BtnLoginBili_Click(object sender, RoutedEventArgs e)

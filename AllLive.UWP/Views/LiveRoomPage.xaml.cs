@@ -315,6 +315,7 @@ namespace AllLive.UWP.Views
             liveRoomVM.PropertyChanged += LiveRoomVM_PropertyChanged;
             liveRoomVM.AddDanmaku += LiveRoomVM_AddDanmaku;
             liveRoomVM.ReconnectStatusChanged += LiveRoomVM_ReconnectStatusChanged;
+            DouyuAccount.Changed += DouyuAccount_Changed;
             //每过2秒就设置焦点
             timer_focus = new DispatcherTimer() { Interval = TimeSpan.FromSeconds(2) };
             timer_focus.Tick += Timer_focus_Tick;
@@ -1579,6 +1580,31 @@ namespace AllLive.UWP.Views
             }
         }
 
+
+        private async void DouyuAccount_Changed(object sender, EventArgs e)
+        {
+            var session = AllLive.Core.Helper.DouyuAccountState.Capture();
+            try
+            {
+                await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, async () =>
+                {
+                    if (isPageClosing || liveRoomVM.Site?.Name != "斗鱼直播" ||
+                        !AllLive.Core.Helper.DouyuAccountState.IsCurrent(session)) return;
+                    try
+                    {
+                        CancelStreamReconnect();
+                        if (!await liveRoomVM.LoadPlayUrlAsync(System.Threading.CancellationToken.None, refreshRoom: true) && !isPageClosing &&
+                            AllLive.Core.Helper.DouyuAccountState.IsCurrent(session))
+                            RefreshLiveRoom();
+                    }
+                    catch (Exception)
+                    {
+                        if (!isPageClosing && AllLive.Core.Helper.DouyuAccountState.IsCurrent(session)) RefreshLiveRoom();
+                    }
+                });
+            }
+            catch (Exception) { /* This playback window has closed. */ }
+        }
 
         private void LiveRoomVM_ChangedPlayUrl(object sender, string e)
         {
@@ -4556,6 +4582,7 @@ namespace AllLive.UWP.Views
             liveRoomVM.ChangedPlayUrl -= LiveRoomVM_ChangedPlayUrl;
             liveRoomVM.AddDanmaku -= LiveRoomVM_AddDanmaku;
             liveRoomVM.ReconnectStatusChanged -= LiveRoomVM_ReconnectStatusChanged;
+            DouyuAccount.Changed -= DouyuAccount_Changed;
             NetworkInformation.NetworkStatusChanged -= NetworkInformation_NetworkStatusChanged;
             Window.Current.CoreWindow.KeyDown -= CoreWindow_KeyDown;
             ApplicationView.GetForCurrentView().Consolidated -= LiveRoomPage_Consolidated;
