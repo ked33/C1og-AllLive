@@ -1,10 +1,18 @@
-#requires -Version 7.0
+#requires -Version 5.1
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$fixture = Join-Path ([IO.Path]::GetTempPath()) ('AllLive installer test ' + [guid]::NewGuid().ToString('N') + " & '[test] 中文")
+if ($PSVersionTable.PSEdition -ne 'Desktop') {
+    & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoLogo -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath
+    if ($LASTEXITCODE -ne 0) { throw 'Native Windows PowerShell installer checks failed.' }
+    exit 0
+}
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression
+
+$fixture = Join-Path ([IO.Path]::GetTempPath()) ('AllLive installer test ' + [guid]::NewGuid().ToString('N') + (" & '[test] " + [char]0x4E2D + [char]0x6587))
 New-Item -ItemType Directory -Path $fixture | Out-Null
 function New-TestArchive([string]$Path, [string]$Entry, [string]$Xml) {
     $zip = [IO.Compression.ZipFile]::Open($Path, [IO.Compression.ZipArchiveMode]::Create)
@@ -16,7 +24,7 @@ function New-TestArchive([string]$Path, [string]$Entry, [string]$Xml) {
 try {
     $installer = Join-Path $fixture 'Install-AllLive.ps1'
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Install-AllLive.ps1') -Destination $installer
-    $rsa = [Security.Cryptography.RSA]::Create(2048)
+    $rsa = [Security.Cryptography.RSACng]::new(2048)
     try {
         $request = [Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=AllLive Installer Test', $rsa,
             [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
@@ -39,6 +47,8 @@ try {
         @{ Name = 'newer'; Installed = '2.3.83.0'; Framework = $true; Trusted = $true; Cancel = $false; FailInstall = $false; ExpectedExit = 0; ExpectedInstall = 0; ExpectedElevation = 0; ExpectedDependencies = 0 }
         @{ Name = 'cancel'; Installed = ''; Framework = $false; Trusted = $false; Cancel = $true; FailInstall = $false; ExpectedExit = 1; ExpectedInstall = 0; ExpectedElevation = 1; ExpectedDependencies = 0 }
         @{ Name = 'appx failure'; Installed = ''; Framework = $false; Trusted = $true; Cancel = $false; FailInstall = $true; ExpectedExit = 1; ExpectedInstall = 1; ExpectedElevation = 0; ExpectedDependencies = 1 }
+        @{ Name = 'no dependencies update'; Installed = '2.3.81.0'; Framework = $true; Trusted = $true; Cancel = $false; FailInstall = $false; ExpectedExit = 0; ExpectedInstall = 1; ExpectedElevation = 0; ExpectedDependencies = 0 }
+        @{ Name = 'no dependencies fresh'; Installed = ''; Framework = $false; Trusted = $true; Cancel = $false; FailInstall = $true; ExpectedExit = 1; ExpectedInstall = 1; ExpectedElevation = 0; ExpectedDependencies = 0 }
         @{ Name = 'missing certificate'; Installed = ''; Framework = $false; Trusted = $false; Cancel = $false; FailInstall = $false; ExpectedExit = 1; ExpectedInstall = 0; ExpectedElevation = 0; ExpectedDependencies = 0 }
         @{ Name = 'ambiguous bundles'; Installed = ''; Framework = $false; Trusted = $false; Cancel = $false; FailInstall = $false; ExpectedExit = 1; ExpectedInstall = 0; ExpectedElevation = 0; ExpectedDependencies = 0 }
     )
@@ -54,8 +64,11 @@ try {
                 $global:InstallCount = 0
                 $global:ElevationCount = 0
                 $global:DependencyCount = 0
+                $global:PauseCount = 0
+                function global:Read-Host { param($Prompt); $global:PauseCount++; return "" }
                 function global:Test-Path {
                     param($LiteralPath, $PathType)
+                    if ($global:Case.Name -like 'no dependencies*' -and $LiteralPath.EndsWith('x64')) { return $false }
                     if ($LiteralPath -like 'Cert:*') { return $global:Case.Trusted }
                     if ($global:Case.Name -eq 'missing certificate' -and $LiteralPath.EndsWith('AllLive.cer')) { return $false }
                     if ($PathType) { return Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath -PathType $PathType }
@@ -87,20 +100,25 @@ try {
                     if ($global:Case.FailInstall) { throw 'Simulated AppX installation failure.' }
                 }
                 & $Installer
-                [pscustomobject]@{ ExitCode = $LASTEXITCODE; Installs = $global:InstallCount; Elevations = $global:ElevationCount; Dependencies = $global:DependencyCount }
+                [pscustomobject]@{ ExitCode = $LASTEXITCODE; Installs = $global:InstallCount; Elevations = $global:ElevationCount; Dependencies = $global:DependencyCount; Pauses = $global:PauseCount }
             }).AddArgument($installer).AddArgument($scenario)
             $results = @($runner.Invoke())
             if ($runner.Streams.Error.Count -gt 0 -or $runner.InvocationStateInfo.State -ne 'Completed') { throw ("Runspace error: " + $runner.InvocationStateInfo.State + " / " + $runner.InvocationStateInfo.Reason + " / result=" + ($results | ConvertTo-Json -Compress) + " / info=" + ($runner.Streams.Information -join "`n") + " / " + ($runner.Streams.Error -join "`n")) }
             $result = $results[-1]
             if ($result.ExitCode -ne $scenario.ExpectedExit -or $result.Installs -ne $scenario.ExpectedInstall -or
-                $result.Elevations -ne $scenario.ExpectedElevation -or $result.Dependencies -ne $scenario.ExpectedDependencies) {
+                $result.Elevations -ne $scenario.ExpectedElevation -or $result.Dependencies -ne $scenario.ExpectedDependencies -or $result.Pauses -ne 1) {
                 throw ('Installer scenario {0} failed: {1}; output: {2}' -f $scenario.Name, ($result | ConvertTo-Json -Compress), ($runner.Streams.Information -join "`n"))
+            }
+            if ($scenario.Name -like 'no dependencies*') {
+                $messages = $runner.Streams.Information -join "`n"
+                foreach ($expected in @('AllLive-UWP-Dependencies-x64', 'https://github.com/ked33/C1og-AllLive/actions', 'x64\*.appx')) {
+                    if (-not $messages.Contains($expected)) { throw ('Missing dependency download guidance: ' + $expected) }
+                }
             }
         } finally { $runner.Dispose() }
     }
 
-    # Exercise artifact preparation too, so the published installer contains
-    # the PowerShell helper and dependencies instead of only the CMD launcher.
+    # Verify the main artifact contains only three files and dependencies stay separate.
     $source = Join-Path $fixture 'build'
     $sourceDependencies = Join-Path $source 'Dependencies/x64'
     New-Item -ItemType Directory -Path $sourceDependencies -Force | Out-Null
@@ -108,41 +126,44 @@ try {
     Copy-Item -LiteralPath (Join-Path $dependencyDirectory 'Framework.appx') -Destination $sourceDependencies
     $output = Join-Path $fixture 'output'
     & (Join-Path $PSScriptRoot 'Prepare-UwpArtifacts.ps1') -AppPackagesDirectory $source -OutputDirectory $output -SummaryPath ''
-    foreach ($file in @('Install-AllLive-Certificate.cmd', 'Install-AllLive.ps1', 'AllLive.cer', 'AllLive.UWP_2.3.82.0_x64.msixbundle', 'Dependencies/x64/Framework.appx')) {
+    foreach ($file in @('Install-AllLive.ps1', 'AllLive.cer', 'AllLive.UWP_2.3.82.0_x64.msixbundle')) {
         if (-not (Test-Path -LiteralPath (Join-Path $output "Installer/$file"))) { throw "Missing installer artifact: $file" }
     }
 
-    # Run the real CMD wrapper against an inert helper, including a failing
-    # helper, to verify Windows PowerShell 5.1, quoting and exit-code propagation.
-    $cmdDirectory = Join-Path $fixture 'cmd'
-    New-Item -ItemType Directory -Path $cmdDirectory | Out-Null
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Install-AllLive-Certificate.cmd') -Destination $cmdDirectory
-    foreach ($expectedExit in @(0, 7)) {
-        [IO.File]::WriteAllText((Join-Path $cmdDirectory 'Install-AllLive.ps1'),
-            ('Write-Output ("NativePowerShellMajor=" + $PSVersionTable.PSVersion.Major); exit ' + $expectedExit), [Text.UTF8Encoding]::new($false))
+    if (@(Get-ChildItem -LiteralPath (Join-Path $output 'Installer') -Force).Count -ne 3 -or
+        -not (Test-Path -LiteralPath (Join-Path $output 'Dependencies/x64/Framework.appx'))) {
+        throw 'Main artifact must have exactly three files and dependencies must be a separate artifact.'
+    }
+
+    # Run the standalone entry point in Windows PowerShell with a missing
+    # certificate: this exercises parsing, special paths and the -NoPause switch.
+    $entryDirectory = Join-Path $fixture 'standalone'
+    New-Item -ItemType Directory -Path $entryDirectory | Out-Null
+    $entry = Join-Path $entryDirectory 'Install-AllLive.ps1'
+    Copy-Item -LiteralPath $installer -Destination $entry
+    $hosts = @((Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'))
+    $pwsh = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+    if ($pwsh) { $hosts += $pwsh.Source }
+    foreach ($hostPath in $hosts) {
         $process = [Diagnostics.Process]::new()
         try {
-            $process.StartInfo.FileName = $env:ComSpec
-            $process.StartInfo.Arguments = '/d /c Install-AllLive-Certificate.cmd'
-            $process.StartInfo.WorkingDirectory = $cmdDirectory
+            $process.StartInfo.FileName = $hostPath
+            $process.StartInfo.Arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $entry + '" -NoPause'
             $process.StartInfo.UseShellExecute = $false
             $process.StartInfo.CreateNoWindow = $true
-            $process.StartInfo.RedirectStandardInput = $true
             $process.StartInfo.RedirectStandardOutput = $true
             $process.StartInfo.RedirectStandardError = $true
             [void]$process.Start()
-            $process.StandardInput.WriteLine()
-            $process.StandardInput.Close()
             $stdout = $process.StandardOutput.ReadToEndAsync()
             $stderr = $process.StandardError.ReadToEndAsync()
-            if (-not $process.WaitForExit(15000)) { $process.Kill(); throw 'CMD installer wrapper timed out.' }
+            if (-not $process.WaitForExit(15000)) { $process.Kill(); throw 'Standalone installer timed out.' }
             $text = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
-            if ($process.ExitCode -ne $expectedExit -or $text -notmatch 'NativePowerShellMajor=5') {
-                throw "CMD wrapper failed: exit=$($process.ExitCode); $text"
+            if ($process.ExitCode -ne 1 -or $text -notmatch 'AllLive.cer not found') {
+                throw "Standalone installer failed: exit=$($process.ExitCode); $text"
             }
         } finally { $process.Dispose() }
     }
-    Write-Output 'PASS: installer first install/update, version checks, dependency selection, UAC cancellation, failure paths, special paths and complete artifacts (mocked Windows mutations).'
+    Write-Output 'PASS: installer first install/update, version checks, dependency selection, UAC cancellation, failure paths, special paths, missing-dependency guidance and separate artifacts (mocked Windows mutations).'
 } finally {
     $resolvedFixture = [IO.Path]::GetFullPath($fixture)
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'

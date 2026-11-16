@@ -26,10 +26,6 @@ $certificate = Join-Path $source 'AllLive.cer'
 if (-not (Test-Path -LiteralPath $certificate -PathType Leaf)) {
     throw 'AllLive.cer is missing from AppPackages.'
 }
-$certificateInstaller = Join-Path $PSScriptRoot 'Install-AllLive-Certificate.cmd'
-if (-not (Test-Path -LiteralPath $certificateInstaller -PathType Leaf)) {
-    throw 'Install-AllLive-Certificate.cmd is missing from the packaging scripts.'
-}
 $appInstaller = Join-Path $PSScriptRoot 'Install-AllLive.ps1'
 if (-not (Test-Path -LiteralPath $appInstaller -PathType Leaf)) {
     throw 'Install-AllLive.ps1 is missing from the packaging scripts.'
@@ -46,18 +42,15 @@ if (Test-Path -LiteralPath $OutputDirectory) {
 }
 $installerDirectory = Join-Path $OutputDirectory 'Installer'
 $dependencyOutputDirectory = Join-Path $OutputDirectory 'Dependencies/x64'
-$bundledDependencies = Join-Path $installerDirectory 'Dependencies/x64'
-foreach ($directory in @($installerDirectory, $dependencyOutputDirectory, $bundledDependencies)) {
+foreach ($directory in @($installerDirectory, $dependencyOutputDirectory)) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
 }
 
 Copy-Item -LiteralPath $bundle.FullName -Destination $installerDirectory
 Copy-Item -LiteralPath $certificate -Destination $installerDirectory
-Copy-Item -LiteralPath $certificateInstaller -Destination $installerDirectory
 Copy-Item -LiteralPath $appInstaller -Destination $installerDirectory
 foreach ($dependency in $dependencies) {
     Copy-Item -LiteralPath $dependency.FullName -Destination $dependencyOutputDirectory
-    Copy-Item -LiteralPath $dependency.FullName -Destination $bundledDependencies
 }
 
 $rows = @(
@@ -65,7 +58,7 @@ $rows = @(
     '| --- | --- | ---: |'
 )
 foreach ($artifact in @(
-    @{ Name = 'AllLive-UWP-Packages'; Path = $installerDirectory; Contents = 'Certificate + installer scripts + MSIX bundle + x64 dependencies' }
+    @{ Name = 'AllLive-UWP-Packages'; Path = $installerDirectory; Contents = 'AllLive.cer + Install-AllLive.ps1 + MSIX bundle (no dependencies)' }
     @{ Name = 'AllLive-UWP-Dependencies-x64'; Path = (Join-Path $OutputDirectory 'Dependencies'); Contents = 'x64 framework packages (first install / offline)' }
 )) {
     $files = @(Get-ChildItem -LiteralPath $artifact.Path -Recurse -File)

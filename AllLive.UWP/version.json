@@ -1,6 +1,6 @@
 {
-	"version": "2.3.82",
-	"versionCode": 20382,
-	"message": "1. 斗鱼清晰度选择框和下拉列表统一显示实际可用档位，合并重复画质\n2. 移除重复画质说明，取流后同步校正当前档位\n3. 安装脚本自动导入证书并安装或更新 AllLive UWP",
+	"version": "2.3.83",
+	"versionCode": 20383,
+	"message": "1. 合并安装入口为 Install-AllLive.ps1，自动安装证书并安装或更新程序\n2. 主安装包移除依赖目录，依赖继续单独提供\n3. 缺少依赖文件时显示下载与解压提示，已安装依赖的电脑可继续更新",
 	"url": "ms-windows-store://pdp?productid=9N1TWG2G84VD"
 }

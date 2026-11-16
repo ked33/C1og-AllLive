@@ -1,9 +1,20 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param()
+param([switch]$NoPause)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# AppX deployment uses the built-in Windows PowerShell host. Keep the current
+# user when launched from PowerShell 7 or a 32-bit process; only certutil elevates.
+if ($PSVersionTable.PSEdition -ne 'Desktop' -or ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess)) {
+    $systemDirectory = if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' }
+    $windowsPowerShell = Join-Path $env:SystemRoot ($systemDirectory + '\WindowsPowerShell\v1.0\powershell.exe')
+    $forwardArguments = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
+    if ($NoPause) { $forwardArguments += '-NoPause' }
+    & $windowsPowerShell @forwardArguments
+    exit $LASTEXITCODE
+}
 
 try {
     $certificatePath = Join-Path $PSScriptRoot 'AllLive.cer'
@@ -31,6 +42,21 @@ try {
     $name = $identity.GetAttribute('Name')
     $publisher = $identity.GetAttribute('Publisher')
 
+    $dependencyFiles = @(
+        foreach ($relative in @('Dependencies\x64', 'x64')) {
+            $directory = Join-Path $PSScriptRoot $relative
+            if (Test-Path -LiteralPath $directory -PathType Container) {
+                Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Extension -in @('.appx', '.msix') }
+            }
+        }
+    )
+    if ($dependencyFiles.Count -eq 0) {
+        Write-Host '[INFO] No local dependency packages found. Existing installed frameworks can still be used.'
+        Write-Host 'For a first install or a missing-framework error, download AllLive-UWP-Dependencies-x64 from the SAME build:'
+        Write-Host 'https://github.com/ked33/C1og-AllLive/actions'
+        Write-Host 'Extract its x64 folder beside Install-AllLive.ps1 (x64\*.appx or Dependencies\x64\*.appx), then run this script again.'
+    }
+
     # Elevate only the certificate operation. AppX registration belongs to the
     # user who launched this script, even when UAC uses another admin account.
     $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)
@@ -54,27 +80,23 @@ try {
     }
 
     $dependencyPaths = @()
-    foreach ($relative in @('Dependencies\x64', 'x64')) {
-        $directory = Join-Path $PSScriptRoot $relative
-        if (-not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
-        foreach ($dependency in Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Extension -in @('.appx', '.msix') }) {
-            # An installed newer framework must never be downgraded by an older release.
-            $zip = [IO.Compression.ZipFile]::OpenRead($dependency.FullName)
-            try {
-                $entry = $zip.GetEntry('AppxManifest.xml')
-                if ($null -eq $entry) { throw "Dependency manifest missing: $($dependency.Name)" }
-                $reader = [IO.StreamReader]::new($entry.Open())
-                try { [xml]$dependencyManifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
-            } finally { $zip.Dispose() }
-            $dependencyIdentity = $dependencyManifest.SelectSingleNode('/*[local-name()="Package"]/*[local-name()="Identity"]')
-            if ($null -eq $dependencyIdentity) { throw "Dependency identity missing: $($dependency.Name)" }
-            $satisfied = @(Get-AppxPackage -Name $dependencyIdentity.GetAttribute('Name') | Where-Object {
-                $_.Publisher -eq $dependencyIdentity.GetAttribute('Publisher') -and
-                $_.Architecture.ToString() -eq $dependencyIdentity.GetAttribute('ProcessorArchitecture') -and
-                [version]$_.Version -ge [version]$dependencyIdentity.GetAttribute('Version')
-            })
-            if ($satisfied.Count -eq 0) { $dependencyPaths += $dependency.FullName }
-        }
+    foreach ($dependency in $dependencyFiles) {
+        # An installed newer framework must never be downgraded by an older release.
+        $zip = [IO.Compression.ZipFile]::OpenRead($dependency.FullName)
+        try {
+            $entry = $zip.GetEntry('AppxManifest.xml')
+            if ($null -eq $entry) { throw "Dependency manifest missing: $($dependency.Name)" }
+            $reader = [IO.StreamReader]::new($entry.Open())
+            try { [xml]$dependencyManifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        } finally { $zip.Dispose() }
+        $dependencyIdentity = $dependencyManifest.SelectSingleNode('/*[local-name()="Package"]/*[local-name()="Identity"]')
+        if ($null -eq $dependencyIdentity) { throw "Dependency identity missing: $($dependency.Name)" }
+        $satisfied = @(Get-AppxPackage -Name $dependencyIdentity.GetAttribute('Name') | Where-Object {
+            $_.Publisher -eq $dependencyIdentity.GetAttribute('Publisher') -and
+            $_.Architecture.ToString() -eq $dependencyIdentity.GetAttribute('ProcessorArchitecture') -and
+            [version]$_.Version -ge [version]$dependencyIdentity.GetAttribute('Version')
+        })
+        if ($satisfied.Count -eq 0) { $dependencyPaths += $dependency.FullName }
     }
     Write-Host ("Installing/updating AllLive {0} for the current user. Running AllLive windows may close..." -f $version)
     $parameters = @{ Path = $bundles[0].FullName; ForceApplicationShutdown = $true; ErrorAction = 'Stop' }
@@ -86,6 +108,9 @@ try {
     exit 0
 } catch {
     Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red
-    Write-Host 'Installation did not complete. Keep all extracted files together, including Dependencies\x64, and retry.'
+    Write-Host 'Installation did not complete. Keep Install-AllLive.ps1, AllLive.cer and the MSIX bundle together and retry.'
+    Write-Host 'If frameworks are missing, download AllLive-UWP-Dependencies-x64 from the same Actions build and extract its x64 folder beside this script.'
     exit 1
+} finally {
+    if (-not $NoPause) { [void](Read-Host 'Press Enter to close') }
 }
