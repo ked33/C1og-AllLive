@@ -384,7 +384,6 @@ namespace AllLive.UWP.ViewModels
                 if (!applyingPlayInfo) InvalidatePlayUrlRequests();
                 currentLine = value;
                 DoPropertyChanged("CurrentLine");
-                DoPropertyChanged(nameof(ActualQualityText));
                 if (value != null)
                 {
                     ChangedPlayUrl?.Invoke(this, value.Url);

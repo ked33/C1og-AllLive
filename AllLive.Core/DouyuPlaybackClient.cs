@@ -17,6 +17,8 @@ namespace AllLive.Core
     internal sealed class DouyuQualityData
     {
         internal int Rate;
+        internal string RequestedQuality;
+        internal int? AppliedRate;
         internal long AccountRevision;
         internal List<string> Cdns;
         internal Dictionary<int, string> Names;
@@ -45,7 +47,52 @@ namespace AllLive.Core
                 var session = DouyuAccountState.Capture();
                 var data = await RequestPlayAsync(roomId, -1, "", session, token).ConfigureAwait(false);
                 EnsureCurrent(session, token);
-                return ParseQualities(data, session.Revision);
+                var advertised = ParseQualities(data, session.Revision);
+                // The advertised menu can contain tiers this account cannot receive.
+                // Probe one CDN per tier, with a bounded budget, before showing the menu.
+                using (var slots = new SemaphoreSlim(2, 2))
+                using (var budget = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    budget.CancelAfter(TimeSpan.FromSeconds(8));
+                    var probes = advertised.Select(async quality =>
+                    {
+                        var acquired = false;
+                        try
+                        {
+                            await slots.WaitAsync(budget.Token).ConfigureAwait(false);
+                            acquired = true;
+                            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(budget.Token))
+                            {
+                                timeout.CancelAfter(TimeSpan.FromSeconds(4));
+                                var request = (DouyuQualityData)quality.Data;
+                                var result = await RequestPlayAsync(roomId, request.Rate, request.Cdns[0], session, timeout.Token).ConfigureAwait(false);
+                                var info = ParseUrl(result, request.Rate, request.Names);
+                                return info == null ? null : WithActualQuality(quality, info);
+                            }
+                        }
+                        catch (OperationCanceledException) when (!token.IsCancellationRequested && DouyuAccountState.IsCurrent(session)) { return null; }
+                        catch (Exception ex) when (!(ex is OperationCanceledException))
+                        {
+                            CoreDebug.Log(() => "[Douyu] 档位核验失败 error=" + ex.GetType().Name);
+                            return null;
+                        }
+                        finally { if (acquired) slots.Release(); }
+                    }).ToArray();
+                    var verified = await Task.WhenAll(probes).ConfigureAwait(false);
+                    EnsureCurrent(session, token);
+                    var qualities = MergeActualQualities(verified);
+                    if (qualities.Count != 0) return qualities;
+
+                    // A partial outage must not discard the initial playable response.
+                    var fallback = advertised[0];
+                    var initial = ParseUrl(data, -1, ((DouyuQualityData)fallback.Data).Names);
+                    if (initial == null) throw new InvalidOperationException("斗鱼未返回有效的播放地址");
+                    fallback = WithActualQuality(fallback, initial);
+                    ((DouyuQualityData)fallback.Data).Rate = -1;
+                    ((DouyuQualityData)fallback.Data).RequestedQuality = "默认";
+                    fallback.Id = "-1";
+                    return new List<LivePlayQuality> { fallback };
+                }
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
@@ -76,7 +123,7 @@ namespace AllLive.Core
                             lineTimeout.CancelAfter(TimeSpan.FromSeconds(8));
                             var data = await RequestPlayAsync(roomId, requested.Rate, cdn, session, lineTimeout.Token).ConfigureAwait(false);
                             var result = ParseUrl(data, requested.Rate, requested.Names);
-                            if (result != null) result.RequestedQuality = quality.Quality;
+                            if (result != null) result.RequestedQuality = requested.RequestedQuality;
                             return result;
                         }
                     }
@@ -108,6 +155,45 @@ namespace AllLive.Core
                 .Select(x => x.First()).ToList();
         }
 
+        private static LivePlayQuality WithActualQuality(LivePlayQuality quality, LivePlayUrl info)
+        {
+            var request = (DouyuQualityData)quality.Data;
+            var rate = info?.AppliedRate;
+            return new LivePlayQuality
+            {
+                Id = quality.Id,
+                Quality = !rate.HasValue ? "未确认" : !string.IsNullOrWhiteSpace(info.AppliedQuality)
+                    ? info.AppliedQuality.Trim() : "档位 " + rate.Value.ToString(CultureInfo.InvariantCulture),
+                Sort = quality.Sort,
+                Data = new DouyuQualityData
+                {
+                    Rate = request.Rate, RequestedQuality = request.RequestedQuality,
+                    AppliedRate = rate, AccountRevision = request.AccountRevision,
+                    Cdns = request.Cdns, Names = request.Names
+                }
+            };
+        }
+
+        private static List<LivePlayQuality> MergeActualQualities(IEnumerable<LivePlayQuality> qualities)
+        {
+            // Keep platform order, preferring a direct request for the confirmed tier.
+            return qualities.Where(x => x != null).GroupBy(x => ((DouyuQualityData)x.Data).AppliedRate)
+                .Select(group => group.FirstOrDefault(x => ((DouyuQualityData)x.Data).Rate == group.Key) ?? group.First()).ToList();
+        }
+
+        internal static LivePlayQuality ApplyActualQuality(List<LivePlayQuality> qualities, LivePlayQuality requested, LivePlayUrl info)
+        {
+            var actual = WithActualQuality(requested, info);
+            var rate = ((DouyuQualityData)actual.Data).AppliedRate;
+            var index = qualities.IndexOf(requested);
+            if (index < 0) index = 0;
+            qualities.Remove(requested);
+            qualities.Insert(index, actual);
+            // Prefer this response over earlier probes, including when a tier changes mid-session.
+            qualities.RemoveAll(x => !ReferenceEquals(x, actual) && ((DouyuQualityData)x.Data).AppliedRate == rate);
+            return actual;
+        }
+
         internal static List<LivePlayQuality> ParseQualities(JObject data, long revision)
         {
             var names = new Dictionary<int, string>();
@@ -136,7 +222,7 @@ namespace AllLive.Core
             return rates.Select(rate => new LivePlayQuality
             {
                 Id = rate.ToString(CultureInfo.InvariantCulture), Quality = names[rate],
-                Data = new DouyuQualityData { Rate = rate, Cdns = cdns, Names = names, AccountRevision = revision }
+                Data = new DouyuQualityData { Rate = rate, RequestedQuality = names[rate], Cdns = cdns, Names = names, AccountRevision = revision }
             }).ToList();
         }
 

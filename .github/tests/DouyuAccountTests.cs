@@ -23,6 +23,8 @@ namespace AllLive.Tests
             await CheckAuthRedirectAndCancellationAsync();
             await CheckRenewalAndExpiryAsync();
             await CheckPlaybackAsync();
+            await CheckQualityMenuAsync();
+            await CheckQualityProbeCancellationAsync();
             await CheckBoundedRetryAsync();
             await CheckAccountChangeDuringRequestAsync();
             DouyuAccountState.SetCookie("");
@@ -229,11 +231,93 @@ namespace AllLive.Tests
                 var qualities = await playback.GetQualitiesAsync("123", CancellationToken.None);
                 var urls = await playback.GetUrlsAsync("123", qualities[0], CancellationToken.None);
                 Assert(encryptionCount == 1 && maxActive <= 2, "Descriptor cache or concurrency bound failed.");
-                Assert(urls.Single().AppliedQuality == "蓝光4M" && urls[0].RequestedQuality == "原画", "URL lost requested/actual quality.");
+                Assert(qualities.Count == 1 && qualities[0].Quality == "蓝光4M" && qualities[0].Id == "4", "Unavailable/duplicate tiers remained in the menu.");
+                Assert(urls.Single().AppliedQuality == "蓝光4M" && urls[0].RequestedQuality == "蓝光4M", "URL lost requested/actual quality.");
                 var signature = DouyuPlaybackClient.BuildForm(Descriptor(), "did", "123", 0, "", 1700000000);
                 Assert(signature["auth"] == "10182213072cf7d9afe0daacd25abf7a", "V1 signature differs from known MD5 vector.");
                 DouyuAccountState.SetCookie("");
                 await ThrowsAsync(() => playback.GetUrlsAsync("123", qualities[0], CancellationToken.None), "Old-account quality data reused.");
+            }
+        }
+
+        private static async Task CheckQualityMenuAsync()
+        {
+            DouyuAccountState.SetCookie("");
+            using (var client = new HttpClient(new Handler(async (request, token) =>
+            {
+                if (request.Method == HttpMethod.Get)
+                    return Json(new JObject { ["error"] = 0, ["data"] = Descriptor() }.ToString());
+                var form = await request.Content.ReadAsStringAsync();
+                var rate = form.Split('&').Single(x => x.StartsWith("rate=", StringComparison.Ordinal)).Substring(5);
+                if (rate == "2") return new HttpResponseMessage(HttpStatusCode.Forbidden);
+                var response = JObject.Parse("{'multirates':[{'rate':0,'name':'原画'},{'rate':4,'name':'蓝光4M'},{'rate':3,'name':'高清'},{'rate':2,'name':'超清'},{'rate':1,'name':'流畅'}], 'rtmp_url':'https://cdn.example', 'rtmp_live':'stream.flv'}");
+                if (rate != "3") response["rate"] = rate == "1" ? 1 : 4;
+                return Json(new JObject { ["error"] = 0, ["data"] = response }.ToString());
+            })))
+            {
+                var playback = new DouyuPlaybackClient(client);
+                var menu = await playback.GetQualitiesAsync("123", CancellationToken.None);
+                Assert(menu.Select(x => x.Quality).SequenceEqual(new[] { "蓝光4M", "未确认", "流畅" }), "Menu used advertised/failed tiers or lost platform order.");
+                var unknown = menu.Single(x => x.Quality == "未确认");
+                var corrected = DouyuPlaybackClient.ApplyActualQuality(menu, unknown,
+                    new LivePlayUrl { AppliedRate = 4, AppliedQuality = "蓝光4M" });
+                Assert(menu.Count == 2 && menu.Contains(corrected) && corrected.Quality == "蓝光4M", "Late downshift did not merge the selected tier.");
+                Assert(((DouyuQualityData)corrected.Data).Rate == 3 && corrected.Id == "3", "Display correction changed the real request identity.");
+                Assert(unknown.Quality == "未确认", "An in-flight quality object was mutated.");
+                corrected = DouyuPlaybackClient.ApplyActualQuality(menu, corrected, new LivePlayUrl());
+                Assert(corrected.Quality == "未确认", "Missing actual rate kept a stale confirmed label.");
+                corrected = DouyuPlaybackClient.ApplyActualQuality(menu, corrected, new LivePlayUrl { AppliedRate = 99 });
+                Assert(corrected.Quality == "档位 99", "Unknown rate name borrowed the requested label.");
+            }
+
+            // If individual probes fail, the initial response remains usable, but
+            // its actual rate must not be confused with the first advertised tier.
+            using (var client = new HttpClient(new Handler(async (request, token) =>
+            {
+                if (request.Method == HttpMethod.Get)
+                    return Json(new JObject { ["error"] = 0, ["data"] = Descriptor() }.ToString());
+                var form = await request.Content.ReadAsStringAsync();
+                if (!form.Split('&').Contains("rate=-1")) return new HttpResponseMessage(HttpStatusCode.Forbidden);
+                return Json("{'error':0,'data':{'multirates':[{'rate':0,'name':'原画'},{'rate':4,'name':'蓝光4M'}], 'rtmp_url':'https://cdn.example', 'rtmp_live':'stream.flv', 'rate':4}}");
+            })))
+            {
+                var playback = new DouyuPlaybackClient(client);
+                var fallback = (await playback.GetQualitiesAsync("123", CancellationToken.None)).Single();
+                Assert(fallback.Quality == "蓝光4M" && fallback.Id == "-1", "Failed probes lost the playable default response.");
+                var info = (await playback.GetUrlsAsync("123", fallback, CancellationToken.None)).Single();
+                Assert(info.RequestedRate == -1 && info.AppliedRate == 4, "Default fallback sent the wrong request rate.");
+            }
+        }
+
+        private static async Task CheckQualityProbeCancellationAsync()
+        {
+            foreach (var changeAccount in new[] { false, true })
+            {
+                DouyuAccountState.SetCookie("");
+                var entered = new TaskCompletionSource<bool>();
+                var release = new TaskCompletionSource<bool>();
+                using (var cancel = new CancellationTokenSource())
+                using (var client = new HttpClient(new Handler(async (request, token) =>
+                {
+                    if (request.Method == HttpMethod.Get)
+                        return Json(new JObject { ["error"] = 0, ["data"] = Descriptor() }.ToString());
+                    var form = await request.Content.ReadAsStringAsync();
+                    if (!form.Split('&').Contains("rate=-1"))
+                    {
+                        entered.TrySetResult(true);
+                        if (changeAccount) await release.Task;
+                        else await Task.Delay(Timeout.Infinite, token);
+                    }
+                    return Json("{'error':0,'data':{'multirates':[{'rate':0,'name':'原画'}], 'url':'https://cdn.example/stream.flv', 'rate':0}}");
+                })))
+                {
+                    var pending = new DouyuPlaybackClient(client).GetQualitiesAsync("123", cancel.Token);
+                    await entered.Task;
+                    if (changeAccount) { DouyuAccountState.SetCookie("dy_auth=another-account"); release.SetResult(true); }
+                    else cancel.Cancel();
+                    try { await pending; throw new InvalidOperationException("Canceled/stale menu was accepted."); }
+                    catch (OperationCanceledException) { }
+                }
             }
         }
 

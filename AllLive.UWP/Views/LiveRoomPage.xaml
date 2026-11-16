@@ -193,8 +193,6 @@
                                         SelectedItem="{x:Bind Path=liveRoomVM.CurrentQuality, Mode=TwoWay}"
                                         ToolTipService.ToolTip="清晰度" />
                                 </Grid>
-                                <TextBlock Text="{x:Bind liveRoomVM.ActualQualityText, Mode=OneWay}"
-                                    TextWrapping="Wrap" FontSize="12" />
                                 <Grid
                                     Margin="0,8,0,0"
                                     Padding="8,4"
@@ -643,10 +641,6 @@
                                         ItemsSource="{x:Bind Path=liveRoomVM.Qualities, Mode=OneWay}"
                                         SelectedItem="{x:Bind Path=liveRoomVM.CurrentQuality, Mode=TwoWay}"
                                         ToolTipService.ToolTip="清晰度" />
-                                    <TextBlock Text="{x:Bind liveRoomVM.ActualQualityText, Mode=OneWay}"
-                                        MaxWidth="210" TextTrimming="CharacterEllipsis" FontSize="12"
-                                        VerticalAlignment="Center"
-                                        ToolTipService.ToolTip="{x:Bind liveRoomVM.ActualQualityText, Mode=OneWay}" />
                                     <ComboBox
                                         x:Name="PlayLine"
                                         MinWidth="80"

@@ -18,22 +18,6 @@ namespace AllLive.UWP.ViewModels
         private int roomLoadVersion;
         private int playUrlRequestVersion;
         private bool applyingPlayInfo;
-        private bool actualQualityPending;
-        public string ActualQualityText
-        {
-            get
-            {
-                if (Site?.Name != "斗鱼直播") return "";
-                if (actualQualityPending) return "正在确认实际画质…";
-                var info = CurrentLine?.PlayInfo;
-                if (info?.AppliedRate == null) return "实际画质未确认";
-                var actual = string.IsNullOrWhiteSpace(info.AppliedQuality) ? "平台档位 " + info.AppliedRate : info.AppliedQuality;
-                var requested = info.RequestedQuality;
-                return "实际：" + actual + (info.AppliedRate != info.RequestedRate && !string.IsNullOrWhiteSpace(requested)
-                    ? "（请求：" + requested + "）" : "");
-            }
-        }
-
         internal bool IsApplyingPlayInfo => applyingPlayInfo;
 
         private CancellationToken RoomRequestToken => roomRequestCts?.Token ?? CancellationToken.None;
@@ -62,8 +46,6 @@ namespace AllLive.UWP.ViewModels
         public void InvalidatePlayUrlRequests()
         {
             playUrlRequestVersion++;
-            actualQualityPending = false;
-            DoPropertyChanged(nameof(ActualQualityText));
             var previous = playUrlCts;
             playUrlCts = null;
             // The async owner disposes its CTS after the underlying API has returned.
@@ -107,8 +89,6 @@ namespace AllLive.UWP.ViewModels
             var douyuSession = site.Name == "斗鱼直播" ? AllLive.Core.Helper.DouyuAccountState.Capture() : null;
             var quality = CurrentQuality;
             var acquired = false;
-            actualQualityPending = true;
-            DoPropertyChanged(nameof(ActualQualityText));
             try
             {
                 acquired = await playInfoGate.WaitAsync(TimeSpan.FromSeconds(30), owner.Token);
@@ -181,6 +161,17 @@ namespace AllLive.UWP.ViewModels
                     {
                         detail = roomDetail;
                         danmakuArgs = roomDetail.DanmakuData;
+                    }
+                    if (site is AllLive.Core.Douyu)
+                    {
+                        var actualQualities = new List<LivePlayQuality>(refreshedQualities ?? Qualities);
+                        quality = AllLive.Core.Douyu.ApplyActualQuality(actualQualities, quality, newLines[0].PlayInfo);
+                        Qualities = actualQualities;
+                        currentQuality = quality;
+                        DoPropertyChanged(nameof(CurrentQuality));
+                    }
+                    else if (refreshRoom)
+                    {
                         Qualities = refreshedQualities;
                         currentQuality = quality;
                         DoPropertyChanged(nameof(CurrentQuality));
@@ -208,8 +199,6 @@ namespace AllLive.UWP.ViewModels
                 if (playUrlCts == owner)
                 {
                     playUrlCts = null;
-                    actualQualityPending = false;
-                    DoPropertyChanged(nameof(ActualQualityText));
                 }
                 owner.Dispose();
             }

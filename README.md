@@ -45,18 +45,18 @@
 
 | Artifact | 内容 | 用途 |
 | --- | --- | --- |
-| `AllLive-UWP-Packages` | 同级的 `AllLive.cer`、`Install-AllLive-Certificate.cmd` 和 `AllLive.UWP_<版本>_x64.msixbundle` | 日常安装、更新 |
-| `AllLive-UWP-Dependencies-x64` | `x64/` 下的框架 `.appx` 包 | 首次安装缺少依赖、离线安装时使用 |
+| `AllLive-UWP-Packages` | `AllLive.cer`、安装脚本、`AllLive.UWP_<版本>_x64.msixbundle` 和 `Dependencies/x64/` | 双击安装、更新（含依赖） |
+| `AllLive-UWP-Dependencies-x64` | `x64/` 下的框架 `.appx` 包 | 单独补充依赖时使用 |
 
 从 2.3.65.0 起，Actions 的 Windows x64 包内置本地签名与 B 站流转发服务。直接打开 AllLive 即会启动服务，关闭最后一个窗口后自动退出；无需运行旧 PS 启动脚本，也无需另装 .NET。最小化不会停止服务，诊断仍由“运行日志”开关控制。参见[内置服务说明](docs/bundled-local-service.md)。
 
 安装和更新步骤：
 
-1. 解压 `AllLive-UWP-Packages`，双击 `Install-AllLive-Certificate.cmd` 并确认管理员授权。脚本会将同目录的 `AllLive.cer` 导入“本地计算机 → 受信任的人”，出现 `[OK] Certificate installed.` 后继续。脚本使用 Windows 自带工具，无需安装 PowerShell 7；也可手动导入证书。
-2. 如果缺少框架依赖，另外下载并解压同次构建的 `AllLive-UWP-Dependencies-x64`，先安装其中的 x64 `.appx` 包。
-3. 双击 `.msixbundle` 安装或更新，无需先卸载旧版。包标识需一致，更新版本需高于已安装版本。
+1. 将 `AllLive-UWP-Packages` 完整解压到一个独立目录，保留 `Install-AllLive.ps1` 和 `Dependencies/x64/`，双击 `Install-AllLive-Certificate.cmd`。使用 Windows 自带 PowerShell 5.1，无需安装 PowerShell 7。
+2. 需要导入证书时确认管理员授权。脚本将证书导入“本地计算机 → 受信任的人”，随后自动为当前用户安装依赖和安装或更新 AllLive。更新会关闭正在运行的 AllLive 窗口，无需先卸载，已有设置和收藏保留。
+3. 出现 `[OK] AllLive ... installed.` 即完成；同版本或已装更高版本会跳过，不会降级。失败时窗口保留具体错误；取消证书授权会停止后续安装。也可手动导入证书、双击 `.msixbundle`。
 
-如需一次安装所附依赖，可在依赖产物的解压目录打开 PowerShell，执行：
+通常无需单独下载依赖产物。如需手动补装，可在依赖产物的解压目录打开 PowerShell，执行：
 
 ```powershell
 Get-ChildItem -LiteralPath './x64' -Filter '*.appx' -File | ForEach-Object { Add-AppxPackage -Path $_.FullName -ErrorAction Stop }

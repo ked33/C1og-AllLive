@@ -215,6 +215,11 @@ namespace AllLive.Core
             return playback.GetUrlsAsync(room.RoomID, quality, token);
         }
 
+        public static LivePlayQuality ApplyActualQuality(List<LivePlayQuality> qualities, LivePlayQuality requested, LivePlayUrl info)
+        {
+            return DouyuPlaybackClient.ApplyActualQuality(qualities, requested, info);
+        }
+
         public async Task<bool> GetLiveStatus(object roomId, CancellationToken cancellationToken = default(CancellationToken))
         {
             var roomInfo = await GetRoomInfo(roomId.ToString(), cancellationToken: cancellationToken);
