@@ -1588,7 +1588,7 @@ namespace AllLive.UWP.Views
             {
                 await Dispatcher.RunAsync(CoreDispatcherPriority.Normal, async () =>
                 {
-                    if (isPageClosing || liveRoomVM.Site?.Name != "斗鱼直播" ||
+                    if (isPageClosing || liveRoomVM.SiteName != "斗鱼直播" ||
                         !AllLive.Core.Helper.DouyuAccountState.IsCurrent(session)) return;
                     try
                     {
